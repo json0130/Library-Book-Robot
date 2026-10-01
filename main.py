@@ -3,13 +3,14 @@
 
     python main.py chat   [options]     talk to the LLM on the AI server
     python main.py camera [options]     live webcam: --recognition, --detect, --emotion, --enroll NAME
+    python main.py display [options]    robot face on the Jetson display (browser page driven over SSE)
 
 Add -h after a feature name for its options.
 """
 import importlib
 import sys
 
-FEATURES = ("chat", "camera")  # each is features/<name>.py
+FEATURES = ("chat", "camera", "display")  # each is features/<name>.py
 
 
 def main(argv=None) -> int:

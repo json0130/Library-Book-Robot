@@ -4,13 +4,18 @@ Examples:
     python main.py chat                 # --llm: type, read the reply (default)
     python main.py chat --stt           # speak, read the transcript
     python main.py chat --tts           # type, hear it spoken
+    python main.py chat --talk          # type, hear the reply: LLM -> TTS
     python main.py chat --chat          # speak, hear the reply: STT -> LLM -> TTS
     python main.py chat --check         # is the server reachable?
     python main.py chat --prompt "Recommend a book about robots."   # one --llm/--tts turn
     python main.py chat --chat --wav question.wav                   # one voice turn from a file
 
 Recording and playback use PulseAudio (parecord/paplay). Pick a microphone with
---mic, e.g. --mic Webcam, if the system default input is not the right one.
+--mic, e.g. --mic Webcam, and a speaker with --speaker, e.g. --speaker USB, if the system
+default input or output is not the right one.
+
+If the face display is running (python main.py display), its mouth moves while the robot talks:
+with the loudness of the speech in --tts/--chat, or for the reply's estimated reading time in --llm.
 """
 
 from __future__ import annotations
@@ -28,18 +33,27 @@ import time
 from typing import Callable
 
 from modules import stt, tts
+from modules.expression import CHARS_PER_SECOND, DEFAULT_PORT as FACE_PORT, MAX_TALK_S, mouth_levels, talk
 from modules.llm import LLMClient, LLMError, request, split_sentences
 
 DEFAULT_SYSTEM = (
-    "You are a friendly robot assistant in a university library. "
+    "You are the Library Book Robot, a friendly robot that helps visitors in a university library. "
+    "You help people find, return and choose books: explain what a book is about, recommend similar "
+    "titles, and point them to the right section or the help desk. "
+    "Keep to library topics and gently steer other questions back to books and study. "
+    "If you are not sure a book exists or the library holds it, say so and suggest asking the help desk "
+    "or searching the catalogue; never invent titles, authors or shelf locations. "
+    "Remember what the visitor said earlier in the conversation. "
     "Your replies are spoken aloud, so use at most three short, plain sentences. "
     "Do not use markdown, lists or emoji."
 )
-MAX_HISTORY_MESSAGES = 12
+HISTORY_EXCHANGES = 10  # past user/assistant pairs sent with each prompt
+MAX_HISTORY_MESSAGES = 2 * HISTORY_EXCHANGES
 MODES = {
     "llm": "type text, read the reply (default)",
     "stt": "speak, read the transcript",
     "tts": "type text, hear it spoken",
+    "talk": "type text, hear the reply (LLM -> TTS)",
     "chat": "speak, hear the reply (STT -> LLM -> TTS)",
 }
 
@@ -60,6 +74,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--wav", type=Path, help="run one --stt/--chat turn from this WAV instead of the mic")
     p.add_argument("--mic", default=os.environ.get("MIC"),
                    help="part of a PulseAudio input name, e.g. Webcam (env: MIC); default: system input")
+    p.add_argument("--speaker", default=os.environ.get("SPEAKER"),
+                   help="part of a PulseAudio output name, e.g. USB (env: SPEAKER); default: system output")
     # ponytail: whole-recording RMS gate; lab room noise measured 260-384 on the webcam mic.
     # Replace with voice activity detection if noise still gets transcribed.
     p.add_argument("--min-rms", type=float, default=500,
@@ -67,10 +83,15 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "each recording prints its level so you can tune this")
     p.add_argument("--voice", default="af_heart", help="TTS voice")
     p.add_argument("--check", action="store_true", help="check the server is reachable and exit")
+    p.add_argument("--face-port", type=int, default=int(os.environ.get("FACE_PORT", FACE_PORT)),
+                   help=f"port of the face display (python main.py display), default {FACE_PORT}")
+    p.add_argument("--no-face", action="store_true", help="don't move the face display's mouth")
+    p.add_argument("--lip-delay", type=float, default=0.1,
+                   help="seconds the mouth waits after playback starts, to match speaker latency (default 0.1)")
     args = p.parse_args(argv)
     voice_in = args.mode in ("stt", "chat")
     if args.prompt and voice_in:
-        p.error("--prompt works with --llm/--tts; use --wav for --stt/--chat")
+        p.error("--prompt works with --llm/--tts/--talk; use --wav for --stt/--chat")
     if args.wav and not voice_in:
         p.error("--wav works with --stt/--chat")
     return args
@@ -105,15 +126,20 @@ def run_turn(
     return True
 
 
-def find_mic(name: str) -> str:
-    """Return the first PulseAudio input whose name contains `name` (case-insensitive)."""
-    sources = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True,
+def find_device(kind: str, name: str) -> str:
+    """Return the first PulseAudio source or sink (kind) whose name contains `name` (case-insensitive)."""
+    devices = subprocess.run(["pactl", "list", "short", kind], capture_output=True,
                              text=True, check=True).stdout
-    for line in sources.splitlines():
-        source = line.split("\t")[1]
-        if name.lower() in source.lower() and not source.endswith(".monitor"):
-            return source
-    raise ValueError(f"No microphone matching {name!r}; see `pactl list short sources`")
+    for line in devices.splitlines():
+        device = line.split("\t")[1]
+        if name.lower() in device.lower() and not device.endswith(".monitor"):
+            return device
+    what = "microphone" if kind == "sources" else "speaker"
+    raise ValueError(f"No {what} matching {name!r}; see `pactl list short {kind}`")
+
+
+def find_mic(name: str) -> str:
+    return find_device("sources", name)
 
 
 def record(mic: str | None) -> Path:
@@ -161,16 +187,69 @@ def listen(args) -> str:
         wav.unlink(missing_ok=True)
 
 
-def speak(args, text: str) -> None:
+class Face:
+    """Moves the face display's mouth while the robot talks. Does nothing if the display isn't running,
+    and tries again a little later in case it is started after chat."""
+
+    RETRY_S = 20.0
+
+    def __init__(self, port: int, enabled: bool = True):
+        self.port = port
+        self.enabled = enabled
+        self._retry_at = 0.0
+        self._warned = False
+
+    def _send(self, **kwargs) -> None:
+        if not self.enabled or time.monotonic() < self._retry_at:
+            return
+        if talk(port=self.port, timeout=0.3, **kwargs):
+            self._warned = False
+            return
+        self._retry_at = time.monotonic() + self.RETRY_S
+        if not self._warned:
+            print(f"  (face display not running on port {self.port}; start it with: python main.py display)",
+                  flush=True)
+            self._warned = True
+
+    def talk_audio(self, wav: bytes, delay_s: float = 0.0) -> None:
+        """Mouth follows the loudness of this WAV; call it as playback starts."""
+        try:
+            levels = mouth_levels(wav)
+        except (ValueError, EOFError) as exc:
+            print(f"  (no lip sync: {exc})", file=sys.stderr)
+            return
+        self._send(levels=levels, delay_s=delay_s)
+
+    def talk_text(self, text: str) -> None:
+        """Mouth moves for about as long as reading the text aloud would take."""
+        self._send(seconds=min(MAX_TALK_S, max(0.6, len(text) / CHARS_PER_SECOND)))
+
+    def stop(self) -> None:
+        self._send(seconds=0)
+
+
+def speak(args, text: str, face: Face) -> None:
     response = request(args.host, args.port, "TTS", {"voice": args.voice}, text, timeout=args.timeout)
     raw, _ = tts.validate_wav(response.get("content"), response["parameters"])
     with tempfile.NamedTemporaryFile(suffix=".wav") as f:
         f.write(raw)
         f.flush()
-        subprocess.run(["paplay", f.name], check=True)
+        cmd = ["paplay"] + ([f"--device={args.speaker}"] if args.speaker else [])
+        proc = subprocess.Popen(cmd + [f.name])
+        face.talk_audio(raw, args.lip_delay)
+        try:
+            code = proc.wait()
+        except BaseException:          # Ctrl+C: stop the sound and close the mouth
+            proc.terminate()
+            proc.wait()
+            face.stop()
+            raise
+        if code != 0:
+            face.stop()
+            raise subprocess.CalledProcessError(code, "paplay")
 
 
-def step(args, client: LLMClient, history: list[dict], text: str | None) -> bool:
+def step(args, client: LLMClient, history: list[dict], text: str | None, face: Face) -> bool:
     """One exchange in args.mode. text is the typed input for --llm/--tts; voice modes listen."""
     try:
         if args.mode in ("stt", "chat"):
@@ -182,12 +261,15 @@ def step(args, client: LLMClient, history: list[dict], text: str | None) -> bool
             if args.mode == "stt":
                 return True
         if args.mode == "tts":
-            speak(args, text)
+            speak(args, text, face)
             return True
         if not run_turn(client, args.system, history, text):
             return False
-        if args.mode == "chat":
-            speak(args, history[-1]["content"])
+        reply = history[-1]["content"]
+        if args.mode in ("chat", "talk"):
+            speak(args, reply, face)
+        else:
+            face.talk_text(reply)
         return True
     except (OSError, EOFError, ValueError, subprocess.SubprocessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -202,6 +284,8 @@ def main(argv=None) -> int:
         client.check()
         if args.mic:
             args.mic = find_mic(args.mic)
+        if args.speaker:
+            args.speaker = find_device("sinks", args.speaker)
     except (LLMError, ValueError, OSError, subprocess.SubprocessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -211,9 +295,10 @@ def main(argv=None) -> int:
         return 0
 
     history: list[dict] = []
+    face = Face(args.face_port, enabled=not args.no_face)
 
     if args.prompt or args.wav:
-        return 0 if step(args, client, history, args.prompt) else 1
+        return 0 if step(args, client, history, args.prompt, face) else 1
 
     voice_in = args.mode in ("stt", "chat")
     print(f"{args.mode.upper()} mode, AI server at {args.host}:{args.port}. "
@@ -233,7 +318,7 @@ def main(argv=None) -> int:
             print()
             return 0
         try:
-            step(args, client, history, text)
+            step(args, client, history, text, face)
         except KeyboardInterrupt:
             print()
             return 0
