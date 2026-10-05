@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the robot face server and open it full-screen in a browser (kiosk mode).
-# Usage: scripts/start_display.sh [port]     (type emotions in this terminal; quit or Ctrl+C stops everything)
+# Usage: display/start_display.sh [port]     (type emotions in this terminal; quit or Ctrl+C stops everything)
 set -uo pipefail
 
 PORT="${1:-8765}"
@@ -27,4 +27,4 @@ cd "$(dirname "$0")/.."
 BROWSER=$!
 trap 'kill "$BROWSER" 2>/dev/null' EXIT
 
-python3 main.py display --port "$PORT"
+python3 -m display.server --port "$PORT"

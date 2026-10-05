@@ -1,6 +1,6 @@
 import unittest
 
-from modules.llm import SentenceSplitter
+from robot.services.llm import SentenceSplitter
 
 
 def split(fragments: list[str]) -> list[str]:

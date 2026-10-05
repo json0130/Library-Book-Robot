@@ -4,8 +4,8 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from unittest import mock
 
-from features.chat import DEFAULT_SYSTEM, HISTORY_EXCHANGES, Face, run_turn
-from modules.llm import LLMError, to_prompt
+from tools.chat_test import DEFAULT_SYSTEM, HISTORY_EXCHANGES, Face, run_turn
+from robot.services.llm import LLMError, to_prompt
 
 
 class FakeClient:
@@ -61,7 +61,7 @@ class ChatHistoryTest(unittest.TestCase):
 class FaceTest(unittest.TestCase):
     def test_reading_time_and_quiet_when_display_is_down(self):
         sent = []
-        with mock.patch("features.chat.talk", side_effect=lambda **kw: sent.append(kw) or False):
+        with mock.patch("tools.chat_test.talk", side_effect=lambda **kw: sent.append(kw) or False):
             face = Face(port=1)
             out = io.StringIO()
             with redirect_stdout(out):
@@ -72,7 +72,7 @@ class FaceTest(unittest.TestCase):
         self.assertEqual(out.getvalue().count("face display not running"), 1)
 
     def test_disabled(self):
-        with mock.patch("features.chat.talk") as t:
+        with mock.patch("tools.chat_test.talk") as t:
             Face(port=1, enabled=False).talk_text("hello")
         t.assert_not_called()
 

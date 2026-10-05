@@ -1,8 +1,8 @@
 """Robot face display: serves ui/ and pushes emotions to the page over Server-Sent Events.
 
 Examples:
-    python main.py display                    # http://localhost:8765, type emotions in this terminal
-    python main.py display --port 9000
+    python -m display.server                    # http://localhost:8765, type emotions in this terminal
+    python -m display.server --port 9000
 
 Terminal commands: an emotion name with optional hold seconds ("happy", "sad 5"), idle,
 talk [seconds] (move the mouth, default 3), list, quit.
@@ -25,9 +25,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from modules.expression import DEFAULT_HOLD_S, DEFAULT_PORT, IDLE, make_event, make_talk_event, valid_names
+from robot.actuation.face import DEFAULT_HOLD_S, DEFAULT_PORT, IDLE, make_event, make_talk_event, valid_names
 
-UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+UI_DIR = Path(__file__).resolve().parent / "ui"
 KEEPALIVE_S = 15.0
 MAX_BODY = 512 * 1024        # a 2-minute talk envelope is about 25 KB
 DEFAULT_TALK_S = 3.0

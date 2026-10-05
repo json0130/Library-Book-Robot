@@ -1,0 +1,37 @@
+# Robot settings. Environment variables AI_HOST / AI_PORT override the AI server address.
+
+ai_server:
+  host: 172.24.47.255
+  port: 7898
+  timeout_s: 300          # LLM/TTS requests can be slow on a busy server
+
+display:                  # the face page served by `python -m display.server`
+  host: 127.0.0.1
+  port: 8765
+
+devices:
+  esp32_port: /dev/ttyUSB0
+  esp32_baud: 115200
+  camera_index: 0
+  mic: null               # part of a PulseAudio source name, null = system default
+  speaker: USB            # part of a PulseAudio sink name, null = system default
+
+books:
+  catalog_path: data/catalog.csv   # SAMPLE data until the library's real catalogue replaces it
+  online_fallback: true            # Open Library (title/author only) for ISBNs not in the catalogue
+  cache_dir: data/cache            # cached Open Library answers, gitignored
+  scan_timeout_s: 5                # how long to look for a barcode after a book is placed
+  scanner_camera_index: 0          # camera pointed at the scan pad
+
+voice:
+  tts_voice: af_heart
+  whisper_volume: 0.35    # playback volume multipliers per voice style
+  normal_volume: 1.0
+
+thresholds:
+  emotion_min_confidence: 0.5   # ignore detected user emotions below this
+  face_similarity: 0.6          # recognition match threshold (the server's default)
+  min_speech_rms: 500           # recordings quieter than this count as silence
+
+logging:
+  session_dir: data/logs        # JSON-lines study logs, gitignored

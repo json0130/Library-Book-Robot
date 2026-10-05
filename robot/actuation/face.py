@@ -1,12 +1,12 @@
-"""Robot face expressions: valid names, aliases, and set_emotion() / talk() to drive the display.
+"""Face display client: set_emotion() / talk() drive the face page served by display/server.py.
 
-    from modules.expression import set_emotion, talk, mouth_levels
-    set_emotion("happy", hold_s=3.0)     # needs `python main.py display` running
+    from robot.actuation.face import set_emotion, talk, mouth_levels
+    set_emotion("happy", hold_s=3.0)     # needs `python -m display.server` running
     talk(levels=mouth_levels(wav_bytes))  # move the mouth with the loudness of a WAV as it plays
     talk(seconds=2.0)                     # generic talking for 2 s (no audio), talk(seconds=0) stops
 
-The AI server's emotion model labels (angry/disgust/fear/happy/sad/surprise/neutral) are all
-accepted, along with a few synonyms. "idle" is the resting face, not one of the seven emotions.
+Emotion names and aliases come from robot/core/expression.py; the AI server's emotion model labels
+(angry/disgust/fear/happy/sad/surprise/neutral) are all accepted. "idle" is the resting face.
 """
 
 from __future__ import annotations
@@ -19,34 +19,14 @@ import urllib.request
 import wave
 from array import array
 
-EMOTIONS = ("happy", "sad", "angry", "surprise", "fear", "disgust", "neutral")
-IDLE = "idle"
+from robot.core.expression import EMOTIONS, IDLE, normalize, valid_names  # noqa: F401 (re-exported)
+
 DEFAULT_HOLD_S = 3.0
 MAX_HOLD_S = 3600.0
 DEFAULT_PORT = 8765
 TALK_FPS = 30
 MAX_TALK_S = 120.0
 CHARS_PER_SECOND = 14.0   # rough speaking rate, for talking without audio
-
-ALIASES = {
-    "happy": "happy", "joy": "happy", "happiness": "happy", "smile": "happy",
-    "sad": "sad", "sadness": "sad", "unhappy": "sad",
-    "angry": "angry", "anger": "angry", "mad": "angry",
-    "surprise": "surprise", "surprised": "surprise", "shock": "surprise",
-    "fear": "fear", "scared": "fear", "afraid": "fear", "fearful": "fear",
-    "disgust": "disgust", "disgusted": "disgust",
-    "neutral": "neutral", "calm": "neutral", "normal": "neutral",
-    "idle": IDLE, "rest": IDLE,
-}
-
-
-def normalize(name: str) -> str | None:
-    """Canonical emotion name (or "idle") for a name or alias, None if unknown."""
-    return ALIASES.get(str(name).strip().lower())
-
-
-def valid_names() -> list[str]:
-    return list(EMOTIONS) + [IDLE]
 
 
 def make_event(name: str, hold_s: float = DEFAULT_HOLD_S) -> dict:
@@ -148,3 +128,55 @@ def set_emotion(name: str, hold_s: float = DEFAULT_HOLD_S,
     Returns False if the display is not running. Raises ValueError for an unknown emotion.
     """
     return _post("/emotion", make_event(name, hold_s), host, port, timeout)
+
+
+class FaceDisplay:
+    """The face page as an actuator: emotions, talking and (later) screen layout and text.
+
+    Works whether or not the display is running: if it is not, calls only log, and it is
+    tried again after RETRY_S seconds in case it was started later.
+    """
+
+    RETRY_S = 20.0
+
+    def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT, enabled: bool = True):
+        import logging
+        self.host, self.port, self.enabled = host, port, enabled
+        self.log = logging.getLogger("robot.face")
+        self.available: bool | None = None       # None until the first attempt
+        self._retry_at = 0.0
+
+    def _post(self, fn, *args, **kwargs) -> bool:
+        import time
+        if not self.enabled or time.monotonic() < self._retry_at:
+            return False
+        ok = fn(*args, host=self.host, port=self.port, timeout=0.3, **kwargs)
+        if not ok:
+            self._retry_at = time.monotonic() + self.RETRY_S
+            if self.available is not False:
+                self.log.info("[face] display not running on port %d; only printing expressions", self.port)
+        self.available = ok
+        return ok
+
+    def show_emotion(self, emotion: str, hold_s: float = DEFAULT_HOLD_S) -> bool:
+        shown = self._post(set_emotion, emotion, hold_s)
+        self.log.info("[face] %s for %gs%s", emotion, hold_s, "" if shown else " (not sent)")
+        return shown
+
+    def talk_audio(self, wav: bytes, delay_s: float = 0.1) -> None:
+        try:
+            levels = mouth_levels(wav)
+        except (ValueError, EOFError):
+            return
+        self._post(talk, levels=levels, delay_s=delay_s)
+
+    def talk_text(self, text: str) -> None:
+        self._post(talk, seconds=min(MAX_TALK_S, max(0.6, len(text) / CHARS_PER_SECOND)))
+
+    def set_layout(self, layout: str) -> None:
+        """full_face or split (face plus a text panel). The page does not support split yet."""
+        self.log.info("[face] layout %s", layout)
+
+    def show_text(self, text: str) -> None:
+        """Text on the screen. The page cannot show text yet, so this only logs."""
+        self.log.info("[screen] %s", text)

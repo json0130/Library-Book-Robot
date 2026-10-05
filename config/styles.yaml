@@ -1,0 +1,79 @@
+# How the robot behaves in each context. Keys are <zone>_<alone|group>.
+# channels: how a message reaches the visitor
+#   speech    spoken through the speaker       screen     text on the display
+#   gaze      eye contact / looking at the book spotlight  light on the book or pad
+#   print     a printed slip
+# Fields missing from an entry are taken from `default`.
+
+default:                 # safe fallback for any combination not listed: quiet and unobtrusive
+  voice: whisper
+  volume: 0.3
+  channels: [screen]
+  light_color: "#3a6fd8"
+  brightness: 0.15
+  eye_expression: neutral
+  neck_pose: lowered
+  screen_layout: split
+  proactive: false
+  speed_limit: 0.3       # m/s
+
+quiet_alone:
+  voice: whisper
+  volume: 0.35
+  channels: [gaze, spotlight, print]
+  light_color: "#3a6fd8"     # dim blue
+  brightness: 0.2
+  eye_expression: neutral
+  neck_pose: lowered
+  screen_layout: split
+  proactive: false
+  speed_limit: 0.3
+
+quiet_group:
+  voice: whisper
+  volume: 0.35
+  channels: [screen, spotlight]
+  light_color: "#3a6fd8"
+  brightness: 0.2
+  eye_expression: neutral
+  neck_pose: lowered
+  screen_layout: split
+  proactive: false
+  speed_limit: 0.3
+
+common_alone:
+  voice: normal
+  volume: 0.8
+  channels: [speech, screen]
+  light_color: "#ffb469"     # warm
+  brightness: 0.6
+  eye_expression: happy
+  neck_pose: upright
+  screen_layout: full_face
+  proactive: true
+  speed_limit: 0.6
+
+common_group:
+  voice: normal
+  volume: 1.0                # louder, to reach everyone
+  channels: [speech, screen]
+  light_color: "#ffc27a"     # warm, bright
+  brightness: 0.9
+  eye_expression: happy
+  neck_pose: upright
+  screen_layout: full_face
+  proactive: true
+  speed_limit: 0.5
+
+# Baseline condition for the study: one behaviour everywhere, context ignored.
+fixed:
+  voice: normal
+  volume: 0.8
+  channels: [speech, screen]
+  light_color: "#ffffff"
+  brightness: 0.5
+  eye_expression: neutral
+  neck_pose: upright
+  screen_layout: full_face
+  proactive: false
+  speed_limit: 0.5

@@ -1,20 +1,20 @@
 """Talk to the robot through the AI server: LLM only, speech-to-text, text-to-speech, or all three.
 
 Examples:
-    python main.py chat                 # --llm: type, read the reply (default)
-    python main.py chat --stt           # speak, read the transcript
-    python main.py chat --tts           # type, hear it spoken
-    python main.py chat --talk          # type, hear the reply: LLM -> TTS
-    python main.py chat --chat          # speak, hear the reply: STT -> LLM -> TTS
-    python main.py chat --check         # is the server reachable?
-    python main.py chat --prompt "Recommend a book about robots."   # one --llm/--tts turn
-    python main.py chat --chat --wav question.wav                   # one voice turn from a file
+    python tools/chat_test.py                 # --llm: type, read the reply (default)
+    python tools/chat_test.py --stt           # speak, read the transcript
+    python tools/chat_test.py --tts           # type, hear it spoken
+    python tools/chat_test.py --talk          # type, hear the reply: LLM -> TTS
+    python tools/chat_test.py --chat          # speak, hear the reply: STT -> LLM -> TTS
+    python tools/chat_test.py --check         # is the server reachable?
+    python tools/chat_test.py --prompt "Recommend a book about robots."   # one --llm/--tts turn
+    python tools/chat_test.py --chat --wav question.wav                   # one voice turn from a file
 
 Recording and playback use PulseAudio (parecord/paplay). Pick a microphone with
 --mic, e.g. --mic Webcam, and a speaker with --speaker, e.g. --speaker USB, if the system
 default input or output is not the right one.
 
-If the face display is running (python main.py display), its mouth moves while the robot talks:
+If the face display is running (python -m display.server), its mouth moves while the robot talks:
 with the loudness of the speech in --tts/--chat, or for the reply's estimated reading time in --llm.
 """
 
@@ -32,9 +32,13 @@ import tempfile
 import time
 from typing import Callable
 
-from modules import stt, tts
-from modules.expression import CHARS_PER_SECOND, DEFAULT_PORT as FACE_PORT, MAX_TALK_S, mouth_levels, talk
-from modules.llm import LLMClient, LLMError, request, split_sentences
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python tools/chat_test.py`
+
+from robot.actuation.face import CHARS_PER_SECOND, DEFAULT_PORT as FACE_PORT, MAX_TALK_S, mouth_levels, talk  # noqa: E402
+from robot.drivers.audio import find_device  # noqa: E402
+from robot.services.llm import LLMClient, LLMError, split_sentences  # noqa: E402
+from vendor.ai_server import stt, tts  # noqa: E402
+from vendor.ai_server.llm import request  # noqa: E402
 
 DEFAULT_SYSTEM = (
     "You are the Library Book Robot, a friendly robot that helps visitors in a university library. "
@@ -84,7 +88,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--voice", default="af_heart", help="TTS voice")
     p.add_argument("--check", action="store_true", help="check the server is reachable and exit")
     p.add_argument("--face-port", type=int, default=int(os.environ.get("FACE_PORT", FACE_PORT)),
-                   help=f"port of the face display (python main.py display), default {FACE_PORT}")
+                   help=f"port of the face display (python -m display.server), default {FACE_PORT}")
     p.add_argument("--no-face", action="store_true", help="don't move the face display's mouth")
     p.add_argument("--lip-delay", type=float, default=0.1,
                    help="seconds the mouth waits after playback starts, to match speaker latency (default 0.1)")
@@ -124,18 +128,6 @@ def run_turn(
     del history[:-MAX_HISTORY_MESSAGES]
     print(f"  total {time.perf_counter() - t0:.2f}s")
     return True
-
-
-def find_device(kind: str, name: str) -> str:
-    """Return the first PulseAudio source or sink (kind) whose name contains `name` (case-insensitive)."""
-    devices = subprocess.run(["pactl", "list", "short", kind], capture_output=True,
-                             text=True, check=True).stdout
-    for line in devices.splitlines():
-        device = line.split("\t")[1]
-        if name.lower() in device.lower() and not device.endswith(".monitor"):
-            return device
-    what = "microphone" if kind == "sources" else "speaker"
-    raise ValueError(f"No {what} matching {name!r}; see `pactl list short {kind}`")
 
 
 def find_mic(name: str) -> str:
@@ -207,7 +199,7 @@ class Face:
             return
         self._retry_at = time.monotonic() + self.RETRY_S
         if not self._warned:
-            print(f"  (face display not running on port {self.port}; start it with: python main.py display)",
+            print(f"  (face display not running on port {self.port}; start it with: python -m display.server)",
                   flush=True)
             self._warned = True
 

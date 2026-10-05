@@ -1,45 +1,27 @@
 """Live webcam face detection, recognition and emotion through the AI server.
 
-    python main.py camera --host 10.42.0.118                  # live names (--recognition), q quits
-    python main.py camera --host 10.42.0.118 --detect         # boxes only
-    python main.py camera --host 10.42.0.118 --emotion        # live emotions
-    python main.py camera --host 10.42.0.118 --enroll jay     # enroll 5 webcam photos
+    python tools/camera_test.py --host 10.42.0.118                  # live names (--recognition), q quits
+    python tools/camera_test.py --host 10.42.0.118 --detect         # boxes only
+    python tools/camera_test.py --host 10.42.0.118 --emotion        # live emotions
+    python tools/camera_test.py --host 10.42.0.118 --enroll jay     # enroll 5 webcam photos
 
-modules/face.py and modules/emotion.py are the server team's single-image clients
-and stay unmodified; this file sends the same requests via modules.llm.request.
+vendor/ai_server/face.py and emotion.py are the server team's single-image clients and
+stay unmodified; this file sends the same requests via robot.services.vision.image_request.
+OpenCV on the Jetson comes from apt: sudo apt install python3-opencv
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import os
-import socket
 import sys
 import time
+from pathlib import Path
 
 import cv2
 
-from modules.llm import request
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python tools/camera_test.py`
 
-MAX_IMAGE_BYTES = 600_000
-# mode -> (server command, request parameters)
-MODES = {
-    "detect": ("FACE", {"operation": "detect"}),
-    "recognize": ("FACE", {"operation": "recognize"}),
-    "emotion": ("EMOTION", {}),
-}
-
-
-def image_request(host: str, port: int, command: str, parameters: dict, jpg: bytes,
-                  robot_id: str = socket.gethostname(), timeout: float = 30) -> dict:
-    """Send one JPEG with a FACE or EMOTION command and return the response parameters.
-
-    Raises OSError/EOFError on connection problems and ValueError on a bad or ERR response.
-    """
-    if not 0 < len(jpg) <= MAX_IMAGE_BYTES:
-        raise ValueError("Image must be at most 600,000 bytes")
-    return request(host, port, command, dict(parameters, format="jpeg"),
-                   base64.b64encode(jpg).decode("ascii"), robot_id, timeout)["parameters"]
+from robot.services.vision import MODES, image_request  # noqa: E402
 
 
 def label(d: dict) -> str:

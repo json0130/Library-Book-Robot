@@ -1,3 +1,7 @@
 known_faces/
 __pycache__/
-ui/screenshots/
+display/ui/screenshots/
+data/logs/
+data/cache/
+data/test_barcodes/
+*.egg-info/
