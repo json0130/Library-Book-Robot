@@ -45,7 +45,7 @@ tools/             test tools: chat_test, camera_test, face_enroll, server_check
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
 docs/              architecture notes, reference images
-data/              catalog.csv (SAMPLE catalogue), cache/ and logs/ and test_barcodes/ (generated, gitignored)
+data/              catalog.csv (SAMPLE catalogue), test_barcodes/ (barcode PNGs, committed), cache/ and logs/ (generated, gitignored)
 ```
 
 `vendor/ai_server/` holds the AI server team's files. Keep face.py, emotion.py, stt.py and tts.py unmodified so updates can be dropped in.
@@ -99,7 +99,7 @@ printf 'quiet alone\nbook\ncommon group\nquit\n' | python -m robot sim
 When a book is placed on the pad the robot reads its ISBN barcode, looks the book up, and offers to take it back, explain it or recommend something similar.
 
 ```bash
-python tools/make_test_barcodes.py                       # EAN-13 PNGs for every catalogue book in data/test_barcodes/
+python tools/make_test_barcodes.py                       # regenerates the EAN-13 PNGs in data/test_barcodes/ (already committed) from the catalogue
 python tools/book_scan_test.py --list                    # the catalogue
 python tools/book_scan_test.py --image data/test_barcodes/9780345391803-the-hitchhiker-s-guide-to-the-galaxy.png
 python tools/book_scan_test.py --live                    # webcam with an overlay, q quits

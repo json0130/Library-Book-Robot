@@ -3,5 +3,4 @@ __pycache__/
 display/ui/screenshots/
 data/logs/
 data/cache/
-data/test_barcodes/
 *.egg-info/
