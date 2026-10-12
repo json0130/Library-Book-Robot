@@ -4,6 +4,25 @@ A library robot that adapts how it interacts to where it is (quiet zone or commo
 
 The robot software runs on a Jetson Orin Nano (JetPack 6, Python 3.10+). The language model, speech and face models run on a separate AI server, reached over TCP. Motors, lights and the printer will hang off an ESP32. See [docs/architecture.md](docs/architecture.md) for how the parts fit together.
 
+## First prototype design
+
+![Robotic Library Assistant concept blueprint, design revision 02](Gemini_Generated_Image_cf59gbcf59gbcf59.jpeg)
+
+*Concept blueprint, design revision 02, generated with Gemini. It is an AI-generated illustration of the idea, not an engineering drawing: the dimensions, the "patent" number and some details are made up.*
+
+| Label | Part | Where it lives in this repo |
+|---|---|---|
+| A | Compartmentalised book storage (the ring of slots) | `robot/actuation/storage_ring.py`, `slot` in the catalogue |
+| B | Multi-directional omni-wheels | `robot/actuation/navigation.py` |
+| C | Lidar and sensor suite | not started |
+| D | Presentation / sorting platform (the scan pad) | `robot/perception/book_scanner.py` |
+| E | Neck and body structure | `robot/actuation/neck.py` |
+| F | HMI and face plate (the screen) | `display/` |
+| G | High-resolution camera | `robot/drivers/camera.py` |
+| H | Internal illumination array | `robot/actuation/lights.py` |
+
+The servo motors and circuit boards sit in the pylon behind the neck; the ESP32 plan is in `firmware/esp32/README.md`.
+
 ## Layout
 
 ```
