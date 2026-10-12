@@ -4,8 +4,18 @@ sudo apt install python3-opencv)."""
 from __future__ import annotations
 
 
+import logging
+
+log = logging.getLogger("robot.camera")
+
+
 class Camera:
-    def __init__(self, index: int = 0):
+    """A webcam. width/height ask for a resolution (barcodes need more than OpenCV's 640x480
+    default); the webcam only delivers it once the MJPG format is chosen first, so that is set
+    whenever a size is requested. If the camera refuses, the size it gives is used and logged.
+    width and height are the size of the frames it actually delivers."""
+
+    def __init__(self, index: int = 0, width: int | None = None, height: int | None = None):
         try:
             import cv2
         except ImportError as exc:
@@ -14,8 +24,19 @@ class Camera:
         self.cap = cv2.VideoCapture(index)
         if not self.cap.isOpened():
             raise OSError(f"Could not open camera {index}")
+        if width and height:
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
+        frame = None
         for _ in range(5):          # let auto exposure settle
-            self.cap.read()
+            ok, frame = self.cap.read()
+        # The size comes from a real frame: right after set(), the camera's own size query can
+        # still report the old size.
+        self.height, self.width = (frame.shape[:2] if ok and frame is not None else (0, 0))
+        if width and height and (self.width, self.height) != (int(width), int(height)):
+            log.warning("camera %s gave %dx%d instead of the requested %sx%s",
+                        index, self.width, self.height, width, height)
 
     def read_frame(self):
         """The next frame as a BGR numpy array."""

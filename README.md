@@ -69,7 +69,7 @@ python -m robot sim       # try the logic from the keyboard: fake hardware, no A
 python -m robot run       # on the hardware; for now exits naming the drivers that are missing (esp32)
 ```
 
-`python main.py ...` forwards to `python -m robot ...`.
+`python main.py ...` forwards to `python -m robot ...`. `python -m robot sim --llm` also uses the AI server's LLM for explain and recommend (see Books).
 
 ### Simulator
 
@@ -108,6 +108,8 @@ python tools/book_scan_test.py --live                    # webcam with an overla
 Point the webcam at a barcode PNG on a screen, or print them. The scanner tries the grayscale image, a contrast-boosted copy, a 2x upscale and the 90, 180 and 270 degree rotations; library stickers and other non-ISBN codes are ignored. If no ISBN is read within `books.scan_timeout_s` (5 s) the robot asks the visitor to place the book flat with the barcode up.
 
 `data/catalog.csv` is **sample data** (about a dozen well-known books, with summaries written for this project). Replace it with the library's real catalogue: same columns (`isbn13, title, author, genre, tags, summary, shelf, slot`; tags separated by semicolons; lines starting with `#` are ignored). Loading names the file and line of any bad row. For an ISBN not in the catalogue the robot can ask Open Library for the title and author (`books.online_fallback` in `config/robot.yaml`, 3 s timeout, answers cached in `data/cache/`); shelf, slot and summary stay empty and the book can't be returned or recommended from. Recommendations are the catalogue books with the most genre and tag overlap (Jaccard), ties broken by title.
+
+**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three similar catalogue books to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. *Return* (shelf and storage slot) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
 
 ### Behaviour rules
 
@@ -180,5 +182,6 @@ python -m unittest discover -s tests -t .           # the test suite
 
 1. ESP32 firmware and `robot/drivers/esp32.py`, then `python -m robot run` on the hardware.
 2. Perception: people counting and noise level feeding `ContextChanged`; the pad's weight sensor publishing `BookPlaced` from the ESP32.
-3. Replace the sample catalogue with the library's real one, then the LLM for explanations and recommendations (step 2 of the book pipeline).
+3. Replace the sample catalogue with the library's real one.
 4. Speak replies sentence by sentence to cut the TTS delay (about 5 s for a three-sentence reply today).
+5. Let the visitor ask the LLM free questions about the book (today only explain and recommend use it).

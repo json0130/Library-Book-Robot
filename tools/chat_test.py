@@ -36,21 +36,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python
 
 from robot.actuation.face import CHARS_PER_SECOND, DEFAULT_PORT as FACE_PORT, MAX_TALK_S, mouth_levels, talk  # noqa: E402
 from robot.drivers.audio import find_device  # noqa: E402
-from robot.services.llm import LLMClient, LLMError, split_sentences  # noqa: E402
+from robot.services.llm import LIBRARY_SYSTEM_PROMPT, LLMClient, LLMError, split_sentences  # noqa: E402
 from vendor.ai_server import stt, tts  # noqa: E402
 from vendor.ai_server.llm import request  # noqa: E402
 
-DEFAULT_SYSTEM = (
-    "You are the Library Book Robot, a friendly robot that helps visitors in a university library. "
-    "You help people find, return and choose books: explain what a book is about, recommend similar "
-    "titles, and point them to the right section or the help desk. "
-    "Keep to library topics and gently steer other questions back to books and study. "
-    "If you are not sure a book exists or the library holds it, say so and suggest asking the help desk "
-    "or searching the catalogue; never invent titles, authors or shelf locations. "
-    "Remember what the visitor said earlier in the conversation. "
-    "Your replies are spoken aloud, so use at most three short, plain sentences. "
-    "Do not use markdown, lists or emoji."
-)
+DEFAULT_SYSTEM = LIBRARY_SYSTEM_PROMPT
 HISTORY_EXCHANGES = 10  # past user/assistant pairs sent with each prompt
 MAX_HISTORY_MESSAGES = 2 * HISTORY_EXCHANGES
 MODES = {

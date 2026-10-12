@@ -14,6 +14,8 @@
     fixed on | fixed off         baseline condition: one style everywhere
     help, quit
 
+Start with `python -m robot sim --llm` to have the AI server's LLM word explain and recommend.
+
 After each command the sim prints the style and the dialogue state. Expressions go to the face
 display if it is running (python -m display.server), otherwise they are only printed.
 No hardware or AI server is needed.
@@ -27,7 +29,7 @@ import random
 import sys
 from typing import Optional, TextIO
 
-from robot.app import App, build_app, fake_drivers
+from robot.app import App, build_app, build_assistant, fake_drivers
 from robot.config import Config
 from robot.core.expression import EMOTIONS, normalize
 from robot.events import BookPlaced, ContextChanged, EmotionDetected, UserUtterance
@@ -154,11 +156,13 @@ class Sim:
 
 
 async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdout,
-                  log_sessions: bool = True) -> int:
+                  log_sessions: bool = True, use_llm: bool = False) -> int:
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
-    app = build_app(cfg, fake_drivers(), log_sessions=log_sessions)
+    assistant = build_assistant(cfg) if use_llm else None
+    app = build_app(cfg, fake_drivers(), log_sessions=log_sessions, assistant=assistant)
     sim = Sim(app, out)
     sim.say("Robot simulator (fake hardware). Type help for commands, quit to exit.")
+    sim.say(f"Explain/recommend: {'LLM at ' + cfg.ai_host if use_llm else 'catalogue text (use --llm for the LLM)'}")
     if app.session_log:
         sim.say(f"Logging this session to {app.session_log.path}")
     sim.status()

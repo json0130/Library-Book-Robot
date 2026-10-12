@@ -33,7 +33,9 @@ from robot.drivers import DriverNotImplemented
 from robot.events import (ContextChanged, EmotionDetected, ExpressionRequested, ReplySentence,
                           StyleChanged)
 from robot.perception.book_scanner import BookScanner
+from robot.services.book_llm import BookAssistant
 from robot.services.books import BookFinder, Catalog
+from robot.services.llm import LLMClient
 
 log = logging.getLogger("robot.app")
 
@@ -57,10 +59,11 @@ def real_drivers(cfg: Config) -> Drivers:
     from robot.drivers.camera import Camera
     from robot.drivers.esp32 import Esp32
     dev = cfg.robot.get("devices", {})
+    size = (dev.get("camera_width"), dev.get("camera_height"))
     made, missing = {}, []
     for name, make in (("esp32", lambda: Esp32(dev.get("esp32_port", "/dev/ttyUSB0"), dev.get("esp32_baud", 115200))),
                        ("audio", lambda: Audio(dev.get("speaker"), dev.get("mic"))),
-                       ("camera", lambda: Camera(int(dev.get("camera_index", 0))))):
+                       ("camera", lambda: Camera(int(dev.get("camera_index", 0)), *size))):
         try:
             made[name] = make()
         except DriverNotImplemented as exc:
@@ -73,7 +76,7 @@ def real_drivers(cfg: Config) -> Drivers:
         raise DriverNotImplemented(", ".join(e.name for e in missing), missing=missing)
     scan_index = int(cfg.books["scanner_camera_index"])
     if scan_index != int(dev.get("camera_index", 0)):       # a separate camera on the scan pad
-        made["scanner_camera"] = Camera(scan_index)
+        made["scanner_camera"] = Camera(scan_index, *size)
     return Drivers(**made)
 
 
@@ -93,12 +96,13 @@ class App:
     finder: Optional[BookFinder] = None           # catalogue + online fallback
     scanner_camera: object = None                 # camera pointed at the scan pad
     scanner: Optional[BookScanner] = None
+    assistant: object = None                      # services.book_llm.BookAssistant, or None (catalogue text only)
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
         self.context = derive_context(default_zone, 1, None, self.thresholds, default_zone)
         self.style = self.policy.style_for(self.context, self.fixed)
-        self.dialogue = Dialogue(self.actuators, lambda: self.style, self.bus.publish, self.finder)
+        self.dialogue = Dialogue(self.actuators, lambda: self.style, self.bus.publish, self.finder, self.assistant)
         # order matters: log first, then update context/style, then the dialogue reacts
         self.bus.subscribe(object, self._log)
         self.bus.subscribe(ContextChanged, self._on_context)
@@ -156,10 +160,19 @@ def build_finder(cfg: Config) -> BookFinder:
                       cache_dir=cfg.path(books["cache_dir"]))
 
 
+def build_assistant(cfg: Config) -> BookAssistant:
+    """The LLM helper for the book flow, talking to the AI server in config/robot.yaml.
+    Uses ai_server.llm_timeout_s (short: a visitor is waiting), not the 300 s of the chat tool."""
+    server = cfg.robot["ai_server"]
+    return BookAssistant(LLMClient(cfg.ai_host, cfg.ai_port, float(server.get("llm_timeout_s", 20))))
+
+
 def build_app(cfg: Config, drivers: Drivers, face: Optional[FaceDisplay] = None, speech=None,
-              log_sessions: bool = True, fixed: bool = False, finder: Optional[BookFinder] = None) -> App:
+              log_sessions: bool = True, fixed: bool = False, finder: Optional[BookFinder] = None,
+              assistant=None) -> App:
     """Wire drivers and services into an App. speech: services.speech.Speech, or None to only log.
-    finder: the book lookup; built from config/robot.yaml `books:` if not given."""
+    finder: the book lookup; built from config/robot.yaml `books:` if not given.
+    assistant: the LLM helper (build_assistant); None answers from the catalogue text alone."""
     display = cfg.robot.get("display", {})
     face = face or FaceDisplay(display.get("host", "127.0.0.1"), int(display.get("port", 8765)))
     voice_cfg = cfg.robot.get("voice", {})
@@ -173,4 +186,5 @@ def build_app(cfg: Config, drivers: Drivers, face: Optional[FaceDisplay] = None,
         session_log = SessionLog(cfg.path(cfg.robot.get("logging", {}).get("session_dir", "data/logs")))
     return App(cfg=cfg, bus=Bus(), actuators=actuators, policy=StylePolicy(cfg.styles),
                thresholds=NoiseThresholds.from_zones(cfg.zones), session_log=session_log, fixed=fixed,
-               finder=finder or build_finder(cfg), scanner_camera=drivers.scanner_camera or drivers.camera)
+               finder=finder or build_finder(cfg), scanner_camera=drivers.scanner_camera or drivers.camera,
+               assistant=assistant)

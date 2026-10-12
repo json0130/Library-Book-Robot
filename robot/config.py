@@ -22,6 +22,7 @@ BOOKS_DEFAULTS = {
     "cache_dir": "data/cache",
     "scan_timeout_s": 5.0,
     "scanner_camera_index": 0,
+    "use_llm": True,
 }
 
 

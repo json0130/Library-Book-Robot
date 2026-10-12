@@ -50,7 +50,9 @@ def run_image(finder, path: Path) -> int:
 def run_live(finder, camera_index: int) -> int:
     import cv2
     from robot.drivers.camera import Camera
-    camera = Camera(camera_index)
+    dev = load_config().robot.get("devices", {})
+    camera = Camera(camera_index, dev.get("camera_width"), dev.get("camera_height"))
+    print(f"Camera {camera_index}: {camera.width}x{camera.height}")
     last, label = None, "looking for a barcode..."
     print("Hold a book's barcode up to the camera. Press q in the window to quit.")
     try:

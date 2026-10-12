@@ -21,6 +21,8 @@ def main(argv=None) -> int:
     check.add_argument("--port", type=int, help="override the configured port")
     sim = sub.add_parser("sim", help="keyboard simulator")
     sim.add_argument("--no-log", action="store_true", help="don't write a session log")
+    sim.add_argument("--llm", action="store_true",
+                     help="explain/recommend through the AI server's LLM (default: catalogue text, no server needed)")
     sub.add_parser("run", help="run on the real hardware")
     args = p.parse_args(argv)
 
@@ -37,7 +39,7 @@ def main(argv=None) -> int:
     if args.command == "sim":
         from robot.sim.keyboard import run_sim
         try:
-            return asyncio.run(run_sim(cfg, log_sessions=not args.no_log))
+            return asyncio.run(run_sim(cfg, log_sessions=not args.no_log, use_llm=args.llm))
         except KeyboardInterrupt:
             return 0
         except CatalogError as exc:
@@ -60,7 +62,9 @@ def main(argv=None) -> int:
     from robot.services.speech import Speech
     voice = cfg.robot.get("voice", {}).get("tts_voice", "af_heart")
     try:
-        build_app(cfg, drivers, speech=Speech(cfg.ai_host, cfg.ai_port, voice))
+        from robot.app import build_assistant
+        assistant = build_assistant(cfg) if cfg.books["use_llm"] else None
+        build_app(cfg, drivers, speech=Speech(cfg.ai_host, cfg.ai_port, voice), assistant=assistant)
     except CatalogError as exc:
         print(f"Cannot load the book catalogue: {exc}", file=sys.stderr)
         return 1

@@ -9,6 +9,8 @@ from robot.actuation.face import FaceDisplay
 from robot.app import build_app, fake_drivers
 from robot.config import load_config
 from robot.core.session_log import SessionLog
+from robot.services.book_llm import BookAssistant
+from robot.services.llm import LLMError
 from robot.core.dialogue import SCAN_FAILED_MESSAGE, choice_from
 from robot.events import (BookPlaced, BookScanned, ContextChanged, EmotionDetected, ExpressionRequested,
                           ReplySentence, ScanFailed, StyleChanged, UserUtterance)
@@ -16,10 +18,25 @@ from robot.events import (BookPlaced, BookScanned, ContextChanged, EmotionDetect
 HITCH, MARTIAN, CLEAN_CODE = "9780345391803", "9780553418026", "9780132350884"
 
 
-def make_app(log_dir=None):
+class StubClient:
+    """Stands in for the LLM client: answers from a list (or raises) and records every prompt."""
+
+    def __init__(self, *replies, error=None):
+        self.replies, self.error, self.prompts = list(replies), error, []
+
+    def chat(self, messages):
+        self.prompts.append(messages[-1]["content"])
+        if self.error:
+            raise self.error
+        return self.replies.pop(0)
+
+
+def make_app(log_dir=None, llm=None):
     cfg = load_config()
     cfg.robot.setdefault("books", {})["online_fallback"] = False      # tests never touch the network
-    app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False)
+    assistant = BookAssistant(llm) if llm is not None else None
+    app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
+                    assistant=assistant)
     if log_dir is not None:
         app.session_log = SessionLog(log_dir, "test")
     return app
@@ -94,9 +111,9 @@ class BookChoicesTest(unittest.TestCase):
         logging.disable(logging.INFO)
         self.addCleanup(logging.disable, logging.NOTSET)
 
-    def offer(self, zone="common", isbn=HITCH, event=None):
+    def offer(self, zone="common", isbn=HITCH, event=None, llm=None):
         """An app that has just offered the three choices for a book."""
-        app = make_app()
+        app = make_app(llm=llm)
         app.said = []
         app.bus.subscribe(ReplySentence, lambda e: app.said.append(e.text))
         run(app, ContextChanged(zone, 1), BookPlaced(), event or scanned(isbn))
@@ -180,6 +197,64 @@ class BookChoicesTest(unittest.TestCase):
         common = self.offer(zone="common", isbn=MARTIAN)
         run(common, UserUtterance("explain"))
         self.assertNotIn("print", [c for c, _ in common.actuators.lights.esp32.sent])
+
+    # ---- with the LLM ----
+    def test_explain_uses_the_llm_with_the_catalogue_record(self):
+        llm = StubClient("The Martian is a funny survival story on Mars.")
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        run(app, UserUtterance("explain"))
+        self.assertEqual(app.said[-2], "The Martian is a funny survival story on Mars.")
+        self.assertIn("Summary: An astronaut is left behind", llm.prompts[0])
+        self.assertEqual(app.dialogue.state, "closing")
+
+    def test_recommend_uses_the_llm_with_only_catalogue_candidates(self):
+        expected = [b.title for b in make_app().finder.similar_to(MARTIAN, 3)]
+        llm = StubClient(f"You might enjoy {expected[0]}.")
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        run(app, UserUtterance("recommend"))
+        self.assertEqual(app.said[-2], f"You might enjoy {expected[0]}.")
+        for title in expected:
+            self.assertIn(f"Title: {title}", llm.prompts[0])
+
+    def test_recommend_that_names_no_candidate_falls_back_to_the_catalogue_text(self):
+        app = self.offer(isbn=MARTIAN, llm=StubClient("Read War and Peace."))
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            run(app, UserUtterance("recommend"))
+        self.assertIn("If you like The Martian, you might enjoy", app.said[-2])
+
+    def test_llm_down_falls_back_to_the_catalogue_text(self):
+        llm = StubClient(error=LLMError("server unreachable"))
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            run(app, UserUtterance("explain"))
+        self.assertIn("An astronaut is left behind on Mars", app.said[-2])        # the catalogue summary
+        self.assertEqual(app.dialogue.state, "closing")
+
+    def test_return_never_asks_the_llm(self):
+        llm = StubClient()
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        run(app, UserUtterance("return"))
+        self.assertEqual(llm.prompts, [])
+        self.assertIn("storage slot 4", " ".join(app.said))
+
+    def test_books_outside_the_catalogue_never_go_to_the_llm(self):
+        llm = StubClient()
+        unknown = BookScanned(isbn="9780140449136", title="Online Only", author="Someone", found_in_catalog=False)
+        app = self.offer(event=unknown, llm=llm)
+        run(app, UserUtterance("explain"))
+        self.assertIn("don't have a summary for Online Only", app.said[-2])
+        app = self.offer(event=unknown, llm=llm)
+        run(app, UserUtterance("recommend"))
+        self.assertEqual(llm.prompts, [])
+
+    def test_a_new_book_starts_a_fresh_llm_conversation(self):
+        app = self.offer(isbn=MARTIAN, llm=StubClient("It is about Mars.", "More Mars."))
+        run(app, UserUtterance("explain"))
+        self.assertEqual(len(app.dialogue.assistant.history), 2)
+        run(app, BookPlaced(), scanned(HITCH))
+        self.assertEqual(app.dialogue.assistant.history, [])
+        run(app, UserUtterance("everyone"), ContextChanged("common", 0))
+        self.assertEqual(app.dialogue.assistant.history, [])
 
     def test_scan_failed_returns_to_idle_and_asks_for_a_flat_book(self):
         app = make_app()

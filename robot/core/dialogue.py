@@ -16,8 +16,11 @@ States and the events that move between them:
 Every action reads the current StyleVector, so the same step is whispered and printed in a
 quiet zone but spoken aloud in a common area (Actuators.deliver picks the channels).
 
-The three choices use the catalogue only (the LLM comes later): return gives the shelf and
-storage slot, explain gives the catalogue summary, recommend names up to three similar books.
+The three choices are grounded in the catalogue: return gives the shelf and storage slot (facts,
+never the model's words), explain and recommend ask the LLM (services/book_llm.py) to put the
+catalogue record, or up to three similar catalogue books, into speech. If there is no LLM, the
+server is down or the answer is unusable, they use the plain catalogue text instead. A book that
+is not in the catalogue never goes to the model.
 """
 
 from __future__ import annotations
@@ -55,11 +58,12 @@ def join_names(items: list) -> str:
 
 class Dialogue:
     def __init__(self, actuators, get_style: Callable[[], object],
-                 publish: Optional[Callable[[object], Awaitable[int]]] = None, finder=None):
+                 publish: Optional[Callable[[object], Awaitable[int]]] = None, finder=None, assistant=None):
         self.out = actuators
         self.get_style = get_style
         self.publish = publish
         self.finder = finder                # services.books.BookFinder, for recommendations
+        self.assistant = assistant          # services.book_llm.BookAssistant, or None for catalogue text only
         self.state = "idle"
         self.book = None
         self.transitions: list[tuple[str, str, str]] = []    # (from, trigger, to)
@@ -83,6 +87,8 @@ class Dialogue:
         if event.group_size <= 0:
             if self.state != "idle":
                 self.book = None
+                if self.assistant is not None:
+                    self.assistant.reset()
                 self._go("idle", "everyone left")
             return
         if self.state == "idle" and self.get_style().proactive:
@@ -126,6 +132,8 @@ class Dialogue:
         if self.state != "scanning":
             return
         self.book = event
+        if self.assistant is not None:
+            self.assistant.reset()                  # a new book starts a new conversation
         self._go("offering", "book identified")
         if event.title:
             by = f" by {event.author}" if event.author else ""
@@ -139,6 +147,8 @@ class Dialogue:
             return
         log.info("[dialogue] scan failed: %s", event.reason)
         self.book = None
+        if self.assistant is not None:
+            self.assistant.reset()
         self.out.lights.spotlight(False)
         self._go("idle", "scan failed")
         await self.say(SCAN_FAILED_MESSAGE, "sad")
@@ -152,10 +162,25 @@ class Dialogue:
         elif action == "recommend":
             await self.act_recommend(book, title)
         else:
-            summary = book.summary if book else None
-            await self.say(f"{title}: {summary}" if summary else
-                           f"I don't have a summary for {title}. The help desk can tell you more.",
-                           "neutral" if not summary else "happy")
+            await self.act_explain(book, title)
+
+    def catalogue_record(self, book):
+        """The full catalogue Book for what was scanned (None if it is not in the catalogue)."""
+        if book is None or not book.found_in_catalog or self.finder is None:
+            return None
+        return self.finder.catalog.lookup(book.isbn)
+
+    async def act_explain(self, book, title: str) -> None:
+        record = self.catalogue_record(book)
+        if record is not None and self.assistant is not None:
+            spoken = await self.assistant.explain(record)
+            if spoken:
+                await self.say(spoken, "happy")
+                return
+        summary = book.summary if book else None
+        await self.say(f"{title}: {summary}" if summary else
+                       f"I don't have a summary for {title}. The help desk can tell you more.",
+                       "neutral" if not summary else "happy")
 
     async def act_return(self, book, title: str) -> None:
         if book is None or not book.found_in_catalog:
@@ -182,6 +207,11 @@ class Dialogue:
         if not similar:
             await self.say(f"I couldn't find books like {title} in the catalogue.", "neutral")
             return
+        if self.assistant is not None:
+            spoken = await self.assistant.recommend(self.finder.catalog.lookup(book.isbn), similar)
+            if spoken:
+                await self.say(spoken, "happy")
+                return
         names = [f"{b.title} by {b.author}" if b.author else b.title for b in similar]
         await self.say(f"If you like {title}, you might enjoy {join_names(names)}.", "happy")
 
