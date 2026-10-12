@@ -47,30 +47,67 @@ def run_image(finder, path: Path) -> int:
     return 0
 
 
-def run_live(finder, camera_index: int) -> int:
+def run_live(finder, camera_index: int, size: tuple | None = None) -> int:
+    """Webcam view with the scanner running beside it.
+
+    The picture is drawn at the camera's own rate from its newest frame; decoding happens on a
+    second thread, on the newest frame whenever it is free, so a slow decode never holds the
+    picture back or makes it lag.
+    """
+    import threading
+    import time
     import cv2
     from robot.drivers.camera import Camera
     dev = load_config().robot.get("devices", {})
-    camera = Camera(camera_index, dev.get("camera_width"), dev.get("camera_height"))
+    width, height = size or (dev.get("camera_width"), dev.get("camera_height"))
+    camera = Camera(camera_index, width, height, background=True)
     print(f"Camera {camera_index}: {camera.width}x{camera.height}")
-    last, label = None, "looking for a barcode..."
+    state = {"label": "looking for a barcode...", "last": None, "busy": False, "decode_ms": 0.0}
+
+    def scan(frame):
+        t0 = time.perf_counter()
+        try:
+            isbn = decode_isbn(frame)
+            if isbn and isbn != state["last"]:
+                state["last"] = isbn
+                book = finder.find(isbn)
+                print(describe(isbn, book), flush=True)
+                state["label"] = f"{isbn}  {book.title if book else 'unknown book'}"
+        except Exception as exc:                   # keep the view alive; say what went wrong
+            state["label"] = f"scan error: {exc}"
+        state["decode_ms"] = (time.perf_counter() - t0) * 1000
+        state["busy"] = False
+
     print("Hold a book's barcode up to the camera. Press q in the window to quit.")
+    shown, started = 0, time.perf_counter()
     try:
         while True:
             frame = camera.read_frame()
-            isbn = decode_isbn(frame)
-            if isbn and isbn != last:
-                last = isbn
-                book = finder.find(isbn)
-                print(describe(isbn, book), flush=True)
-                label = f"{isbn}  {book.title if book else 'unknown book'}"
-            cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
-            cv2.imshow("book scanner", frame)
+            if not state["busy"]:
+                state["busy"] = True
+                threading.Thread(target=scan, args=(frame.copy(),), daemon=True).start()
+            shown += 1
+            fps = shown / max(time.perf_counter() - started, 1e-6)
+            view = frame.copy()
+            cv2.putText(view, state["label"], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+            cv2.putText(view, f"{fps:.0f} fps, scan {state['decode_ms']:.0f} ms", (10, view.shape[0] - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.imshow("book scanner", view)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 return 0
+            if shown == 60:                        # report the rate over a fresh window
+                shown, started = 0, time.perf_counter()
     finally:
         camera.close()
         cv2.destroyAllWindows()
+
+
+def parse_size(text: str) -> tuple:
+    try:
+        w, h = text.lower().split("x")
+        return int(w), int(h)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"size must look like 640x480, got {text!r}") from None
 
 
 def main(argv=None) -> int:
@@ -81,6 +118,9 @@ def main(argv=None) -> int:
     mode.add_argument("--live", action="store_true", help="decode the webcam")
     mode.add_argument("--list", action="store_true", help="print the catalogue")
     p.add_argument("--camera", type=int, default=int(cfg.books["scanner_camera_index"]), help="webcam index")
+    p.add_argument("--size", type=parse_size, metavar="WxH",
+                   help="camera resolution for --live, e.g. 640x480 (smooth, 30 fps) or 1280x720 (sharper, "
+                        "about 8 fps on this webcam); default from config/robot.yaml")
     args = p.parse_args(argv)
     try:
         finder = build_finder(cfg)
@@ -92,7 +132,7 @@ def main(argv=None) -> int:
             print(f"{b.isbn13}  {b.title} ({b.author}) [{b.genre}] shelf {b.shelf}, slot {b.slot}")
         return 0
     try:
-        return run_image(finder, args.image) if args.image else run_live(finder, args.camera)
+        return run_image(finder, args.image) if args.image else run_live(finder, args.camera, args.size)
     except DecoderUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

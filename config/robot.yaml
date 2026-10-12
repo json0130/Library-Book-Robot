@@ -14,8 +14,8 @@ devices:
   esp32_port: /dev/ttyUSB0
   esp32_baud: 115200
   camera_index: 0
-  camera_width: 1280      # barcodes need more than the 640x480 default; the webcam supports 1280x720
-  camera_height: 720
+  camera_width: 640       # this webcam gives 30 fps at 640x480 but only ~8 fps at 1280x720; 640x480 read
+  camera_height: 480      # barcodes fine when tested. Use 1280/720 for smaller or more distant barcodes.
   mic: null               # part of a PulseAudio source name, null = system default
   speaker: USB            # part of a PulseAudio sink name, null = system default
 

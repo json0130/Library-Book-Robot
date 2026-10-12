@@ -103,9 +103,12 @@ python tools/make_test_barcodes.py                       # regenerates the EAN-1
 python tools/book_scan_test.py --list                    # the catalogue
 python tools/book_scan_test.py --image data/test_barcodes/9780345391803-the-hitchhiker-s-guide-to-the-galaxy.png
 python tools/book_scan_test.py --live                    # webcam with an overlay, q quits
+python tools/book_scan_test.py --live --size 1280x720    # sharper but about 8 fps; the default is 640x480 (smooth, 30 fps)
 ```
 
-Point the webcam at a barcode PNG on a screen, or print them. The scanner tries the grayscale image, a contrast-boosted copy, a 2x upscale and the 90, 180 and 270 degree rotations; library stickers and other non-ISBN codes are ignored. If no ISBN is read within `books.scan_timeout_s` (5 s) the robot asks the visitor to place the book flat with the barcode up.
+Point the webcam at a barcode PNG on a screen, or print them. The scanner tries the grayscale image, a contrast-boosted copy, a 2x upscale and the 90, 180 and 270 degree rotations; library stickers and other non-ISBN codes are ignored. This webcam delivers 30 fps at 640x480 but only about 8 fps at 1280x720 (a limit of the camera, not the code), so there is a trade-off between a sharper barcode and a smoother picture. 640x480 is the default (it read barcodes fine in testing); try `--size 1280x720` for small or distant barcodes, and set `devices.camera_width`/`camera_height` in `config/robot.yaml` for the robot. The live view always shows the newest frame and decodes on a second thread, so the scanner never makes the picture lag.
+
+If no ISBN is read within `books.scan_timeout_s` (5 s) the robot asks the visitor to place the book flat with the barcode up.
 
 `data/catalog.csv` is **sample data** (about a dozen well-known books, with summaries written for this project). Replace it with the library's real catalogue: same columns (`isbn13, title, author, genre, tags, summary, shelf, slot`; tags separated by semicolons; lines starting with `#` are ignored). Loading names the file and line of any bad row. For an ISBN not in the catalogue the robot can ask Open Library for the title and author (`books.online_fallback` in `config/robot.yaml`, 3 s timeout, answers cached in `data/cache/`); shelf, slot and summary stay empty and the book can't be returned or recommended from. Recommendations are the catalogue books with the most genre and tag overlap (Jaccard), ties broken by title.
 

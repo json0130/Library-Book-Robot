@@ -63,7 +63,7 @@ def real_drivers(cfg: Config) -> Drivers:
     made, missing = {}, []
     for name, make in (("esp32", lambda: Esp32(dev.get("esp32_port", "/dev/ttyUSB0"), dev.get("esp32_baud", 115200))),
                        ("audio", lambda: Audio(dev.get("speaker"), dev.get("mic"))),
-                       ("camera", lambda: Camera(int(dev.get("camera_index", 0)), *size))):
+                       ("camera", lambda: Camera(int(dev.get("camera_index", 0)), *size, background=True))):
         try:
             made[name] = make()
         except DriverNotImplemented as exc:
@@ -76,7 +76,7 @@ def real_drivers(cfg: Config) -> Drivers:
         raise DriverNotImplemented(", ".join(e.name for e in missing), missing=missing)
     scan_index = int(cfg.books["scanner_camera_index"])
     if scan_index != int(dev.get("camera_index", 0)):       # a separate camera on the scan pad
-        made["scanner_camera"] = Camera(scan_index, *size)
+        made["scanner_camera"] = Camera(scan_index, *size, background=True)
     return Drivers(**made)
 
 
