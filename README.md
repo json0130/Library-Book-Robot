@@ -32,7 +32,7 @@ robot/             the robot program: python -m robot check | sim | run
   bus.py           in-process asyncio publish/subscribe
   events.py        the events on the bus (ContextChanged, BookScanned, UserUtterance, ...)
   config.py        loads config/*.yaml
-  perception/      book_scanner (barcode -> ISBN -> BookScanned); people counting and noise level (stubs)
+  perception/      book_scanner (barcode -> ISBN -> BookScanned), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged); noise level (stub)
   core/            context, style, dialogue state machine, expression blending, session log
   services/        AI server wrappers: llm (client + sentence splitter), speech, vision;
                    isbn (validation), books (catalogue, similar books, Open Library fallback)
@@ -41,7 +41,7 @@ robot/             the robot program: python -m robot check | sim | run
   sim/             keyboard simulator
 display/           face display: server.py (SSE) + ui/index.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
-tools/             test tools: chat_test, camera_test, face_enroll, server_check, book_scan_test, make_test_barcodes
+tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
 docs/              architecture notes, reference images
@@ -55,7 +55,7 @@ data/              catalog.csv (SAMPLE catalogue), test_barcodes/ (barcode PNGs,
 ```bash
 git clone https://github.com/json0130/Library-Book-Robot.git
 cd Library-Book-Robot
-sudo apt install -y python3-yaml python3-opencv pulseaudio-utils libzbar0
+sudo apt install -y python3-yaml python3-opencv pulseaudio-utils libzbar0 sox
 pip install pyzbar                  # barcode reading (needs libzbar0); --user --break-system-packages on Ubuntu 24.04
 ```
 
@@ -66,6 +66,7 @@ PyYAML is the only required package. OpenCV (the camera tools and driver) comes 
 ```bash
 python -m robot check     # is the AI server reachable?
 python -m robot sim       # try the logic from the keyboard: fake hardware, no AI server needed
+python -m robot sim --live   # webcam + camera window, face detection, auto-scan, speaker and LLM: step up (hello), show a book, ask, hear the answer
 python -m robot run       # on the hardware; for now exits naming the drivers that are missing (esp32)
 ```
 
@@ -76,17 +77,19 @@ python -m robot run       # on the hardware; for now exits naming the drivers th
 ```
 quiet alone | common group   set the zone (or an area from zones.yaml, e.g. reading_room) and alone/group
 noise 62 | noise off         a noise reading in dB, which can override the zone
-book                         place a random sample book on the pad (the fake camera shows its barcode)
-book <isbn>                  place the book with this ISBN (a catalogue book, or any valid ISBN)
-book none                    place a book whose barcode can't be read: the scan fails
-scan <image path>            place a book and let the real barcode decoder read a photo of it
+book                         place a book on the pad: scanned by the webcam with --camera, else a random sample book
+book <isbn>                  fake camera only: place the book with this ISBN (a catalogue book, or any valid ISBN)
+book none                    fake camera only: place a book whose barcode can't be read: the scan fails
+scan <image path>            fake camera only: the real barcode decoder reads a photo of a book
 return | explain | recommend say that to the robot once it has offered
-say <text>                   the visitor says something
+<anything else you type>     the visitor says it, e.g. "can you explain it?" (`say <text>` also works)
 feel <emotion> [confidence]  the camera sees this emotion on the visitor
 leave                        everyone walks away
 fixed on | fixed off         baseline condition: one style everywhere
 help, quit
 ```
+
+Options: `--llm` (the AI server's LLM words explain and recommend), `--camera` (scan with the real webcam and show a live camera window), `--faces` (find the people the webcam sees with the AI server's face detection: a new face makes the robot say hello, and nobody in view for `perception.leave_after_s` seconds ends the visit; needs `--camera`), `--auto-scan` (start a scan as soon as a book's barcode is held up to the camera, so you don't type `book`; the camera stands in for the pad's weight sensor; needs `--camera`), `--no-preview` (no camera window, e.g. over SSH), `--speak` (speak replies through the speaker with TTS from the AI server, and the face display's mouth moves), `--live` (webcam, faces, auto-scan, speaker and LLM together). With `--live`: step in front of the camera and the robot says hello. Faces are told apart (`person 1`, `person 2`...), so each person is greeted once, even after leaving the view and coming back, and a new face is greeted (see Person IDs below); hold a book's barcode up to the camera (or type `book`); then type "can you explain it?" or "can you recommend something?" and the robot answers aloud. Replies are spoken only in styles with the speech channel (a common area, the default); in a quiet zone they are printed or go through other channels instead, and a quiet zone doesn't greet. With `--faces` the head count comes from the camera, so typing `common group` or `leave` is overridden at the next change. If the TTS server fails, the reply is only shown and the conversation carries on.
 
 After each command it prints the context, the style and the dialogue state, and the fake drivers print what the hardware would do (`[esp32] neck pose=lowered`, `[voice whisper, volume 0.12] ...`). If the face display is running, expressions and the talking mouth show on it; otherwise they are only printed. Each session is logged to `data/logs/session-<time>.jsonl` (`--no-log` turns that off).
 
@@ -112,7 +115,18 @@ If no ISBN is read within `books.scan_timeout_s` (5 s) the robot asks the visito
 
 `data/catalog.csv` is **sample data** (about a dozen well-known books, with summaries written for this project). Replace it with the library's real catalogue: same columns (`isbn13, title, author, genre, tags, summary, shelf, slot`; tags separated by semicolons; lines starting with `#` are ignored). Loading names the file and line of any bad row. For an ISBN not in the catalogue the robot can ask Open Library for the title and author (`books.online_fallback` in `config/robot.yaml`, 3 s timeout, answers cached in `data/cache/`); shelf, slot and summary stay empty and the book can't be returned or recommended from. Recommendations are the catalogue books with the most genre and tag overlap (Jaccard), ties broken by title.
 
-**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three similar catalogue books to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. *Return* (shelf and storage slot) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
+**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three similar catalogue books to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. **Before a book is scanned,** a plain hello gets a greeting and anything else ("what's your name?", "what can you do?") goes to the LLM as small talk with no catalogue, so it names no books and asks the visitor to place one on the pad; without the LLM, who-are-you is still answered. **Follow-ups:** the scanned book stays the topic until the visitor leaves or scans another, so after an answer they can ask for something else about it ("what's it about again?", "any related books?") or a free question ("who wrote it?", "does he get food somehow?"). Free questions go to the LLM with the book's catalogue entry and the conversation so far, and are told to use only that entry; if the LLM is down, who-wrote-it and genre questions are still answered from the catalogue, and anything else gets a short "I can't answer that right now". Saying "another book" (or just "yes") after an answer asks for the next book. *Return* (shelf and storage slot) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
+
+### Person IDs
+
+With `--faces` the first face the camera sees becomes `person 1`, the next new face `person 2`, and a face that comes back after being out of view is recognised as the same person: the robot doesn't greet them again, and the camera window labels each box with the number. The AI server only finds the faces; each box is turned into a face embedding on the robot (OpenCV's SFace model) and compared with the people seen so far. **Privacy:** the embeddings stay in memory for the run only. Nothing is sent to the server or saved, so "person 1" means one person for one run, and nothing about them survives quitting the simulator. (The server's own enrollment, `tools/face_enroll.py`, keeps photos for good and is for named people.)
+
+```bash
+python tools/get_face_models.py     # once: downloads the 38.7 MB model into models/face/ (gitignored)
+python tools/identity_test.py       # live check: look at the camera, step out and back, let someone else step in
+```
+
+`identity_test.py` shows each face's similarity to every person it knows. Set `perception.identity_threshold` in `config/robot.yaml` from what it shows (0.40 by default): if one person keeps turning into a new number, lower it; if two people are merged, raise it. Without the model file the sim says so and falls back to counting faces, greeting once per visit with `dialogue.greet_cooldown_s`. A face that is too small (under 40 px) is not given a number.
 
 ### Behaviour rules
 
@@ -157,7 +171,7 @@ python tools/chat_test.py --chat --wav question.wav                   # one voic
 
 Voice modes: press Enter, speak, press Enter again. Recording and playback use PulseAudio (`parecord`/`paplay`). `--mic Webcam` and `--speaker USB` (or `MIC` / `SPEAKER`) pick devices by part of the name in `pactl list short sources` / `sinks`. Recordings quieter than `--min-rms` (default 500) are skipped, because STT invents text like "Thank you." from silence.
 
-The system prompt casts the model as the Library Book Robot, and each prompt carries the last 10 exchanges of the session. The server takes one prompt string, so the system prompt and history are flattened into it as `System:` / `User:` / `Assistant:` lines. If the face display is running, the mouth moves with each reply (with the speech audio in `--tts`, `--talk` and `--chat`; tune `--lip-delay` if it is out of sync).
+The system prompt casts the model as Stuart, the Library Book Robot (the name is in `robot/persona.py`): upbeat and energetic, free to chat about everyday things, told not to greet or introduce itself twice. Each prompt carries the conversation as it really went, the last 10 exchanges, including the robot's fixed lines (hello, "You have <title>...") and what the visitor said, so the model knows what was already said; another book starts a new conversation, but the chat before the first book of a visit carries on. The server takes one prompt string, so the system prompt and history are flattened into it as `System:` / `User:` / `Assistant:` lines. If the face display is running, the mouth moves with each reply (with the speech audio in `--tts`, `--talk` and `--chat`; tune `--lip-delay` if it is out of sync).
 
 ### Camera and faces
 
@@ -184,7 +198,6 @@ python -m unittest discover -s tests -t .           # the test suite
 ## Next
 
 1. ESP32 firmware and `robot/drivers/esp32.py`, then `python -m robot run` on the hardware.
-2. Perception: people counting and noise level feeding `ContextChanged`; the pad's weight sensor publishing `BookPlaced` from the ESP32.
+2. Perception: noise level feeding `ContextChanged` (people counting is done: `robot/perception/people.py`, used by `sim --faces`); the pad's weight sensor publishing `BookPlaced` from the ESP32.
 3. Replace the sample catalogue with the library's real one.
 4. Speak replies sentence by sentence to cut the TTS delay (about 5 s for a three-sentence reply today).
-5. Let the visitor ask the LLM free questions about the book (today only explain and recommend use it).

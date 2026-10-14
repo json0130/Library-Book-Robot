@@ -18,10 +18,12 @@ def _now() -> float:
 @dataclass
 class ContextChanged:
     """Where the robot is and who is around. zone is the map zone ("quiet" or "common");
-    a noise reading may override it (see core/context.py)."""
+    a noise reading may override it (see core/context.py). person_ids are the numbers PersonTracker gave
+    the people in view (person 1, person 2...); empty when the head count was typed or can't tell people apart."""
     zone: str
     group_size: int
     noise_db: Optional[float] = None
+    person_ids: tuple = ()
     timestamp: float = field(default_factory=_now)
 
 

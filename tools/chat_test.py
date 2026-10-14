@@ -34,9 +34,11 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python tools/chat_test.py`
 
+from robot.config import load_config  # noqa: E402
 from robot.actuation.face import CHARS_PER_SECOND, DEFAULT_PORT as FACE_PORT, MAX_TALK_S, mouth_levels, talk  # noqa: E402
 from robot.drivers.audio import find_device  # noqa: E402
 from robot.services.llm import LIBRARY_SYSTEM_PROMPT, LLMClient, LLMError, split_sentences  # noqa: E402
+from robot.services.speech import shape_voice  # noqa: E402
 from vendor.ai_server import stt, tts  # noqa: E402
 from vendor.ai_server.llm import request  # noqa: E402
 
@@ -54,10 +56,11 @@ MODES = {
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("--host", default=os.environ.get("AI_HOST", "10.42.0.118"),
-                   help="AI server address, e.g. 192.168.1.50 (env: AI_HOST)")
-    p.add_argument("--port", type=int, default=int(os.environ.get("AI_PORT", 7898)),
-                   help="AI server port (env: AI_PORT)")
+    cfg = load_config()
+    p.add_argument("--host", default=cfg.ai_host,
+                   help="AI server address, e.g. 192.168.1.50 (default: config/robot.yaml; env: AI_HOST)")
+    p.add_argument("--port", type=int, default=cfg.ai_port,
+                   help="AI server port (default: config/robot.yaml; env: AI_PORT)")
     p.add_argument("--timeout", type=float, default=300, help="seconds to wait for a reply")
     mode = p.add_mutually_exclusive_group()
     for name, help_text in MODES.items():
@@ -75,7 +78,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--min-rms", type=float, default=500,
                    help="recordings quieter than this RMS level count as silence and skip STT;\n"
                         "each recording prints its level so you can tune this")
-    p.add_argument("--voice", default="af_heart", help="TTS voice")
+    voice_cfg = cfg.robot.get("voice") or {}
+    p.add_argument("--voice", default=voice_cfg.get("tts_voice", "af_heart"), help="TTS voice (default: config/robot.yaml)")
+    p.add_argument("--deepen", type=float, default=float(voice_cfg.get("deepen", 1.0)),
+                   help="lower the voice with sox: 0.8 is about 4 semitones down, 1.0 leaves it (default: config/robot.yaml)")
+    p.add_argument("--pace", type=float, default=float(voice_cfg.get("pace", 1.0)),
+                   help="speak faster with sox: 1.12 is 12%% faster at the same pitch (default: config/robot.yaml)")
     p.add_argument("--check", action="store_true", help="check the server is reachable and exit")
     p.add_argument("--face-port", type=int, default=int(os.environ.get("FACE_PORT", FACE_PORT)),
                    help=f"port of the face display (python -m display.server), default {FACE_PORT}")
@@ -213,6 +221,7 @@ class Face:
 def speak(args, text: str, face: Face) -> None:
     response = request(args.host, args.port, "TTS", {"voice": args.voice}, text, timeout=args.timeout)
     raw, _ = tts.validate_wav(response.get("content"), response["parameters"])
+    raw = shape_voice(raw, args.deepen, args.pace)
     with tempfile.NamedTemporaryFile(suffix=".wav") as f:
         f.write(raw)
         f.flush()

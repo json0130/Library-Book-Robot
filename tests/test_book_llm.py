@@ -79,24 +79,34 @@ class AssistantTest(unittest.TestCase):
             with self.assertLogs("robot.book_llm", level="WARNING"):
                 self.assertIsNone(run(BookAssistant(client).explain(MARTIAN)))
 
-    def test_history_is_kept_capped_and_reset(self):
+    def test_history_is_what_was_really_said_capped_and_reset(self):
         assistant = BookAssistant(FakeClient())
+        assistant.said("Hello! I'm Stuart.")
+        assistant.hear("how are you?")
+        run(assistant.chat("how are you?"))
+        assistant.said("Great!")                                  # the dialogue records the robot's words
+        assistant.hear("tell me about it")
         run(assistant.explain(MARTIAN))
-        run(assistant.recommend(MARTIAN, CANDIDATES))
-        self.assertEqual([m["role"] for m in assistant.history], ["user", "assistant", "user", "assistant"])
         sent = assistant.client.sent[-1]
-        self.assertEqual([m["role"] for m in sent], ["system", "user", "assistant", "user"])   # the earlier exchange
-        for _ in range(HISTORY_EXCHANGES + 5):
-            run(assistant.explain(MARTIAN))
+        self.assertEqual([m["role"] for m in sent], ["system", "assistant", "user", "assistant", "user"])
+        self.assertIn("Summary: An astronaut", sent[-1]["content"])    # the catalogue request stands in for the last turn
+        self.assertEqual(sent[1]["content"], "Hello! I'm Stuart.")
+        for i in range(HISTORY_EXCHANGES + 5):
+            assistant.hear(f"q{i}")
+            assistant.said(f"a{i}")
         self.assertEqual(len(assistant.history), 2 * HISTORY_EXCHANGES)
+        self.assertEqual(assistant.history[-1]["content"], f"a{HISTORY_EXCHANGES + 4}")
         assistant.reset()
         self.assertEqual(assistant.history, [])
 
-    def test_failed_calls_are_not_added_to_the_history(self):
-        assistant = BookAssistant(FakeClient(error=LLMError("down")))
+    def test_asking_does_not_change_the_history_by_itself(self):
+        assistant = BookAssistant(FakeClient(["It is about Mars."]))
+        run(assistant.explain(MARTIAN))
+        self.assertEqual(assistant.history, [])                   # the dialogue says what was said
+        failing = BookAssistant(FakeClient(error=LLMError("down")))
         with self.assertLogs("robot.book_llm", level="WARNING"):
-            run(assistant.explain(MARTIAN))
-        self.assertEqual(assistant.history, [])
+            run(failing.explain(MARTIAN))
+        self.assertEqual(failing.history, [])
 
 
 if __name__ == "__main__":

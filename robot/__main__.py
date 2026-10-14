@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 
 
@@ -23,6 +24,17 @@ def main(argv=None) -> int:
     sim.add_argument("--no-log", action="store_true", help="don't write a session log")
     sim.add_argument("--llm", action="store_true",
                      help="explain/recommend through the AI server's LLM (default: catalogue text, no server needed)")
+    sim.add_argument("--camera", action="store_true", help="scan with the real webcam instead of the fake camera")
+    sim.add_argument("--faces", action="store_true",
+                     help="count the people the webcam sees with the AI server's face detection: a face makes the "
+                          "robot say hello (needs --camera)")
+    sim.add_argument("--auto-scan", action="store_true",
+                     help="scan as soon as a book's barcode is held up to the camera, no need to type `book` "
+                          "(needs --camera)")
+    sim.add_argument("--no-preview", action="store_true", help="don't open the live camera window")
+    sim.add_argument("--speak", action="store_true",
+                     help="speak replies through the speaker (TTS from the AI server); the face display's mouth moves")
+    sim.add_argument("--live", action="store_true", help="--camera --faces --auto-scan --speak --llm together")
     sub.add_parser("run", help="run on the real hardware")
     args = p.parse_args(argv)
 
@@ -39,9 +51,15 @@ def main(argv=None) -> int:
     if args.command == "sim":
         from robot.sim.keyboard import run_sim
         try:
-            return asyncio.run(run_sim(cfg, log_sessions=not args.no_log, use_llm=args.llm))
+            return asyncio.run(run_sim(cfg, log_sessions=not args.no_log, use_llm=args.llm or args.live,
+                                     use_camera=args.camera or args.live, speak=args.speak or args.live,
+                                     use_faces=args.faces or args.live, preview=not args.no_preview,
+                                     auto_scan=args.auto_scan or args.live))
         except KeyboardInterrupt:
-            return 0
+            # run_sim's cleanup has run. Exit without Python's shutdown, which can abort or hang while
+            # the keyboard reader thread is still blocked in stdin.readline().
+            sys.stdout.flush()
+            os._exit(0)
         except CatalogError as exc:
             print(f"Cannot load the book catalogue: {exc}", file=sys.stderr)
             return 1
@@ -60,11 +78,10 @@ def main(argv=None) -> int:
         print(f"Cannot start a driver: {exc}", file=sys.stderr)
         return 2
     from robot.services.speech import Speech
-    voice = cfg.robot.get("voice", {}).get("tts_voice", "af_heart")
     try:
         from robot.app import build_assistant
         assistant = build_assistant(cfg) if cfg.books["use_llm"] else None
-        build_app(cfg, drivers, speech=Speech(cfg.ai_host, cfg.ai_port, voice), assistant=assistant)
+        build_app(cfg, drivers, speech=Speech.from_config(cfg), assistant=assistant)
     except CatalogError as exc:
         print(f"Cannot load the book catalogue: {exc}", file=sys.stderr)
         return 1

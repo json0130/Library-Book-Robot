@@ -27,8 +27,20 @@ books:
   scanner_camera_index: 0          # camera pointed at the scan pad
   use_llm: true                    # explain/recommend through the LLM (falls back to catalogue text); false = catalogue only
 
+dialogue:
+  greet_cooldown_s: 120   # say hello at most once per visit and once per this many seconds (a person leaving the camera's view and returning isn't greeted again)
+
+perception:               # face detection for `python -m robot sim --faces`
+  face_interval_s: 1.0    # how often a camera frame is sent to the AI server
+  arrive_frames: 2        # samples in a row with a new face before the person counts as arrived
+  identify: true          # give faces person numbers (person 1, 2...) so a returning visitor isn't greeted again; needs `python tools/get_face_models.py`
+  identity_threshold: 0.40   # how alike two faces must be to be the same person (cosine similarity, 0..1): higher = stricter, more new people
+  leave_after_s: 8        # how long a face must stay missing before the person counts as gone (looking down at a book is not leaving)
+
 voice:
-  tts_voice: af_heart
+  tts_voice: af_heart     # the AI server's only TTS voice today (a woman's)
+  pace: 1.12              # speak this much faster (sox tempo, same pitch): Stuart is energetic. 1.0 = normal
+  deepen: 1.0             # lower the pitch with sox: 0.8 is ~4 semitones down, 1.0 = off (it didn't sound right on af_heart)
   whisper_volume: 0.35    # playback volume multipliers per voice style
   normal_volume: 1.0
 

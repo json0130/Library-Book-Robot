@@ -53,7 +53,7 @@ Module notes:
 
 - **LLM**: the server takes one prompt string, so `to_prompt()` flattens the system prompt and chat history into `System: ... User: ... Assistant:`. The robot keeps the last 10 exchanges. Replies are meant to be spoken, so the system prompt asks for at most three short sentences with no markdown.
 - **STT**: the robot records with PulseAudio, discards recordings quieter than `thresholds.min_speech_rms` (500), and sends the rest.
-- **TTS**: the returned WAV is validated (PCM, metadata matches) before it is played. If TTS fails, the reply is shown as text and the conversation carries on.
+- **TTS**: the returned WAV is validated (PCM, metadata matches) before it is played. The server currently has one voice only, `af_heart` (a woman's; any other name is an `Unknown local TTS voice` error), so the robot reshapes it with `sox` (`voice.pace` to speak faster and more energetically, `voice.deepen` to lower it; `config/robot.yaml`). A real male voice has to be installed on the server. If TTS fails, the reply is shown as text and the conversation carries on.
 - **Face**: enrollment photos are stored by the server under `models/face/known_faces/<name>/` and need exactly one face each, so the robot crops each frame to the largest face before enrolling. Recognition matches at similarity 0.6 or more.
 - **Emotion**: results below `thresholds.emotion_min_confidence` (0.5) are ignored by the robot.
 

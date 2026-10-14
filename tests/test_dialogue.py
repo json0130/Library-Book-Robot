@@ -11,21 +11,34 @@ from robot.config import load_config
 from robot.core.session_log import SessionLog
 from robot.services.book_llm import BookAssistant
 from robot.services.llm import LLMError
-from robot.core.dialogue import SCAN_FAILED_MESSAGE, choice_from
+from robot.core.dialogue import OFFER, SCAN_FAILED_MESSAGE, choice_from
 from robot.events import (BookPlaced, BookScanned, ContextChanged, EmotionDetected, ExpressionRequested,
                           ReplySentence, ScanFailed, StyleChanged, UserUtterance)
 
 HITCH, MARTIAN, CLEAN_CODE = "9780345391803", "9780553418026", "9780132350884"
 
 
+class _nothing:
+    """A context manager that does nothing, for `with a if cond else _nothing():`."""
+
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *exc):
+        return False
+
+
 class StubClient:
     """Stands in for the LLM client: answers from a list (or raises) and records every prompt."""
 
     def __init__(self, *replies, error=None):
-        self.replies, self.error, self.prompts = list(replies), error, []
+        self.replies, self.error, self.prompts, self.history_seen = list(replies), error, [], []
+        self.systems = []
 
     def chat(self, messages):
+        self.systems.append(messages[0]["content"])
         self.prompts.append(messages[-1]["content"])
+        self.history_seen.append(messages[1:-1])                # between the system prompt and this request
         if self.error:
             raise self.error
         return self.replies.pop(0)
@@ -82,6 +95,58 @@ class DialogueTest(unittest.TestCase):
         run(app, ContextChanged("quiet", 0))
         self.assertEqual(app.dialogue.state, "idle")
         self.assertIsNone(app.dialogue.book)
+
+    def greetings(self, app):
+        said = []
+        app.bus.subscribe(ReplySentence, lambda e: said.append(e.text))
+        return said
+
+    def test_hello_is_said_once_per_visit_even_after_a_failed_scan(self):
+        app = make_app()
+        said = self.greetings(app)
+        run(app, ContextChanged("common", 1), BookPlaced(), ScanFailed("x"))
+        self.assertEqual(app.dialogue.state, "idle")
+        run(app, ContextChanged("common", 2), ContextChanged("common", 1))       # the head count wobbles
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 1)
+
+    def test_each_person_is_greeted_once_even_after_leaving_and_coming_back(self):
+        app = make_app()
+        now = [1000.0]
+        app.dialogue.clock = lambda: now[0]
+        said = self.greetings(app)
+        run(app, ContextChanged("common", 1, person_ids=(1,)))
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 1)
+        now[0] += 3600                                                            # an hour later: the cooldown is no excuse
+        run(app, ContextChanged("common", 0), ContextChanged("common", 1, person_ids=(1,)))
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 1)             # person 1 again: no hello
+        self.assertEqual(app.dialogue.state, "idle")
+        run(app, ContextChanged("common", 0), ContextChanged("common", 1, person_ids=(2,)))
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 2)             # person 2 is new: hello
+        self.assertEqual(app.dialogue.state, "invited")
+
+    def test_a_new_person_arriving_next_to_a_greeted_one_is_greeted_when_the_robot_is_free(self):
+        app = make_app()
+        said = self.greetings(app)
+        run(app, ContextChanged("common", 1, person_ids=(1,)), BookPlaced())      # busy with person 1
+        run(app, ContextChanged("common", 2, person_ids=(1, 2)))
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 1)             # not interrupted
+        run(app, ScanFailed("x"), ContextChanged("common", 2, person_ids=(1, 2)))  # free again, person 2 still not greeted
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 2)
+
+    def test_coming_back_within_the_cooldown_is_not_greeted_again(self):
+        app = make_app()
+        now = [1000.0]
+        app.dialogue.clock = lambda: now[0]
+        said = self.greetings(app)
+        run(app, ContextChanged("common", 1), ContextChanged("common", 0))
+        now[0] += 60                                                              # 60 s < the 120 s cooldown
+        run(app, ContextChanged("common", 1))
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 1)
+        self.assertEqual(app.dialogue.state, "idle")
+        now[0] += 120                                                             # a new visit after the cooldown
+        run(app, ContextChanged("common", 0), ContextChanged("common", 1))
+        self.assertEqual(sum(t.startswith("Hello") for t in said), 2)
+        self.assertEqual(app.dialogue.state, "invited")
 
     def test_scan_result_ignored_unless_scanning(self):
         app = make_app()
@@ -207,6 +272,175 @@ class BookChoicesTest(unittest.TestCase):
         self.assertIn("Summary: An astronaut is left behind", llm.prompts[0])
         self.assertEqual(app.dialogue.state, "closing")
 
+    def greetings(self, app):
+        said = []
+        app.bus.subscribe(ReplySentence, lambda e: said.append(e.text))
+        return said
+
+    # ---- before any book: who is the robot, small talk ----
+    def test_the_robot_is_stuart(self):
+        app = make_app()
+        said = self.greetings(app)
+        run(app, ContextChanged("common", 1))
+        self.assertIn("I'm Stuart", said[0])
+
+    def test_a_bare_hi_gets_a_greeting_without_the_llm(self):
+        llm = StubClient("should not be asked")
+        app = make_app(llm=llm)
+        said = self.greetings(app)
+        run(app, UserUtterance("hi"))
+        self.assertEqual(llm.prompts, [])
+        self.assertIn("I'm Stuart", said[0])
+        self.assertEqual(app.dialogue.state, "invited")
+
+    def test_a_second_hi_after_the_hello_does_not_introduce_stuart_again(self):
+        app = make_app()
+        said = self.greetings(app)
+        run(app, ContextChanged("common", 1), UserUtterance("hi"))
+        self.assertIn("I'm Stuart", said[0])
+        self.assertNotIn("Stuart", said[1])
+        self.assertTrue(said[1].startswith("Hi!"))
+
+    def test_would_i_like_it_is_a_question_about_the_book_not_a_recommendation(self):
+        llm = StubClient("If you enjoy funny stories, yes: it has plenty of humour.")
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        run(app, UserUtterance("would I like it if I enjoy funny stories?"))
+        self.assertEqual(app.said[-1], "If you enjoy funny stories, yes: it has plenty of humour.")
+        self.assertIn("Title: The Martian", llm.prompts[0])
+        self.assertNotIn("Candidate", llm.prompts[0])
+        self.assertEqual(app.dialogue.state, "offering")
+
+    def test_small_talk_before_a_book_goes_to_the_llm_without_any_catalogue(self):
+        llm = StubClient("I'm Stuart. Put a book on my pad and I can help.", "I can return books, explain them and recommend more.")
+        app = make_app(llm=llm)
+        said = self.greetings(app)
+        run(app, UserUtterance("hi what is your name?"), UserUtterance("what can you do?"))
+        self.assertEqual(said, ["I'm Stuart. Put a book on my pad and I can help.",
+                                "I can return books, explain them and recommend more."])
+        self.assertNotIn("Catalogue entry", llm.prompts[0])
+        self.assertEqual(app.dialogue.state, "invited")
+        self.assertIn("do not name or describe specific books", llm.systems[0])
+        self.assertIn("hi what is your name?", str(llm.history_seen[1]))       # the 2nd turn remembers the 1st
+
+    def test_who_are_you_works_when_the_llm_is_down_or_missing(self):
+        for llm in (None, StubClient(error=LLMError("down"))):
+            app = make_app(llm=llm)
+            said = self.greetings(app)
+            with self.assertLogs("robot.book_llm", level="WARNING") if llm else _nothing():
+                run(app, UserUtterance("hi, what is your name?"))
+            self.assertIn("I'm Stuart", said[0])
+
+    def test_other_questions_without_an_llm_nudge_towards_the_pad(self):
+        app = make_app()
+        said = self.greetings(app)
+        run(app, UserUtterance("what is the weather like?"))
+        self.assertIn("Place a book on the pad", said[0])
+
+    def test_who_are_you_after_a_book_is_answered_about_the_robot(self):
+        app = self.offer(isbn=MARTIAN, llm=StubClient(error=LLMError("down")))
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            run(app, UserUtterance("can you introduce yourself?"))
+        self.assertIn("I'm Stuart", app.said[-1])
+
+    # ---- follow-up questions about the scanned book ----
+    def test_related_books_after_an_explanation_is_a_recommendation_not_another_book(self):
+        app = self.offer(isbn=MARTIAN)
+        run(app, UserUtterance("explain"), UserUtterance("do you know any related books to this?"))
+        self.assertIn("If you like The Martian, you might enjoy", " ".join(app.said))
+        self.assertEqual(app.dialogue.state, "closing")
+
+    def test_choices_can_be_asked_again_after_the_first_answer(self):
+        app = self.offer(isbn=MARTIAN)
+        run(app, UserUtterance("explain"), UserUtterance("what is it about again?"))
+        self.assertEqual(sum("astronaut" in t for t in app.said), 2)
+
+    def test_the_chat_before_the_first_book_carries_on_after_the_scan(self):
+        llm = StubClient("I'm doing great, thanks!", "It is about Mars.")
+        app = make_app(llm=llm)
+        run(app, ContextChanged("common", 1), UserUtterance("how are you?"), BookPlaced(), scanned(MARTIAN),
+            UserUtterance("explain"))
+        asked = llm.history_seen[1]
+        self.assertEqual([m["content"] for m in asked if m["role"] == "user"], ["how are you?"])
+        self.assertTrue(any("doing great" in m["content"] for m in asked))
+
+    def test_a_free_question_goes_to_the_llm_with_the_catalogue_record(self):
+        llm = StubClient("It was written by Andy Weir.")
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        run(app, UserUtterance("who wrote it?"))
+        self.assertEqual(app.said[-1], "It was written by Andy Weir.")
+        self.assertIn("Title: The Martian", llm.prompts[0])
+        self.assertIn("who wrote it?", llm.prompts[0])
+        self.assertEqual(app.dialogue.state, "offering")                   # still waiting for a choice
+
+    def test_a_follow_up_question_sees_what_was_said_before(self):
+        llm = StubClient("It is about an astronaut stranded on Mars.", "Yes, he grows potatoes to survive.")
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        run(app, UserUtterance("explain"), UserUtterance("does he get food somehow?"))
+        self.assertEqual(app.dialogue.state, "closing")
+        self.assertEqual(app.said[-1], "Yes, he grows potatoes to survive.")
+        seen = llm.history_seen[1]                                         # what the 2nd request carried
+        self.assertEqual([m["role"] for m in seen], ["assistant", "assistant", "user", "assistant", "assistant"])
+        self.assertIn("Hello! I'm Stuart", seen[0]["content"])             # even the canned lines are remembered
+        self.assertIn("You have The Martian", seen[1]["content"])
+        self.assertEqual(seen[2]["content"], "explain")                    # the visitor's real words
+        self.assertIn("astronaut stranded on Mars", seen[3]["content"])
+
+    def test_llm_down_for_a_free_question_says_so_and_keeps_the_book(self):
+        app = self.offer(isbn=MARTIAN, llm=StubClient(error=LLMError("down")))
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            run(app, UserUtterance("will I enjoy it?"))
+        self.assertEqual(app.said[-1], OFFER)
+        run(app, UserUtterance("explain"), UserUtterance("is it long?"))
+        self.assertIn("Sorry, I'm not sure how to answer that", app.said[-1])
+        self.assertEqual(app.dialogue.state, "closing")
+        self.assertEqual(app.dialogue.book.title, "The Martian")
+
+    def test_who_wrote_it_is_answered_from_the_catalogue_without_the_llm(self):
+        for app in (self.offer(isbn=MARTIAN), self.offer(isbn=MARTIAN, llm=StubClient(error=LLMError("down")))):
+            with self.assertLogs("robot.book_llm", level="WARNING") if app.dialogue.assistant else _nothing():
+                run(app, UserUtterance("who wrote it?"))
+            self.assertEqual(app.said[-1], "The Martian was written by Andy Weir.")
+            self.assertEqual(app.dialogue.state, "offering")
+
+    def test_im_done_in_any_wording_ends_the_conversation_even_with_typos(self):
+        for phrase in ("o thats everyhing i think", "no i dont have any quetsions", "no", "Nope, thanks!",
+                       "nothing else", "I'm good", "that's everything"):
+            llm = StubClient("It is about Mars.")
+            app = self.offer(isbn=MARTIAN, llm=llm)
+            run(app, UserUtterance("explain"))
+            asked = len(llm.prompts)
+            run(app, UserUtterance(phrase))
+            self.assertEqual(len(llm.prompts), asked, phrase)               # not sent to the LLM
+            self.assertIn("Enjoy your reading", app.said[-1], phrase)
+            self.assertEqual(app.dialogue.state, "closing")
+
+    def test_a_question_starting_with_no_or_containing_thing_words_is_not_done(self):
+        for phrase in ("no wait, who wrote it?", "is there anything else by him?", "what about the ending?"):
+            app = self.offer(isbn=MARTIAN)
+            run(app, UserUtterance("explain"), UserUtterance(phrase))
+            self.assertNotIn("Enjoy your reading", app.said[-1], phrase)
+
+    def test_an_unclear_remark_after_an_answer_is_acknowledged_not_refused(self):
+        app = self.offer(isbn=MARTIAN, llm=StubClient(error=LLMError("down")))
+        run(app, UserUtterance("explain"))
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            run(app, UserUtterance("hmm interesting"))
+        self.assertIn("place it on my pad", app.said[-1])
+        self.assertNotIn("Sorry", app.said[-1])
+
+    def test_a_book_outside_the_catalogue_never_gets_a_free_question_to_the_llm(self):
+        llm = StubClient("made up")
+        app = self.offer(llm=llm, event=BookScanned("9781234567897"))
+        run(app, UserUtterance("who wrote it?"))
+        self.assertEqual(llm.prompts, [])
+
+    def test_another_book_or_yes_after_an_answer_asks_for_the_next_book(self):
+        for phrase in ("can I scan another book?", "yes please", "Yeah."):
+            app = self.offer(isbn=MARTIAN)
+            run(app, UserUtterance("explain"), UserUtterance(phrase))
+            self.assertEqual(app.dialogue.state, "invited", phrase)
+            self.assertIn("another book", app.said[-1])
+
     def test_recommend_uses_the_llm_with_only_catalogue_candidates(self):
         expected = [b.title for b in make_app().finder.similar_to(MARTIAN, 3)]
         llm = StubClient(f"You might enjoy {expected[0]}.")
@@ -250,9 +484,11 @@ class BookChoicesTest(unittest.TestCase):
     def test_a_new_book_starts_a_fresh_llm_conversation(self):
         app = self.offer(isbn=MARTIAN, llm=StubClient("It is about Mars.", "More Mars."))
         run(app, UserUtterance("explain"))
-        self.assertEqual(len(app.dialogue.assistant.history), 2)
+        self.assertEqual(len(app.dialogue.assistant.history), 5)           # announcement, "explain", answer, "anything else?"...
         run(app, BookPlaced(), scanned(HITCH))
-        self.assertEqual(app.dialogue.assistant.history, [])
+        history = app.dialogue.assistant.history                           # only the new book's announcement is left
+        self.assertEqual([m["role"] for m in history], ["assistant"])
+        self.assertIn("Hitchhiker", history[0]["content"])
         run(app, UserUtterance("everyone"), ContextChanged("common", 0))
         self.assertEqual(app.dialogue.assistant.history, [])
 
@@ -276,6 +512,14 @@ class BookChoicesTest(unittest.TestCase):
         run(app, ContextChanged("common", 1), BookPlaced(), ScanFailed("x"))
         self.assertNotIn("print", [c for c, _ in app.actuators.lights.esp32.sent])
         self.assertEqual(app.dialogue.state, "idle")
+
+    def test_a_book_shown_while_the_robot_waits_for_a_choice_is_scanned_instead(self):
+        app = self.offer()
+        run(app, BookPlaced())
+        self.assertEqual(app.dialogue.state, "scanning")
+        run(app, BookScanned(MARTIAN, "The Martian"))
+        self.assertEqual(app.dialogue.book.title, "The Martian")
+        self.assertEqual(app.dialogue.state, "offering")
 
     def test_scan_failed_is_ignored_unless_scanning(self):
         app = self.offer()

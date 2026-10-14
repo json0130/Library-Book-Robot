@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from itertools import islice
 from typing import Callable, Iterator, Optional
 
 from robot.events import BookPlaced, BookScanned, ScanFailed
@@ -69,6 +70,19 @@ def decode_isbn(frame) -> Optional[str]:
                 log.debug("ISBN %s found (%s, %s)", isbn, symbol.type, name)
                 return isbn
             log.debug("ignoring non-ISBN %s code %r (%s)", symbol.type, text, name)
+    return None
+
+
+def quick_isbn(frame) -> Optional[str]:
+    """decode_isbn's cheap first pass (plain and contrast-boosted grayscale only), for watching the
+    camera several times a second. Raises DecoderUnavailable if pyzbar or OpenCV is missing."""
+    cv2, pyzbar = _load_decoder()
+    for _, image in islice(_variants(frame, cv2), 2):
+        for symbol in pyzbar.decode(image):
+            if symbol.type not in IGNORED_SYMBOLS:
+                isbn = to_isbn13(symbol.data.decode("ascii", errors="replace"))
+                if isbn:
+                    return isbn
     return None
 
 

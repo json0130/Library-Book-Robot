@@ -14,7 +14,7 @@ perception ──events──> bus ──> core ──events──> bus ──> 
                 services/ (llm, speech, vision, books) call the AI server and the catalogue
 ```
 
-1. **Perception** turns sensor input into events. `people.py` counts faces and `noise.py` measures the room, and both publish `ContextChanged`. `book_scanner.py` publishes `BookPlaced` and then `BookScanned`. Speech-to-text gives `UserUtterance`, and the camera's emotion model gives `EmotionDetected`. All three perception modules are stubs; in the simulator the keyboard publishes these events instead.
+1. **Perception** turns sensor input into events. `people.py` counts faces (AI server face detection, smoothed so a missed frame or a visitor looking down at a book doesn't count as leaving) and `noise.py` measures the room, and both publish `ContextChanged`. `book_scanner.py` publishes `BookPlaced` and then `BookScanned`. Speech-to-text gives `UserUtterance`, and the camera's emotion model gives `EmotionDetected`. `noise.py` and the speech and emotion inputs are not wired up yet; in the simulator the keyboard publishes those events instead, while `sim --faces` uses the real `people.py`.
 2. **The bus** (`robot/bus.py`) delivers each event to its subscribers in the order they subscribed, one at a time. A failing handler is logged and does not stop the others. An event published inside a handler is fully delivered before the outer one continues, so causes are always logged before their effects.
 3. **Core** decides what the robot does:
    - `context.py` combines the map zone, the head count and an optional noise reading into a `Context` (quiet or common, alone or group). A loud reading turns a quiet area common and a silent one turns a common area quiet, using the thresholds in `config/zones.yaml`.

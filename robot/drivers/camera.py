@@ -50,7 +50,7 @@ class Camera:
                         index, self.width, self.height, width, height)
         self.last_frame_time = time.monotonic()      # when the newest frame was captured
         self._cond = threading.Condition()
-        self._latest, self._seq, self._served, self._error = None, 0, 0, None
+        self._latest, self._seq, self._served, self._error = (frame if ok else None), 0, 0, None
         self._stop = False
         self._thread = None
         if background:
@@ -86,8 +86,24 @@ class Camera:
             self._served = self._seq
             return self._latest
 
+    def peek(self, timeout: float = 2.0):
+        """The newest frame without using it up, so the live view and the face detector can share the
+        camera with whoever calls read_frame() (the barcode scanner). Treat the frame as read-only."""
+        if self._thread is None:
+            return self.read_frame()
+        with self._cond:
+            self._cond.wait_for(lambda: self._latest is not None or self._error is not None, timeout)
+            if self._latest is None:
+                raise self._error or OSError(f"No frame from the camera within {timeout:g} s")
+            return self._latest
+
     def read_jpeg(self, quality: int = 85) -> bytes:
-        frame = self.read_frame()
+        return self.encode_jpeg(self.read_frame(), quality)
+
+    def peek_jpeg(self, quality: int = 85) -> bytes:
+        return self.encode_jpeg(self.peek(), quality)
+
+    def encode_jpeg(self, frame, quality: int = 85) -> bytes:
         return self._cv2.imencode(".jpg", frame, [self._cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()
 
     def close(self) -> None:

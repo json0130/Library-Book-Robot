@@ -1,9 +1,9 @@
 """Live webcam face detection, recognition and emotion through the AI server.
 
-    python tools/camera_test.py --host 10.42.0.118                  # live names (--recognition), q quits
-    python tools/camera_test.py --host 10.42.0.118 --detect         # boxes only
-    python tools/camera_test.py --host 10.42.0.118 --emotion        # live emotions
-    python tools/camera_test.py --host 10.42.0.118 --enroll jay     # enroll 5 webcam photos
+    python tools/camera_test.py                  # live names (--recognition), q quits
+    python tools/camera_test.py --detect         # boxes only
+    python tools/camera_test.py --emotion        # live emotions
+    python tools/camera_test.py --enroll jay     # enroll 5 webcam photos
 
 vendor/ai_server/face.py and emotion.py are the server team's single-image clients and
 stay unmodified; this file sends the same requests via robot.services.vision.image_request.
@@ -21,6 +21,7 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python tools/camera_test.py`
 
+from robot.config import load_config  # noqa: E402
 from robot.services.vision import MODES, image_request  # noqa: E402
 
 
@@ -118,10 +119,11 @@ def run_enroll(args) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--host", default=os.environ.get("AI_HOST", "10.42.0.118"),
-                        help="AI server address (env: AI_HOST)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("AI_PORT", 7898)),
-                        help="AI server port (env: AI_PORT)")
+    cfg = load_config()
+    parser.add_argument("--host", default=cfg.ai_host,
+                        help="AI server address (default: config/robot.yaml; env: AI_HOST)")
+    parser.add_argument("--port", type=int, default=cfg.ai_port,
+                        help="AI server port (default: config/robot.yaml; env: AI_PORT)")
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--camera", type=int, default=0, help="webcam index")
     mode = parser.add_mutually_exclusive_group()

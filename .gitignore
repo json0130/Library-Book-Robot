@@ -4,3 +4,4 @@ display/ui/screenshots/
 data/logs/
 data/cache/
 *.egg-info/
+models/

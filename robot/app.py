@@ -53,6 +53,21 @@ def fake_drivers() -> Drivers:
     return Drivers(FakeEsp32(), FakeAudio(), FakeCamera())
 
 
+def sim_drivers(cfg: Config, use_camera: bool = False, speak: bool = False) -> Drivers:
+    """Fake hardware for the simulator, except the webcam (use_camera) and the speaker (speak) when
+    asked for. Raises OSError, RuntimeError or ValueError, with a readable message, if one is missing."""
+    drivers = fake_drivers()
+    dev = cfg.robot.get("devices", {})
+    if use_camera:
+        from robot.drivers.camera import Camera
+        drivers.camera = Camera(int(cfg.books["scanner_camera_index"]), dev.get("camera_width"),
+                                dev.get("camera_height"), background=True)
+    if speak:
+        from robot.drivers.audio import Audio
+        drivers.audio = Audio(dev.get("speaker"), dev.get("mic"))
+    return drivers
+
+
 def real_drivers(cfg: Config) -> Drivers:
     """The hardware drivers. Raises DriverNotImplemented naming every driver that is missing."""
     from robot.drivers.audio import Audio
@@ -102,7 +117,9 @@ class App:
         default_zone = self.cfg.zones.get("default_zone", "common")
         self.context = derive_context(default_zone, 1, None, self.thresholds, default_zone)
         self.style = self.policy.style_for(self.context, self.fixed)
-        self.dialogue = Dialogue(self.actuators, lambda: self.style, self.bus.publish, self.finder, self.assistant)
+        cooldown = float((self.cfg.robot.get("dialogue") or {}).get("greet_cooldown_s", 120))
+        self.dialogue = Dialogue(self.actuators, lambda: self.style, self.bus.publish, self.finder, self.assistant,
+                                 greet_cooldown_s=cooldown)
         # order matters: log first, then update context/style, then the dialogue reacts
         self.bus.subscribe(object, self._log)
         self.bus.subscribe(ContextChanged, self._on_context)

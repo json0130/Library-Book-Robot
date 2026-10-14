@@ -173,6 +173,9 @@ class FaceDisplay:
     def talk_text(self, text: str) -> None:
         self._post(talk, seconds=min(MAX_TALK_S, max(0.6, len(text) / CHARS_PER_SECOND)))
 
+    def stop_talking(self) -> None:
+        self._post(talk, seconds=0)
+
     def set_layout(self, layout: str) -> None:
         """full_face or split (face plus a text panel). The page does not support split yet."""
         self.log.info("[face] layout %s", layout)

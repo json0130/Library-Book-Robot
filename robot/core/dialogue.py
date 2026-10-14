@@ -4,45 +4,77 @@ States and the events that move between them:
 
     idle        --person arrives, style proactive-->  invited      (robot invites them over)
     idle        --visitor speaks-->                   invited      (visitor started it)
-    idle/invited/closing --BookPlaced-->              book_placed  --> scanning (scan starts at once)
+    idle/invited/offering/closing --BookPlaced-->     book_placed  --> scanning (scan starts at once)
     scanning    --BookScanned-->                      offering     (offer: return, explain, recommend)
     scanning    --ScanFailed-->                       idle         (ask them to place the book flat)
     offering    --visitor says return/explain/recommend--> acting  --> closing (do it, then wrap up)
     offering    --anything else-->                    offering     (offer the three choices again)
     closing     --visitor speaks-->                   invited      (they want something else)
+    offering/closing --anything else about the book-->  stays (answered by the LLM from the catalogue entry)
+    closing     --visitor asks for another book-->    invited
     any         --visitor says bye/thanks-->          closing
     any         --everyone left (group_size 0)-->     idle
+
+The hello is said once per person. When the camera tells people apart (ContextChanged.person_ids: person 1,
+person 2...) a person who has been greeted is never greeted again, even after leaving the view and coming
+back, and a new person is. When it can't (typed context, head count only), the hello is said once per visit
+(until everyone has left) and at most once per `greet_cooldown_s`.
 
 Every action reads the current StyleVector, so the same step is whispered and printed in a
 quiet zone but spoken aloud in a common area (Actuators.deliver picks the channels).
 
 The three choices are grounded in the catalogue: return gives the shelf and storage slot (facts,
 never the model's words), explain and recommend ask the LLM (services/book_llm.py) to put the
-catalogue record, or up to three similar catalogue books, into speech. If there is no LLM, the
+catalogue record, or up to three similar catalogue books, into speech. Once a book is scanned, it stays
+the topic until the visitor leaves or scans another: a follow-up (return/explain/recommend again, or a
+free question such as "who wrote it?") is about that book and goes to the LLM with the conversation so far. If there is no LLM, the
 server is down or the answer is unusable, they use the plain catalogue text instead. A book that
 is not in the catalogue never goes to the model.
 """
 
 from __future__ import annotations
 
+import difflib
 import logging
+import time
 from typing import Awaitable, Callable, Optional
 
+from robot.persona import NAME
 from robot.events import (BookPlaced, BookScanned, ContextChanged, ReplySentence, ScanFailed,
                           UserUtterance)
 
 log = logging.getLogger("robot.dialogue")
 
 STATES = ("idle", "invited", "book_placed", "scanning", "offering", "acting", "closing")
-GOODBYES = ("bye", "goodbye", "thanks", "thank you", "that's all", "no thanks")
+GOODBYES = ("bye", "goodbye", "thanks", "thank you", "that's all", "thats all", "that is all", "no thanks",
+            "that's everything", "thats everything", "that is everything", "that's it", "thats it",
+            "nothing else", "nothing more", "no more", "i'm good", "im good", "i am good", "i'm done", "im done",
+            "all set", "no questions", "don't have any question", "dont have any question",
+            "do not have any question")
+NO_WORDS = ("no", "nope", "nah", "nothing")          # a reply starting like this to "anything else?" is "I'm done"
+QUESTION_WORDS = ("what", "who", "why", "how", "when", "where", "which", "can", "could", "is", "are", "do",
+                  "does", "will", "would", "should")
 ACTIONS = ("return", "explain", "recommend")
 CHOICE_WORDS = {                    # what the visitor may say for each choice
     "return": ("return", "give back", "take back", "drop off"),
-    "explain": ("explain", "about", "tell me", "summary", "describe"),
-    "recommend": ("recommend", "similar", "suggest", "something like"),
+    "explain": ("explain", "about", "tell me", "summary", "describe", "synopsis", "plot", "storyline"),
+    "recommend": ("recommend", "similar", "suggest", "something like", "related",
+                  "other books", "more books", "read next", "what else"),
 }
+ANOTHER_BOOK_WORDS = ("another book", "next book", "different book", "new book", "one more book",
+                      "scan another", "another one")
+YES_WORDS = ("yes", "yeah", "yep", "yup", "sure", "please", "ok", "okay")
+AUTHOR_WORDS = ("who wrote", "who is the author", "who's the author", "the author", "written by", "who made")
+GENRE_WORDS = ("genre", "what kind of book", "what type of book", "what sort of book")
+FOLLOW_UP_HELP = "I can tell you what it's about, suggest similar books, or return it."
+NO_ANSWER = "Sorry, I'm not sure how to answer that. " + FOLLOW_UP_HELP
+ACKNOWLEDGE = "Okay! If you'd like to look at another book, just place it on my pad."
 SCAN_FAILED_MESSAGE = ("I couldn't read the barcode. Please place the book flat on the pad "
                        "with the barcode facing up.")
+HELLO = f"Hello! I'm {NAME}. Put a book on my pad and I can return it, tell you about it, or suggest something similar."
+GREETINGS = ("hi", "hello", "hey", "hiya", "yo", "good morning", "good afternoon", "good evening")
+NAME_WORDS = ("your name", "who are you", "introduce yourself", "what are you", "what should i call you")
+NAME_REPLY = f"I'm {NAME}, the library's book robot. Put a book on my pad and I can return it, tell you about it, or suggest something similar."
 OFFER = "Would you like to return it, hear about it, or get a recommendation?"
 
 
@@ -52,18 +84,68 @@ def choice_from(text: str):
     return next((c for c, words in CHOICE_WORDS.items() if any(w in text for w in words)), None)
 
 
+def mentions(text: str, phrases) -> bool:
+    """True if the text contains one of the phrases. Longer phrases also match with a typo or two ("thats
+    everyhing"): the visitor is typing or speaking quickly and the meaning is plain."""
+    if any(p in text for p in phrases):
+        return True
+    if is_question(text):                  # "is there anything else?" is not a typo of "nothing else"
+        return False
+    words = text.replace(",", " ").split()
+    for p in phrases:
+        n = len(p.split())
+        if len(p) < 10:
+            continue
+        for i in range(len(words) - n + 1):
+            if difflib.SequenceMatcher(None, " ".join(words[i:i + n]), p).ratio() >= 0.9:
+                return True
+    return False
+
+
+def is_done(text: str, state: str) -> bool:
+    """The visitor is finishing: a goodbye or thanks, or "no" / "no questions" after "anything else?"."""
+    if mentions(text, GOODBYES):
+        return True
+    words = text.replace(",", " ").strip(" .!").split()
+    return (state == "closing" and 0 < len(words) <= 8 and "?" not in text
+            and words[0].strip(".,!") in NO_WORDS)
+
+
+def is_question(text: str) -> bool:
+    words = text.replace(",", " ").split()
+    return "?" in text or (bool(words) and words[0] in QUESTION_WORDS)
+
+
+def is_greeting(text: str) -> bool:
+    """A bare hello ("hi", "hey Stuart", "good morning"): not "hi, what is your name?"."""
+    words = text.replace(",", " ").strip(" .!?").split()
+    return 0 < len(words) <= 3 and (words[0] in GREETINGS or " ".join(words[:2]) in GREETINGS)
+
+
+def is_yes(text: str) -> bool:
+    """A short yes ("yes", "yeah please", "ok sure"): not "sure, who wrote it?"."""
+    words = text.replace(",", " ").strip(" .!?").split()
+    return 0 < len(words) <= 3 and words[0].strip(".,!?") in YES_WORDS
+
+
 def join_names(items: list) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
 class Dialogue:
     def __init__(self, actuators, get_style: Callable[[], object],
-                 publish: Optional[Callable[[object], Awaitable[int]]] = None, finder=None, assistant=None):
+                 publish: Optional[Callable[[object], Awaitable[int]]] = None, finder=None, assistant=None,
+                 greet_cooldown_s: float = 0.0, clock: Callable[[], float] = time.monotonic):
         self.out = actuators
         self.get_style = get_style
         self.publish = publish
         self.finder = finder                # services.books.BookFinder, for recommendations
         self.assistant = assistant          # services.book_llm.BookAssistant, or None for catalogue text only
+        self.greet_cooldown_s = greet_cooldown_s
+        self.clock = clock
+        self.greeted = False                # said hello in this visit (reset when everyone has left)
+        self.greeted_ids: set = set()       # people (person numbers) who have been greeted this run
+        self.last_greeting: Optional[float] = None
         self.state = "idle"
         self.book = None
         self.transitions: list[tuple[str, str, str]] = []    # (from, trigger, to)
@@ -85,45 +167,106 @@ class Dialogue:
 
     async def on_context(self, event: ContextChanged) -> None:
         if event.group_size <= 0:
+            self.greeted = False
             if self.state != "idle":
                 self.book = None
                 if self.assistant is not None:
                     self.assistant.reset()
                 self._go("idle", "everyone left")
             return
-        if self.state == "idle" and self.get_style().proactive:
+        if self.state == "idle" and self.get_style().proactive and self._may_greet(event.person_ids):
+            self.greeted, self.last_greeting = True, self.clock()
+            self.greeted_ids.update(event.person_ids)
             self._go("invited", "person arrived")
-            await self.say("Hello! Put a book on my pad and I can return it, tell you about it, "
-                           "or suggest something similar.", "happy")
+            await self.say(HELLO, "happy")
+
+    def _may_greet(self, person_ids: tuple = ()) -> bool:
+        if person_ids:                                  # people are told apart: greet whoever is new
+            return any(p not in self.greeted_ids for p in person_ids)
+        if self.greeted:
+            return False
+        return self.last_greeting is None or self.clock() - self.last_greeting >= self.greet_cooldown_s
 
     async def on_utterance(self, event: UserUtterance) -> None:
         text = event.text.strip().lower()
-        if self.state != "idle" and any(g in text for g in GOODBYES):
+        if self.assistant is not None:
+            self.assistant.hear(event.text.strip())
+        if self.state != "idle" and is_done(text, self.state):
             self._go("closing", "visitor said goodbye")
             await self.say("You're welcome. Enjoy your reading!", "happy")
             return
         if self.state == "idle":
             self._go("invited", "visitor spoke")
-            await self.say("Hi! Place a book on the pad and I'll help with it.", "happy")
-        elif self.state == "offering":
-            action = choice_from(text)
-            if action is None:
-                await self.say(OFFER, "neutral")
-                return
-            self._go("acting", f"chose {action}")
-            await self.act(action)
-            self._go("closing", f"{action} done")
-            await self.say("Is there anything else I can help with?", "neutral")
+            await self.talk_without_book(text, event.text.strip(), "Hi! Place a book on the pad and I'll help with it.")
+        elif self.state in ("offering", "closing") and self.book is not None:
+            await self.talk_about_book(text, event.text.strip())
         elif self.state == "closing":
             self._go("invited", "visitor wants more")
             await self.say("Sure. Place another book on the pad.", "happy")
         elif self.state == "invited":
-            await self.say("Place a book on the pad and I'll help with it.", "neutral")
+            await self.talk_without_book(text, event.text.strip(), "Place a book on the pad and I'll help with it.")
         else:                                    # book_placed / scanning / acting: busy
             await self.say("One moment, please.", "neutral")
 
+    async def talk_without_book(self, text: str, said: str, nudge: str) -> None:
+        """The visitor spoke with no book on the pad. A plain greeting gets the nudge; anything else goes to
+        the LLM as small talk (it names no books), with who-are-you answered even if the LLM is down."""
+        if is_greeting(text):
+            intro = "" if self.greeted else f"I'm {NAME}. "      # not again if the hello already said it
+            await self.say(f"Hi! {intro}Place a book on the pad and I'll help with it.", "happy")
+            return
+        answer = (await self.assistant.chat(said) if self.assistant is not None else None) or self.identity_fact(text)
+        await self.say(answer or nudge, "happy" if answer else "neutral")
+
+    @staticmethod
+    def identity_fact(text: str) -> Optional[str]:
+        return NAME_REPLY if any(w in text for w in NAME_WORDS) else None
+
+    async def talk_about_book(self, text: str, said: str) -> None:
+        """The visitor spoke while a book is the topic (offering, or closing after an answer)."""
+        action = choice_from(text)
+        if action is not None:
+            self._go("acting", f"chose {action}")
+            await self.act(action)
+            self._go("closing", f"{action} done")
+            await self.say("Is there anything else I can help with?", "neutral")
+            return
+        if self.state == "closing" and (any(w in text for w in ANOTHER_BOOK_WORDS) or is_yes(text)):
+            self._go("invited", "visitor wants more")
+            await self.say("Sure. Place another book on the pad.", "happy")
+            return
+        answer = await self.answer_question(said) or self.identity_fact(text) or self.catalogue_fact(text)
+        if answer:
+            await self.say(answer, "happy")
+        elif self.state == "offering":
+            await self.say(OFFER, "neutral")
+        elif is_question(text):
+            await self.say(NO_ANSWER, "neutral")
+        else:                                        # not a question and nothing to look up: just an acknowledgement
+            await self.say(ACKNOWLEDGE, "happy")
+
+    async def answer_question(self, question: str) -> Optional[str]:
+        """The LLM's answer to a free question about the scanned book, from its catalogue entry; None if
+        there is no LLM, the book isn't in the catalogue (it would answer from memory) or the server fails."""
+        record = self.catalogue_record(self.book)
+        if record is None or self.assistant is None:
+            return None
+        return await self.assistant.answer(record, question)
+
+    def catalogue_fact(self, text: str) -> Optional[str]:
+        """Who wrote it / what genre, straight from the catalogue, for when the LLM can't answer."""
+        book = self.book
+        if book is None or not book.title:
+            return None
+        if book.author and any(w in text for w in AUTHOR_WORDS):
+            return f"{book.title} was written by {book.author}."
+        record = self.catalogue_record(book)
+        if record is not None and record.genre and any(w in text for w in GENRE_WORDS):
+            return f"{book.title} is {record.genre}."
+        return None
+
     async def on_book_placed(self, event: BookPlaced) -> None:
-        if self.state in ("idle", "invited", "closing"):
+        if self.state in ("idle", "invited", "offering", "closing"):      # offering: they swapped the book
             self._go("book_placed", "book placed")
             self.out.lights.spotlight(True)
             self._go("scanning", "scan started")
@@ -131,9 +274,10 @@ class Dialogue:
     async def on_book_scanned(self, event: BookScanned) -> None:
         if self.state != "scanning":
             return
-        self.book = event
-        if self.assistant is not None:
-            self.assistant.reset()                  # a new book starts a new conversation
+        had_book, self.book = self.book is not None, event
+        if self.assistant is not None and had_book:
+            self.assistant.reset()                  # another book starts a new conversation; the chat before
+                                                    # the first book of a visit carries on
         self._go("offering", "book identified")
         if event.title:
             by = f" by {event.author}" if event.author else ""
@@ -218,5 +362,7 @@ class Dialogue:
     async def say(self, text: str, tag: Optional[str] = None) -> None:
         """Deliver a message in the current style and announce it for the face."""
         self.out.deliver(text, self.get_style())
+        if self.assistant is not None:
+            self.assistant.said(text)               # the LLM's memory is what was really said, canned lines too
         if self.publish is not None:
             await self.publish(ReplySentence(text, tag))
