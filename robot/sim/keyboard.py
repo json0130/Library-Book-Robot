@@ -9,6 +9,10 @@
     book none                    fake camera only: place a book whose barcode can't be read (scan fails)
     scan <image path>            fake camera only: the real barcode decoder reads a photo of a book
     return | explain | recommend say that to the robot once it has offered
+    guide                        ask the robot to guide you to the shelf it last mentioned (after return,
+                                 recommend or where); the fake base just logs the NavigationRequested pose
+    where <title or isbn>        ask where a book lives (the title is matched loosely: `where dune`)
+    reload                       read data/catalog.csv, topics.yaml, shelves.csv and curated_links.csv again
     <anything else you type>     the visitor says it ("can you explain it?"); `say <text>` also works
     feel <emotion> [confidence]  the camera sees this emotion on the visitor (confidence 0..1)
     leave                        everyone walks away
@@ -47,11 +51,13 @@ from robot.app import App, build_app, build_assistant, sim_drivers
 from robot.config import Config
 from robot.core.expression import EMOTIONS, normalize
 from robot.events import BookPlaced, ContextChanged, EmotionDetected, UserUtterance
+from robot.services.books import CatalogError
 from robot.services.isbn import to_isbn13
 
 GROUP_SIZES = {"alone": 1, "group": 3}
 CHOICES = ("return", "explain", "recommend")
-COMMANDS = {"quit", "exit", "help", "?", "noise", "leave", "book", "scan", "say", "feel", "fixed", *CHOICES}
+COMMANDS = {"quit", "exit", "help", "?", "noise", "leave", "book", "scan", "say", "feel", "fixed", "guide",
+            "where", "reload", *CHOICES}
 
 
 class Sim:
@@ -168,6 +174,23 @@ class Sim:
                 return True
         elif cmd in CHOICES and not args:
             await bus.publish(UserUtterance(cmd))
+        elif cmd == "guide" and not args:
+            await bus.publish(UserUtterance("guide me"))
+        elif cmd == "reload" and not args:
+            try:
+                self.app.finder.reload()
+            except (CatalogError, RuntimeError) as exc:
+                self.say(f"  could not reload, keeping the old data: {exc}")
+            else:
+                graph = self.app.finder.graph
+                self.say(f"  reloaded: {len(graph.catalog)} books, {len(graph.shelves)} shelves, {len(graph.links)} links")
+            return True
+        elif cmd == "where" and rest:
+            book = self.app.finder.catalog.find_title(rest)
+            if book is None:
+                self.say(f"  no book in the catalogue matches {rest!r}")
+                return True
+            await bus.publish(UserUtterance(f"where is {book.title}"))
         elif cmd == "say" and rest:
             await bus.publish(UserUtterance(rest))
         elif cmd == "feel" and args and normalize(args[0]) in EMOTIONS:

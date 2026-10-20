@@ -35,17 +35,20 @@ robot/             the robot program: python -m robot check | sim | run
   perception/      book_scanner (barcode -> ISBN -> BookScanned), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged); noise level (stub)
   core/            context, style, dialogue state machine, expression blending, session log
   services/        AI server wrappers: llm (client + sentence splitter), speech, vision;
-                   isbn (validation), books (catalogue, similar books, Open Library fallback)
+                   isbn (validation), books (catalogue, Open Library fallback), book_graph (the book knowledge graph:
+                   recommendations and shelf locations), topics, call_numbers, text_similarity
   actuation/       voice, face display, lights, neck, storage ring, printer, navigation
   drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), fake (logs only)
   sim/             keyboard simulator
 display/           face display: server.py (SSE) + ui/index.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
-tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes
+tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes;
+                   book data tools: catalog_check, import_books, similarity_report, graph_view
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
 docs/              architecture notes, reference images
-data/              catalog.csv (SAMPLE catalogue), test_barcodes/ (barcode PNGs, committed), cache/ and logs/ (generated, gitignored)
+data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv (SAMPLE book data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
+                   cache/, logs/, graph.html and catalog_draft.csv (generated, gitignored)
 ```
 
 `vendor/ai_server/` holds the AI server team's files. Keep face.py, emotion.py, stt.py and tts.py unmodified so updates can be dropped in.
@@ -113,9 +116,26 @@ Point the webcam at a barcode PNG on a screen, or print them. The scanner tries 
 
 If no ISBN is read within `books.scan_timeout_s` (5 s) the robot asks the visitor to place the book flat with the barcode up.
 
-`data/catalog.csv` is **sample data** (about a dozen well-known books, with summaries written for this project). Replace it with the library's real catalogue: same columns (`isbn13, title, author, genre, tags, summary, shelf, slot`; tags separated by semicolons; lines starting with `#` are ignored). Loading names the file and line of any bad row. For an ISBN not in the catalogue the robot can ask Open Library for the title and author (`books.online_fallback` in `config/robot.yaml`, 3 s timeout, answers cached in `data/cache/`); shelf, slot and summary stay empty and the book can't be returned or recommended from. Recommendations are the catalogue books with the most genre and tag overlap (Jaccard), ties broken by title.
+The book data is **sample data** (a dozen well-known books, seven shelves, with summaries written for this project). Replace it with the library's real data: [docs/catalog.md](docs/catalog.md) explains every column of `data/catalog.csv`, `topics.yaml`, `shelves.csv` and `curated_links.csv`, and how to add a book or a shelf. Loading names the file and line of any bad row. For an ISBN not in the catalogue the robot can ask Open Library for the title and author (`books.online_fallback` in `config/robot.yaml`, 3 s timeout, answers cached in `data/cache/`); shelf, slot and summary stay empty and the book can't be returned or recommended from.
 
-**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three similar catalogue books to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. **Before a book is scanned,** a plain hello gets a greeting and anything else ("what's your name?", "what can you do?") goes to the LLM as small talk with no catalogue, so it names no books and asks the visitor to place one on the pad; without the LLM, who-are-you is still answered. **Follow-ups:** the scanned book stays the topic until the visitor leaves or scans another, so after an answer they can ask for something else about it ("what's it about again?", "any related books?") or a free question ("who wrote it?", "does he get food somehow?"). Free questions go to the LLM with the book's catalogue entry and the conversation so far, and are told to use only that entry; if the LLM is down, who-wrote-it and genre questions are still answered from the catalogue, and anything else gets a short "I can't answer that right now". Saying "another book" (or just "yes") after an answer asks for the next book. *Return* (shelf and storage slot) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
+#### The book graph
+
+At startup the data files become a small knowledge graph (plain dicts and dataclasses, no extra packages; `robot/services/book_graph.py`): books, authors, topics (with the broader topics above them), call-number classes, shelves, sections and series, joined by typed edges. It holds books and the library's layout only, never visitors or people. It answers two questions:
+
+- **What else would they like?** Two books are compared on seven things, each with a short reason: shared topics weighted by rarity (IDF; general topics like "science" count for less), topics that meet under a broader one, the same author, the same series (the next book in a series comes first), how close the Dewey / Library of Congress call numbers are (same class and numerically near: `QB981` and `QB982` yes, `QB44.2` and `QB981` no), a librarian's curated link, and TF-IDF text similarity of the summaries. The weights are `books.similarity` in `config/robot.yaml`. The full reason list goes to the LLM and the log; what is *spoken* is one natural reason, the most specific one (series, author, curated link, most specific shared topic, shelf area), phrased like "because, like Cosmos, it's about astronomy": never a list of topics and never a call number. The LLM must name one of the candidates or its reply is discarded for the catalogue wording. In a quiet zone only the top pick is named; in a common area up to three (`recommendations` in `config/styles.yaml`).
+- **Where does it live?** The shelf's section, floor, zone and map pose. Returning a book says the storage slot and where it belongs; the robot then offers to guide the visitor, and "guide me" publishes a `NavigationRequested` event with the shelf's pose (the fake base just logs it). "Where is Dune?" works too.
+
+```bash
+python tools/catalog_check.py                            # validate the data files: errors, warnings, statistics
+python tools/book_scan_test.py --live --append isbns.txt # collect ISBNs by scanning a pile of books: each new one is appended (no duplicates), with a beep and its title
+python tools/import_books.py isbns.txt                   # draft catalogue rows from Open Library into data/catalog_draft.csv
+python tools/similarity_report.py                        # graph vs text similarity per book; --make-pairs / --eval to measure against your labels
+python tools/graph_view.py                               # writes data/graph.html: open it to explore the graph
+```
+
+In the simulator: `book <isbn>`, `recommend`, `guide`, `where <title or isbn>` (the title is matched loosely) and `reload` (read the data files again after editing them).
+
+**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three catalogue books the graph found similar, each with its reasons, to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. **Before a book is scanned,** a plain hello gets a greeting and anything else ("what's your name?", "what can you do?") goes to the LLM as small talk with no catalogue, so it names no books and asks the visitor to place one on the pad; without the LLM, who-are-you is still answered. **Follow-ups:** the scanned book stays the topic until the visitor leaves or scans another, so after an answer they can ask for something else about it ("what's it about again?", "any related books?") or a free question ("who wrote it?", "does he get food somehow?"). Free questions go to the LLM with the book's catalogue entry and the conversation so far, and are told to use only that entry; if the LLM is down, who-wrote-it and genre questions are still answered from the catalogue, and anything else gets a short "I can't answer that right now". Saying "another book" (or just "yes") after an answer asks for the next book. *Return* (storage slot, section, floor and shelf) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
 
 ### Person IDs
 
@@ -130,7 +150,7 @@ python tools/identity_test.py       # live check: look at the camera, step out a
 
 ### Behaviour rules
 
-How the robot behaves in each context is data, not code: [config/styles.yaml](config/styles.yaml) has one entry per `quiet_alone`, `quiet_group`, `common_alone` and `common_group`, plus `fixed` (the study baseline) and `default` (the safe fallback, and the source of any field an entry leaves out). Each entry sets the voice (normal or whisper) and volume, the channels a message goes through (speech, screen, gaze, spotlight, print), light colour and brightness, the resting eye expression, neck pose, screen layout, whether the robot approaches people, and the speed limit. [config/zones.yaml](config/zones.yaml) maps named areas to zones and sets the noise thresholds.
+How the robot behaves in each context is data, not code: [config/styles.yaml](config/styles.yaml) has one entry per `quiet_alone`, `quiet_group`, `common_alone` and `common_group`, plus `fixed` (the study baseline) and `default` (the safe fallback, and the source of any field an entry leaves out). Each entry sets the voice (normal or whisper) and volume, the channels a message goes through (speech, screen, gaze, spotlight, print), light colour and brightness, the resting eye expression, neck pose, screen layout, whether the robot approaches people, the speed limit, and how many books a recommendation names (`recommendations`: the top pick only in a quiet zone, up to three in a common area). [config/zones.yaml](config/zones.yaml) maps named areas to zones and sets the noise thresholds.
 
 ## Face display
 

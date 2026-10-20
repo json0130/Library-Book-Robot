@@ -21,11 +21,24 @@ devices:
 
 books:
   catalog_path: data/catalog.csv   # SAMPLE data until the library's real catalogue replaces it
+  topics_path: data/topics.yaml    # the topic vocabulary: synonyms and broader topics (docs/catalog.md)
+  shelves_path: data/shelves.csv   # where each shelf is: section, floor, zone and map pose
+  links_path: data/curated_links.csv   # hand-made links between books (series_next, librarian_pick, related)
   online_fallback: true            # Open Library (title/author only) for ISBNs not in the catalogue
   cache_dir: data/cache            # cached Open Library answers, gitignored
   scan_timeout_s: 5                # how long to look for a barcode after a book is placed
   scanner_camera_index: 0          # camera pointed at the scan pad
   use_llm: true                    # explain/recommend through the LLM (falls back to catalogue text); false = catalogue only
+  similarity:                      # how recommendations are scored (services/book_graph.py); each component is 0..1
+    topics: 0.30                   # shared topics, weighted by rarity (IDF): "astronomy" counts for more than "fiction"
+    broader: 0.10                  # topics that meet under a broader one ("astronomy" and "physics" both under "science")
+    author: 0.12                   # the same author
+    series: 0.15                   # the same series; the next book in a series is always ranked first
+    call_number: 0.08              # how deep a prefix the Dewey / Library of Congress call numbers share
+    curated: 0.10                  # librarian_pick and related rows in curated_links.csv
+    text: 0.15                     # TF-IDF similarity of the summaries and subjects
+    min_score: 0.08                # books scoring below this (the total is 0..1) are not recommended
+    general_topics: 0.4            # a general topic (science, fiction: it has a narrower child in topics.yaml) is worth this fraction of its rarity weight
 
 dialogue:
   greet_cooldown_s: 120   # say hello at most once per visit and once per this many seconds (a person leaving the camera's view and returning isn't greeted again)

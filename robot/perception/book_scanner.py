@@ -143,9 +143,13 @@ class BookScanner:
         await self.bus.publish(result)
         return result
 
-    @staticmethod
-    def _scanned(isbn: str, book) -> BookScanned:
+    def _scanned(self, isbn: str, book) -> BookScanned:
         if book is None:                           # a valid ISBN nobody knows: still a successful read
             return BookScanned(isbn=isbn)
+        place = self.finder.locate(book.isbn13) if book.found_in_catalog else None    # section, floor, pose...
         return BookScanned(isbn=isbn, title=book.title, author=book.author or None, summary=book.summary,
-                           shelf=book.shelf, slot=book.slot, found_in_catalog=book.found_in_catalog)
+                           shelf=(place.shelf if place else None) or book.shelf, slot=book.slot,
+                           found_in_catalog=book.found_in_catalog, call_number=book.call_number or None,
+                           section=place.section if place else None, floor=place.floor if place else None,
+                           zone=place.zone if place else None, map_x=place.map_x if place else None,
+                           map_y=place.map_y if place else None, map_yaw=place.map_yaw if place else None)

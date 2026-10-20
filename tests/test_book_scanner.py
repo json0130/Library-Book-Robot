@@ -9,6 +9,7 @@ from robot.events import BookPlaced, BookScanned, ScanFailed
 from robot.perception.book_scanner import BookScanner, DecoderUnavailable
 from robot.services.books import BookFinder, Catalog
 from tests.helpers.ean13 import bitmap, check_digit
+from tests.helpers.sample import sample_graph
 
 try:
     import cv2
@@ -24,7 +25,8 @@ STICKER = "590123412345" + check_digit("590123412345")      # EAN-13, not an ISB
 
 
 def finder():
-    return BookFinder(Catalog.load(ROOT / "data" / "catalog.csv"), online_fallback=False)
+    graph = sample_graph()
+    return BookFinder(graph.catalog, online_fallback=False, graph=graph)
 
 
 def barcode_image(digits, module_px=3):
@@ -94,8 +96,11 @@ class ScannerFlowTest(unittest.TestCase):
         self.assertIsInstance(event, BookScanned)
         self.assertEqual((event.isbn, event.title, event.author), (HITCH, "The Hitchhiker's Guide to the Galaxy",
                                                                    "Douglas Adams"))
-        self.assertEqual((event.shelf, event.slot, event.found_in_catalog), ("Level 2 SF-ADA", 0, True))
+        self.assertEqual((event.shelf, event.slot, event.found_in_catalog), ("2-SF-A", 0, True))
         self.assertIn("galaxy", event.summary)
+        self.assertEqual((event.call_number, event.section, event.floor, event.zone),
+                         ("F ADA", "Science Fiction", 2, "common"))
+        self.assertEqual((event.map_x, event.map_y, event.map_yaw), (1.0, 2.0, 1.57))
 
     def test_valid_isbn_unknown_to_the_catalogue(self):
         camera = FakeCamera()

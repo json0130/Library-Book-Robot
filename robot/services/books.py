@@ -1,20 +1,26 @@
-"""Book catalogue: ISBN lookup, similar books, and an optional Open Library fallback.
+"""Book catalogue: ISBN lookup, the book graph (recommendations and shelf locations), and an optional Open
+Library fallback.
 
     catalog = Catalog.load("data/catalog.csv")
     book = catalog.lookup("978-0-345-39180-3")        # Book or None
-    catalog.similar(book, n=3)                         # up to 3 related books, never `book` itself
+    catalog.find_title("hitchhiker")                   # fuzzy: Book or None
     finder = BookFinder(catalog, online_fallback=True, cache_dir="data/cache")
     finder.find("9780141439518")                       # catalogue first, then Open Library
+    finder.recommend("9780345539434", 3)               # Recommendations with scores and reasons (book_graph.py)
+    finder.locate("9780345539434")                     # Location: section, floor, shelf, zone, map pose
 
-data/catalog.csv is SAMPLE data until the library's real catalogue replaces it. Columns:
-isbn13, title, author, genre, tags (semicolon separated), summary, shelf, slot.
+data/catalog.csv is SAMPLE data until the library's real catalogue replaces it. Required columns: isbn13,
+title, author, genre, summary, shelf, slot, and subjects (semicolon separated; an older file may call it
+tags). Optional: call_number, section, floor, series, series_index, year. docs/catalog.md describes each.
 """
 
 from __future__ import annotations
 
 import csv
+import difflib
 import json
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,35 +32,81 @@ from robot.services.isbn import to_isbn13
 
 log = logging.getLogger("robot.books")
 
-COLUMNS = ("isbn13", "title", "author", "genre", "tags", "summary", "shelf", "slot")
+COLUMNS = ("isbn13", "title", "author", "genre", "subjects", "summary", "shelf", "slot")
+OPTIONAL_COLUMNS = ("call_number", "section", "floor", "series", "series_index", "year")
 OPEN_LIBRARY_URL = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
 ONLINE_TIMEOUT_S = 3.0
 
 
 class CatalogError(ValueError):
-    """The catalogue file is missing or malformed; the message names the file and line."""
+    """A data file (catalogue, topics, shelves, links) is missing or malformed; the message names the file
+    and line."""
+
+
+def whole_number(row: dict, column: str) -> Optional[int]:
+    """An optional whole-number cell of a CSV row: None if blank, ValueError naming the column if not a number."""
+    text = (row.get(column) or "").strip()
+    try:
+        return int(text) if text else None
+    except ValueError:
+        raise ValueError(f"{column} must be a whole number, got {text!r}") from None
+
+
+def title_key(text: str) -> str:
+    """A title for comparing: lower case, no punctuation, no leading "the"/"a"/"an"."""
+    words = re.sub(r"[^a-z0-9 ]+", "", str(text or "").lower().replace("-", " ")).split()
+    return " ".join(words[1:] if len(words) > 1 and words[0] in ("the", "a", "an") else words)
 
 
 @dataclass(frozen=True)
 class Book:
     isbn13: str
     title: str
-    author: str = ""
+    author: str = ""                       # several authors are separated by semicolons
     genre: str = ""
-    tags: tuple = ()
+    subjects: tuple = ()                   # as written in the catalogue; the graph folds them into topics
     summary: Optional[str] = None
-    shelf: Optional[str] = None
+    shelf: Optional[str] = None            # a shelf id from data/shelves.csv
     slot: Optional[int] = None
+    call_number: str = ""
+    section: str = ""
+    floor: Optional[int] = None
+    series: str = ""
+    series_index: Optional[int] = None
+    year: Optional[int] = None
     found_in_catalog: bool = True          # False for books known only from the online fallback
 
     @property
-    def topics(self) -> frozenset:
-        """Genre and tags, lower-cased: the set that similar() compares."""
-        return frozenset(t.lower() for t in (*self.tags, self.genre) if t)
+    def tags(self) -> tuple:
+        """The old name of `subjects`."""
+        return self.subjects
 
 
-def jaccard(a: frozenset, b: frozenset) -> float:
-    return len(a & b) / len(a | b) if a | b else 0.0
+def read_rows(path: Path | str, required: Iterable[str], aliases: Optional[dict] = None) -> tuple:
+    """The data rows of a CSV file with a header: (path, header, [(line number, {column: text})]).
+
+    Blank lines and lines starting with # are skipped. `aliases` maps an old column name to its new one
+    ({"tags": "subjects"}). Raises CatalogError naming the file (and the line) if it is missing, empty or
+    lacks a required column. Cells are stripped; a short row leaves its last columns empty.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise CatalogError(f"file not found: {path}")
+    with open(path, newline="", encoding="utf-8") as f:
+        lines = [(n, line) for n, line in enumerate(f, 1) if line.strip() and not line.lstrip().startswith("#")]
+    if not lines:
+        raise CatalogError(f"{path}: the file is empty (no header line)")
+    header_no, header_line = lines[0]
+    aliases = aliases or {}
+    header = [aliases.get(h.strip(), h.strip()) for h in next(csv.reader([header_line]))]
+    missing = [c for c in required if c not in header]
+    if missing:
+        raise CatalogError(f"{path}:{header_no}: missing column(s): {', '.join(missing)}")
+    rows = []
+    for line_no, line in lines[1:]:
+        cells = next(csv.reader([line]))
+        rows.append((line_no, {h: (cells[i].strip() if i < len(cells) else "") for i, h in enumerate(header)}))
+    return path, header, rows
 
 
 class Catalog:
@@ -75,18 +127,9 @@ class Catalog:
         path = Path(path)
         if not path.is_file():
             raise CatalogError(f"catalogue file not found: {path} (expected columns: {', '.join(COLUMNS)})")
-        with open(path, newline="", encoding="utf-8") as f:
-            lines = [(n, line) for n, line in enumerate(f, 1) if line.strip() and not line.lstrip().startswith("#")]
-        if not lines:
-            raise CatalogError(f"{path}: the catalogue is empty (no header line)")
-        header_no, header_line = lines[0]
-        header = [h.strip() for h in next(csv.reader([header_line]))]
-        missing = [c for c in COLUMNS if c not in header]
-        if missing:
-            raise CatalogError(f"{path}:{header_no}: missing column(s): {', '.join(missing)}")
+        path, _, rows = read_rows(path, COLUMNS, aliases={"tags": "subjects"})
         books = []
-        for line_no, line in lines[1:]:
-            row = dict(zip(header, next(csv.reader([line]))))
+        for line_no, row in rows:
             try:
                 books.append(cls._book_from_row(row))
             except ValueError as exc:
@@ -105,37 +148,40 @@ class Catalog:
         title = (row.get("title") or "").strip()
         if not title:
             raise ValueError(f"empty title for ISBN {isbn}")
-        slot_text = (row.get("slot") or "").strip()
-        try:
-            slot = int(slot_text) if slot_text else None
-        except ValueError:
-            raise ValueError(f"slot must be a whole number, got {slot_text!r}") from None
-        tags = tuple(t.strip() for t in (row.get("tags") or "").split(";") if t.strip())
+        subjects = tuple(t.strip() for t in (row.get("subjects") or "").split(";") if t.strip())
         return Book(isbn13=isbn, title=title, author=(row.get("author") or "").strip(),
-                    genre=(row.get("genre") or "").strip(), tags=tags,
+                    genre=(row.get("genre") or "").strip(), subjects=subjects,
                     summary=(row.get("summary") or "").strip() or None,
-                    shelf=(row.get("shelf") or "").strip() or None, slot=slot)
+                    shelf=(row.get("shelf") or "").strip() or None, slot=whole_number(row, "slot"),
+                    call_number=(row.get("call_number") or "").strip(), section=(row.get("section") or "").strip(),
+                    floor=whole_number(row, "floor"), series=(row.get("series") or "").strip(),
+                    series_index=whole_number(row, "series_index"), year=whole_number(row, "year"))
 
     def lookup(self, isbn: str) -> Optional[Book]:
         """The catalogue book for an ISBN-10 or ISBN-13 (any formatting), or None."""
         code = to_isbn13(isbn)
         return self._by_isbn.get(code) if code else None
 
-    def similar(self, book: Book, n: int = 3) -> list[Book]:
-        """Up to n other books ranked by Jaccard overlap of genre and tags (best first).
-
-        Ties break on title, then ISBN, so the order is always the same. Books sharing nothing
-        with `book` are not similar and are left out.
-        """
-        scored = []
-        for other in self.books:
-            if other.isbn13 == book.isbn13:
-                continue
-            score = jaccard(book.topics, other.topics)
-            if score > 0:
-                scored.append((-score, other.title.lower(), other.isbn13, other))
-        scored.sort(key=lambda s: s[:3])
-        return [s[3] for s in scored[:max(0, n)]]
+    def find_title(self, query: str, cutoff: float = 0.6) -> Optional[Book]:
+        """The book a visitor means by a title typed or said loosely, or None. An ISBN works too. Tries the
+        exact title, then a title that contains the words (or that the words contain), then the closest
+        spelling; case, punctuation and a leading "the" don't matter, so "hitchhikers guide" finds
+        "The Hitchhiker's Guide to the Galaxy"."""
+        if (code := to_isbn13(query)) and (book := self._by_isbn.get(code)):
+            return book
+        wanted = title_key(query)
+        if not wanted:
+            return None
+        titles = {title_key(b.title): b for b in self.books}
+        if wanted in titles:
+            return titles[wanted]
+        if len(wanted) < 3:                       # too little to go on: "i" is in half the titles
+            return None
+        containing = sorted((len(t), t) for t in titles if wanted in t or (len(t) >= 4 and t in wanted))
+        if containing:
+            return titles[containing[0][1]]
+        close = difflib.get_close_matches(wanted, list(titles), n=1, cutoff=cutoff)
+        return titles[close[0]] if close else None
 
 
 class OpenLibrary:
@@ -185,12 +231,23 @@ class OpenLibrary:
 
 
 class BookFinder:
-    """Catalogue first; with online_fallback, Open Library for ISBNs the catalogue lacks."""
+    """Catalogue first; with online_fallback, Open Library for ISBNs the catalogue lacks. Also the way to the
+    book graph: recommendations and shelf locations (only for catalogue books)."""
 
     def __init__(self, catalog: Catalog, online_fallback: bool = True,
-                 cache_dir: Path | str | None = None, timeout_s: float = ONLINE_TIMEOUT_S):
-        self.catalog = catalog
+                 cache_dir: Path | str | None = None, timeout_s: float = ONLINE_TIMEOUT_S, graph=None):
+        from robot.services.book_graph import BookGraph          # book_graph imports this module
+        self.graph = graph if graph is not None else BookGraph(catalog)
         self.online = OpenLibrary(cache_dir, timeout_s) if online_fallback else None
+
+    @property
+    def catalog(self) -> Catalog:
+        """The graph's catalogue, so a reload() is seen everywhere."""
+        return self.graph.catalog
+
+    def reload(self) -> None:
+        """Read the data files again after editing them. Keeps the old data if the new files are bad."""
+        self.graph.reload()
 
     def find(self, isbn: str) -> Optional[Book]:
         code = to_isbn13(isbn)
@@ -201,7 +258,19 @@ class BookFinder:
             book = self.online.lookup(code)
         return book
 
-    def similar_to(self, isbn: str, n: int = 3) -> list[Book]:
-        """Similar catalogue books for an ISBN; empty if the book is not in the catalogue."""
+    def recommend(self, isbn: str, n: int = 3) -> list:
+        """book_graph.Recommendation objects (book, score, reasons) for an ISBN, best first; empty if the
+        book is not in the catalogue."""
         book = self.catalog.lookup(isbn)
-        return self.catalog.similar(book, n) if book else []
+        return self.graph.recommend(book.isbn13, n) if book else []
+
+    def locate(self, isbn: str):
+        """Where a catalogue book lives (book_graph.Location), or None."""
+        return self.locate_with_reason(isbn)[0]
+
+    def locate_with_reason(self, isbn: str) -> tuple:
+        """(Location or None, why it is missing or incomplete or None)."""
+        book = self.catalog.lookup(isbn)
+        if book is None:
+            return None, "the book is not in the catalogue"
+        return self.graph.locate_with_reason(book.isbn13)

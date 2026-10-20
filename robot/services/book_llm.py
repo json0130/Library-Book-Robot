@@ -3,7 +3,8 @@
 The model is only ever shown real catalogue records, and told to use nothing else:
 
     explain    the book's own record (title, author, genre, topics, summary)
-    recommend  the book plus up to three similar catalogue books to choose from
+    recommend  the book plus up to three similar catalogue books to choose from, each with the reasons the
+               book graph found it similar ("both about astronomy; same author: Carl Sagan")
     answer     the book's own record and the visitor's free question about it
     chat       no book yet: small talk, who the robot is, what it can do (never names books)
 
@@ -41,8 +42,8 @@ def record_text(book) -> str:
     lines = [f"Title: {book.title}", f"Author: {book.author or 'unknown'}"]
     if book.genre:
         lines.append(f"Genre: {book.genre}")
-    if book.tags:
-        lines.append("Topics: " + ", ".join(book.tags))
+    if book.subjects:
+        lines.append("Topics: " + ", ".join(book.subjects))
     if book.summary:
         lines.append(f"Summary: {book.summary}")
     return "\n".join(lines)
@@ -53,12 +54,23 @@ def explain_request(book) -> str:
             "The visitor asked what this book is about. Tell them in two or three short spoken sentences.")
 
 
+def why_text(candidate) -> str:
+    """ALL the graph's reasons for one candidate (a book_graph.Recommendation), strongest first. The model
+    gets the full list; the sentence the robot speaks without it is the single Recommendation.because."""
+    return "; ".join(candidate.reasons) or "similar subjects"
+
+
 def recommend_request(book, candidates: list) -> str:
-    listed = "\n\n".join(f"Candidate {i}:\n{record_text(c)}" for i, c in enumerate(candidates, 1))
+    """candidates: book_graph.Recommendation objects, best first."""
+    listed = "\n\n".join(f"Candidate {i}:\n{record_text(c.book)}\nWhy it fits: {why_text(c)}\n"
+                          f"Best single reason to give: {c.because or 'it is similar'}"
+                          for i, c in enumerate(candidates, 1))
     return (f"The visitor has this book:\n{record_text(book)}\n\n"
             f"Books you may recommend (choose only from these, and say each title exactly as written):\n\n{listed}\n\n"
-            "The visitor asked for something similar. In two or three short spoken sentences, "
-            "recommend one or more of the candidates and say briefly why it suits them.")
+            "The visitor asked for something similar. In two or three short spoken sentences, recommend one or "
+            "more of the candidates. Give ONE reason for each, in your own words, taken from its \"Best single "
+            "reason to give\" line (the \"Why it fits\" notes are only background). Do not list several topics, "
+            "and do not mention descriptions, shared words, shelves, call numbers or scores.")
 
 
 CHAT_RULES = (
@@ -87,9 +99,18 @@ def clean(reply: str) -> str:
     return " ".join(split_sentences(text)[:MAX_SENTENCES])
 
 
+def words_of(text: str) -> str:
+    """Lower-case words separated by single spaces, punctuation and hyphens gone: "Nineteen Eighty-Four" and
+    "nineteen eighty four" read the same."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text).lower()).split())
+
+
 def mentions_any(text: str, books: list) -> bool:
-    low = text.lower()
-    return any(b.title.lower() in low for b in books)
+    """True if the reply names one of the books by title, ignoring case and punctuation, as whole words. This is
+    the check that discards a recommendation naming none of the candidates; it only forgives how a title is
+    spelled, not which book is named."""
+    spoken = f" {words_of(text)} "
+    return any(f" {words_of(b.title)} " in spoken for b in books if words_of(b.title))
 
 
 class BookAssistant:
@@ -125,11 +146,11 @@ class BookAssistant:
         return reply or None
 
     async def recommend(self, book, candidates: list) -> Optional[str]:
-        """A spoken recommendation naming at least one of the candidates, or None."""
+        """A spoken recommendation naming at least one of the candidates (Recommendation objects), or None."""
         if not candidates:
             return None
         reply = await self._ask(recommend_request(book, candidates))
-        if reply and not mentions_any(reply, candidates):
+        if reply and not mentions_any(reply, [c.book for c in candidates]):
             log.warning("recommendation names none of the candidates; discarded: %r", reply)
             return None
         return reply or None

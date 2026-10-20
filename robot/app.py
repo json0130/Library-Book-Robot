@@ -30,11 +30,12 @@ from robot.core.expression import blend
 from robot.core.session_log import SessionLog
 from robot.core.style import StylePolicy, StyleVector
 from robot.drivers import DriverNotImplemented
-from robot.events import (ContextChanged, EmotionDetected, ExpressionRequested, ReplySentence,
-                          StyleChanged)
+from robot.events import (ContextChanged, EmotionDetected, ExpressionRequested, NavigationRequested,
+                          ReplySentence, StyleChanged)
 from robot.perception.book_scanner import BookScanner
 from robot.services.book_llm import BookAssistant
-from robot.services.books import BookFinder, Catalog
+from robot.services.book_graph import BookGraph
+from robot.services.books import BookFinder
 from robot.services.llm import LLMClient
 
 log = logging.getLogger("robot.app")
@@ -126,6 +127,7 @@ class App:
         self.bus.subscribe(EmotionDetected, self._on_emotion)
         self.bus.subscribe(ReplySentence, self._on_reply)
         self.bus.subscribe(ExpressionRequested, self._on_expression)
+        self.bus.subscribe(NavigationRequested, self._on_navigation)
         self.dialogue.attach(self.bus)
         if self.scanner_camera is not None and self.finder is not None:
             books = self.cfg.books
@@ -167,14 +169,19 @@ class App:
     def _on_expression(self, event: ExpressionRequested) -> None:
         self.actuators.face.show_emotion(event.emotion, event.hold_s)
 
+    def _on_navigation(self, event: NavigationRequested) -> None:
+        self.actuators.nav.go_to_pose(event.x, event.y, event.yaw)
+
 
 def build_finder(cfg: Config) -> BookFinder:
-    """The catalogue (data/catalog.csv) with the optional Open Library fallback.
-    Raises books.CatalogError with a clear message if the catalogue file is bad."""
+    """The catalogue and the book graph built from the data files in config/robot.yaml (`books:`), with the
+    optional Open Library fallback. Raises books.CatalogError with a clear message if a data file is bad."""
     books = cfg.books
-    catalog = Catalog.load(cfg.path(books["catalog_path"]))
-    return BookFinder(catalog, online_fallback=bool(books["online_fallback"]),
-                      cache_dir=cfg.path(books["cache_dir"]))
+    graph = BookGraph.from_files(cfg.path(books["catalog_path"]), cfg.path(books["topics_path"]),
+                                 cfg.path(books["shelves_path"]), cfg.path(books["links_path"]),
+                                 weights=books["similarity"])
+    return BookFinder(graph.catalog, online_fallback=bool(books["online_fallback"]),
+                      cache_dir=cfg.path(books["cache_dir"]), graph=graph)
 
 
 def build_assistant(cfg: Config) -> BookAssistant:

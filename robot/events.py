@@ -1,7 +1,7 @@
 """Events carried on the bus. Each is a plain dataclass; `timestamp` is filled in automatically.
 
 Perception publishes ContextChanged, BookPlaced, BookScanned, ScanFailed, UserUtterance and EmotionDetected.
-Core publishes StyleChanged, ReplySentence and ExpressionRequested for actuation to act on.
+Core publishes StyleChanged, ReplySentence, ExpressionRequested and NavigationRequested for actuation to act on.
 """
 
 from __future__ import annotations
@@ -36,7 +36,9 @@ class BookPlaced:
 @dataclass
 class BookScanned:
     """The book on the pad was identified by its ISBN barcode. found_in_catalog is False when only
-    the online fallback knew it (then summary, shelf and slot are None)."""
+    the online fallback knew it (then summary, shelf, slot and everything about where it lives are None).
+    section, floor, zone and the map pose come from data/shelves.csv through the book graph; any of them
+    may be None (a shelf without a pose, say)."""
     isbn: str
     title: Optional[str] = None
     author: Optional[str] = None
@@ -44,6 +46,13 @@ class BookScanned:
     shelf: Optional[str] = None
     slot: Optional[int] = None
     found_in_catalog: bool = False
+    call_number: Optional[str] = None
+    section: Optional[str] = None
+    floor: Optional[int] = None
+    zone: Optional[str] = None                 # "quiet" or "common"
+    map_x: Optional[float] = None
+    map_y: Optional[float] = None
+    map_yaw: Optional[float] = None
     timestamp: float = field(default_factory=_now)
 
 
@@ -74,6 +83,22 @@ class EmotionDetected:
     """The visitor's facial emotion from the camera (one of the seven), confidence 0..1."""
     emotion: str
     confidence: float
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class NavigationRequested:
+    """The robot should lead the visitor to a shelf: drive to the map pose (x, y in metres, yaw in radians, on
+    the map of `floor`). title and isbn say which book the visitor is going to find."""
+    isbn: str
+    title: str
+    x: float
+    y: float
+    yaw: float
+    shelf: Optional[str] = None
+    section: Optional[str] = None
+    floor: Optional[int] = None
+    zone: Optional[str] = None
     timestamp: float = field(default_factory=_now)
 
 

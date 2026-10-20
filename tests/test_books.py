@@ -8,6 +8,7 @@ from unittest import mock
 
 from robot.config import ROOT
 from robot.services.books import Book, BookFinder, Catalog, CatalogError, OpenLibrary
+from tests.helpers.sample import sample_graph
 
 HEADER = "isbn13,title,author,genre,tags,summary,shelf,slot\n"
 DUNE, HITCH = "9780441172719", "9780345391803"
@@ -38,7 +39,7 @@ class CatalogLoadTest(unittest.TestCase):
         self.assertGreaterEqual(len(catalog), 10)
         book = catalog.lookup("0-345-39180-2")                 # ISBN-10 with hyphens
         self.assertEqual(book.isbn13, HITCH)
-        self.assertIn("space", book.tags)
+        self.assertIn("space", book.subjects)
         self.assertIsInstance(book.slot, int)
 
     def test_missing_file(self):
@@ -77,44 +78,80 @@ class CatalogLoadTest(unittest.TestCase):
         self.assertEqual(book.tags, ("a", "b"))
 
 
-class SimilarTest(unittest.TestCase):
+NEW_HEADER = ("isbn13,title,author,genre,subjects,summary,shelf,slot,call_number,section,floor,series,"
+              "series_index,year\n")
+
+
+class NewColumnsTest(unittest.TestCase):
+    def load(self, text):
+        with tempfile.TemporaryDirectory() as d:
+            return Catalog.load(write_csv(d, text))
+
+    def test_the_new_columns_are_read(self):
+        catalog = self.load(NEW_HEADER + f'{DUNE},Dune,Frank Herbert,sf,"desert;politics",Spice,2-SF-B,1,F HER,'
+                                         "Science Fiction,2,Dune Chronicles,1,1965\n")
+        book = catalog.lookup(DUNE)
+        self.assertEqual((book.subjects, book.call_number, book.section, book.floor),
+                         (("desert", "politics"), "F HER", "Science Fiction", 2))
+        self.assertEqual((book.series, book.series_index, book.year, book.shelf), ("Dune Chronicles", 1, 1965, "2-SF-B"))
+
+    def test_an_old_file_with_tags_and_no_new_columns_still_loads(self):
+        book = self.load(HEADER + f"{DUNE},Dune,FH,sf,a;b,s,S1,1\n").lookup(DUNE)
+        self.assertEqual(book.subjects, ("a", "b"))
+        self.assertEqual(book.tags, ("a", "b"))                                 # the old name still works
+        self.assertEqual((book.call_number, book.section, book.floor, book.series, book.series_index), ("", "", None, "", None))
+
+    def test_new_columns_are_optional_blank_cells(self):
+        book = self.load(NEW_HEADER + f"{DUNE},Dune,FH,sf,a,s,S1,1,,,,,,\n").lookup(DUNE)
+        self.assertEqual((book.call_number, book.floor, book.series_index, book.year), ("", None, None, None))
+
+    def test_a_bad_number_names_the_line_and_the_column(self):
+        for column, row in (("floor", f"{DUNE},Dune,FH,sf,a,s,S1,1,F HER,SF,two,,,\n"),
+                            ("series_index", f"{DUNE},Dune,FH,sf,a,s,S1,1,F HER,SF,2,Dune,first,\n"),
+                            ("year", f"{DUNE},Dune,FH,sf,a,s,S1,1,F HER,SF,2,Dune,1,nineteen\n")):
+            with self.assertRaisesRegex(CatalogError, rf"catalog.csv:2: {column} must be a whole number"):
+                self.load(NEW_HEADER + row)
+
+    def test_the_sample_catalogue_has_the_new_values(self):
+        book = Catalog.load(ROOT / "data" / "catalog.csv").lookup("9780345539434")           # Cosmos
+        self.assertEqual((book.call_number, book.section, book.floor, book.shelf), ("QB44.2 .S24", "Science", 3, "3-SCI-A"))
+
+
+class FindTitleTest(unittest.TestCase):
     def setUp(self):
-        def book(isbn, title, genre, tags):
-            return Book(isbn, title, "A", genre, tuple(tags))
-        self.catalog = Catalog([
-            book("9780000000002", "Alpha", "sf", ["space", "robots"]),
-            book("9780000000019", "Bravo", "sf", ["space", "robots"]),      # identical topics to Alpha
-            book("9780000000026", "Charlie", "sf", ["space"]),
-            book("9780000000033", "Delta", "history", ["space", "robots"]),
-            book("9780000000040", "Echo", "cooking", ["pasta"]),            # nothing in common
-            book("9780000000057", "Foxtrot", "sf", ["space"]),              # ties with Charlie
-        ])
-        self.alpha = self.catalog.lookup("9780000000002")
+        self.catalog = Catalog.load(ROOT / "data" / "catalog.csv")
 
-    def titles(self, n=3):
-        return [b.title for b in self.catalog.similar(self.alpha, n)]
+    def title(self, query):
+        book = self.catalog.find_title(query)
+        return book.title if book else None
 
-    def test_ranked_by_overlap_with_deterministic_ties(self):
-        # topics: Alpha {sf, space, robots}. Bravo is identical (1.0); Charlie and Foxtrot share
-        # {sf, space} (2/3, tied, so title order); Delta shares {space, robots} (2/4); Echo nothing.
-        self.assertEqual(self.titles(5), ["Bravo", "Charlie", "Foxtrot", "Delta"])
+    def test_loose_titles(self):
+        self.assertEqual(self.title("dune"), "Dune")
+        self.assertEqual(self.title("DUNE!"), "Dune")
+        self.assertEqual(self.title("the martian"), "The Martian")
+        self.assertEqual(self.title("martian"), "The Martian")
+        self.assertEqual(self.title("hitchhikers guide"), "The Hitchhiker's Guide to the Galaxy")
+        self.assertEqual(self.title("a brief history of time"), "A Brief History of Time")
+        self.assertEqual(self.title("i robot"), "I Robot")
 
-    def test_never_returns_itself_or_unrelated_books(self):
-        titles = self.titles(10)
-        self.assertNotIn("Alpha", titles)
-        self.assertNotIn("Echo", titles)
+    def test_misspelling_and_isbn(self):
+        self.assertEqual(self.title("frankenstien"), "Frankenstein")
+        self.assertEqual(self.title("9780441172719"), "Dune")
+        self.assertEqual(self.title("0-441-17271-7"), "Dune")                           # ISBN-10 with hyphens
 
-    def test_limit_and_stability(self):
-        self.assertEqual(self.titles(2), ["Bravo", "Charlie"])
-        self.assertEqual(self.catalog.similar(self.alpha, 0), [])
-        self.assertEqual(self.titles(5), self.titles(5))
+    def test_no_match(self):
+        for query in ("", "   ", "the bathroom", "zzzzzz", "xyz", "i", "a"):
+            self.assertIsNone(self.catalog.find_title(query), query)
 
-    def test_sample_catalogue_neighbours(self):
-        catalog = Catalog.load(ROOT / "data" / "catalog.csv")
-        similar = [b.title for b in catalog.similar(catalog.lookup("9780553294385"), 3)]   # I, Robot
-        self.assertEqual(len(similar), 3)
-        self.assertNotIn("I Robot", similar)
-        self.assertTrue(all(catalog.lookup(b.isbn13) for b in catalog.similar(catalog.lookup(HITCH))))
+    def test_an_exact_title_beats_a_longer_one_and_two_letters_is_too_little_to_go_on(self):
+        catalog = Catalog([Book("9780000000002", "Dune Messiah"), Book("9780000000019", "Dune")])
+        self.assertEqual(catalog.find_title("dune").title, "Dune")
+        self.assertEqual(catalog.find_title("dune messiah").title, "Dune Messiah")
+        self.assertIsNone(catalog.find_title("du"))
+
+    def test_the_shortest_title_containing_the_words_wins(self):
+        catalog = Catalog([Book("9780000000002", "The Long Way Home Again"), Book("9780000000019", "The Long Way Home")])
+        self.assertEqual(catalog.find_title("long way").title, "The Long Way Home")
 
 
 class OpenLibraryTest(unittest.TestCase):
@@ -177,11 +214,22 @@ class BookFinderTest(unittest.TestCase):
             urlopen.assert_not_called()
             self.assertFalse(BookFinder(self.catalog, online_fallback=True).find(unknown).found_in_catalog)
 
-    def test_invalid_isbn_is_none_and_similar_to(self):
+    def test_invalid_isbn_is_none_and_recommend(self):
         finder = BookFinder(self.catalog, online_fallback=False)
         self.assertIsNone(finder.find("not an isbn"))
-        self.assertEqual(finder.similar_to("9780140449136"), [])          # not in the catalogue
-        self.assertEqual(len(finder.similar_to("0345391802")), 3)         # ISBN-10 accepted
+        self.assertEqual(finder.recommend("9780140449136"), [])          # not in the catalogue
+        picks = finder.recommend("0345391802")                            # ISBN-10 accepted
+        self.assertGreaterEqual(len(picks), 1)
+        self.assertNotIn(HITCH, [p.book.isbn13 for p in picks])
+
+    def test_locate_and_reload_go_through_the_graph(self):
+        finder = BookFinder(self.catalog, online_fallback=False, graph=sample_graph())
+        self.assertEqual(finder.locate(HITCH).shelf, "2-SF-A")
+        place, reason = finder.locate_with_reason("9780140449136")
+        self.assertIsNone(place)
+        self.assertIn("not in the catalogue", reason)
+        with self.assertRaises(RuntimeError):                              # a finder over a bare catalogue has no files
+            BookFinder(self.catalog, online_fallback=False).reload()       # to re-read
 
 
 if __name__ == "__main__":

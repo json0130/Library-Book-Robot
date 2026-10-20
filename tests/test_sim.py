@@ -104,6 +104,67 @@ class SimTypingTest(unittest.TestCase):
         self.assertEqual(sim.app.dialogue.state, "idle")
 
 
+class WhereAndGuideCommandsTest(unittest.TestCase):
+    def setUp(self):
+        logging.disable(logging.INFO)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def test_where_finds_a_book_by_a_loosely_typed_title(self):
+        sim, _ = make_sim()
+        run(sim, "where dune")
+        self.assertIn("Dune is on shelf 2-SF-B, in the Science Fiction section on level 2", sim.said[-1])
+        run(sim, "where hitchhikers")
+        self.assertIn("The Hitchhiker's Guide to the Galaxy is on shelf 2-SF-A", sim.said[-1])
+
+    def test_where_takes_an_isbn_and_says_when_nothing_matches(self):
+        sim, out = make_sim()
+        run(sim, "where 9780345539434")
+        self.assertIn("Cosmos is on shelf 3-SCI-A", sim.said[-1])
+        before = len(sim.said)
+        run(sim, "where nonexistent thing")
+        self.assertEqual(len(sim.said), before)
+        self.assertIn("no book in the catalogue matches 'nonexistent thing'", out.getvalue())
+
+    def test_where_alone_is_a_usage_hint_not_a_crash(self):
+        sim, out = make_sim()
+        run(sim, "where")
+        self.assertIn("usage problem with `where`", out.getvalue())
+
+    def test_guide_after_where_publishes_the_pose_and_the_fake_base_logs_it(self):
+        sim, _ = make_sim()
+        run(sim, "where dune", "guide")
+        self.assertIn("Okay, follow me to Dune", sim.said[-1])
+        self.assertIn(("navigate", {"x": 1.0, "y": 4.0, "yaw": 1.57}), sim.app.actuators.nav.esp32.sent)
+
+    def test_the_full_flow_scan_recommend_guide(self):
+        sim, _ = make_sim()
+        run(sim, "book 9780345539434", "recommend", "guide")
+        self.assertIn("A Brief History of Time", sim.said[-2])
+        self.assertIn("follow me to A Brief History of Time", sim.said[-1])
+        self.assertIn(("navigate", {"x": 4.0, "y": 1.0, "yaw": 3.14}), sim.app.actuators.nav.esp32.sent)
+
+    def test_guide_with_nowhere_to_go(self):
+        sim, _ = make_sim()
+        run(sim, "guide")
+        self.assertIn("Ask me where a book is", sim.said[-1])
+        self.assertNotIn("navigate", [cmd for cmd, _ in sim.app.actuators.nav.esp32.sent])
+
+    def test_reload_reads_the_data_files_again_and_survives_a_broken_file(self):
+        sim, out = make_sim()
+        run(sim, "reload")
+        self.assertIn("reloaded: 12 books, 7 shelves, 4 links", out.getvalue())
+        sim.app.finder.graph._sources = ("/nonexistent/catalog.csv", None, None, None)         # as if the file were broken
+        run(sim, "reload", "where dune")
+        self.assertIn("could not reload, keeping the old data", out.getvalue())
+        self.assertIn("Dune is on shelf 2-SF-B", sim.said[-1])                                  # the old data still works
+
+    def test_the_help_lists_the_new_commands(self):
+        sim, out = make_sim()
+        run(sim, "help")
+        self.assertIn("where <title or isbn>", out.getvalue())
+        self.assertIn("guide ", out.getvalue())
+
+
 class VoiceFailureTest(unittest.TestCase):
     def setUp(self):
         self.style = StyleVector(voice="normal", volume=0.8)

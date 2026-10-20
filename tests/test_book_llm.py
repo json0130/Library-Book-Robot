@@ -3,13 +3,14 @@ import unittest
 
 from robot.config import ROOT
 from robot.services.book_llm import (GROUNDING, HISTORY_EXCHANGES, BookAssistant, clean, explain_request,
-                                     mentions_any, recommend_request)
+                                     mentions_any, recommend_request, why_text)
 from robot.services.books import Catalog
 from robot.services.llm import LIBRARY_SYSTEM_PROMPT, LLMError
+from tests.helpers.sample import sample_graph
 
 CATALOG = Catalog.load(ROOT / "data" / "catalog.csv")
 MARTIAN = CATALOG.lookup("9780553418026")
-CANDIDATES = CATALOG.similar(MARTIAN, 3)
+CANDIDATES = sample_graph().recommend(MARTIAN.isbn13, 3)        # Recommendation objects: book, score, reasons
 
 
 class FakeClient:
@@ -34,11 +35,49 @@ class PromptTest(unittest.TestCase):
             self.assertIn(part, text)
         self.assertNotIn("Level 2", text)                      # shelf and slot are never the model's business
 
-    def test_recommend_prompt_lists_the_candidates(self):
+    def test_recommend_prompt_lists_the_candidates_with_the_graphs_reasons(self):
         text = recommend_request(MARTIAN, CANDIDATES)
         for c in CANDIDATES:
-            self.assertIn(f"Title: {c.title}", text)
+            self.assertIn(f"Title: {c.book.title}", text)
+            self.assertIn("Why it fits: " + "; ".join(c.reasons), text)             # the FULL list
         self.assertIn("choose only from these", text)
+        self.assertIn("both about", text)                           # a real reason from the graph, not boilerplate
+        self.assertNotRegex(text, r"\b[01]\.\d")                       # the model gets reasons, never a numeric score
+
+    def test_each_candidate_also_carries_the_one_reason_to_speak_and_the_model_is_told_to_use_one(self):
+        text = recommend_request(MARTIAN, CANDIDATES)
+        for c in CANDIDATES:
+            self.assertIn(f"Best single reason to give: {c.because}", text)
+        self.assertIn("ONE reason for each", text)
+        self.assertIn("Do not list several topics", text)
+        self.assertIn("do not mention descriptions", text)
+        self.assertEqual(text.count("Best single reason to give:"), len(CANDIDATES))
+        self.assertEqual(text.count("Why it fits:"), len(CANDIDATES))                       # the full list is still there
+
+    def test_a_candidate_with_no_spoken_reason_gets_a_plain_one(self):
+        class Rec:
+            book = MARTIAN
+            reasons = ["x"]
+            because = ""
+        self.assertIn("Best single reason to give: it is similar", recommend_request(MARTIAN, [Rec]))
+
+    def test_the_model_gets_the_full_reason_list_never_empty(self):
+        class Rec:
+            book = MARTIAN
+            reasons = ["a", "b", "c", "d", "e"]
+        self.assertEqual(why_text(Rec), "a; b; c; d; e")
+        Rec.reasons = []
+        self.assertEqual(why_text(Rec), "similar subjects")
+
+    def test_no_raw_call_number_reaches_the_model(self):
+        for rec in sample_graph().recommend("9780345539434", 5) + sample_graph().recommend("9780553294385", 5):
+            text = why_text(rec)
+            for book in sample_graph().catalog.books:
+                if book.call_number:
+                    self.assertNotIn(book.call_number, text)
+        prompt = recommend_request(CATALOG.lookup("9780345539434"), sample_graph().recommend("9780345539434", 3))
+        self.assertNotIn("QB", prompt)
+        self.assertNotIn("S24", prompt)
 
     def test_system_prompt_is_the_library_robot_plus_grounding(self):
         system = BookAssistant(FakeClient()).system
@@ -51,10 +90,34 @@ class PromptTest(unittest.TestCase):
                          "Dune is long. It has worms. Spice!")
         self.assertEqual(clean("   \n "), "")
 
+    def test_a_title_may_lose_its_hyphens_and_punctuation_but_not_its_words(self):
+        class B:
+            def __init__(self, title):
+                self.title = title
+        orwell, dune, martian = B("Nineteen Eighty-Four"), B("Dune"), B("The Martian")
+        for said in ("I'd suggest Nineteen Eighty Four by George Orwell.", "try NINETEEN EIGHTY-FOUR!",
+                     "How about \"Nineteen Eighty-Four\"?", "nineteen   eighty\nfour is great"):
+            self.assertTrue(mentions_any(said, [orwell]), said)
+        self.assertTrue(mentions_any("You might like Dune.", [dune]))
+        self.assertTrue(mentions_any("the martian is fun", [martian]))
+        for said in ("Nineteen Eighty is a year", "Dunes of sand", "Dunegeon", "Eighty Four Nineteen",
+                     "I recommend War and Peace", ""):
+            self.assertFalse(mentions_any(said, [orwell, dune, martian]), said)
+
+    def test_a_reply_naming_the_book_without_its_hyphen_is_accepted_and_a_wrong_one_still_discarded(self):
+        orwell = CATALOG.find_title("nineteen eighty four")
+        cand = sample_graph().recommend(CATALOG.find_title("frankenstein").isbn13, 1)
+        self.assertEqual(cand[0].book.title, orwell.title)
+        said = "I'd suggest Nineteen Eighty Four by George Orwell, it warns about unchecked power."
+        self.assertEqual(run(BookAssistant(FakeClient([said])).recommend(CATALOG.find_title("frankenstein"), cand)), said)
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            self.assertIsNone(run(BookAssistant(FakeClient(["I'd suggest War and Peace."])).recommend(
+                CATALOG.find_title("frankenstein"), cand)))
+
     def test_mentions_any(self):
-        titles = [c.title for c in CANDIDATES]
-        self.assertTrue(mentions_any(f"you may like {titles[0].upper()}", CANDIDATES))
-        self.assertFalse(mentions_any("read War and Peace", CANDIDATES))
+        books = [c.book for c in CANDIDATES]
+        self.assertTrue(mentions_any(f"you may like {books[0].title.upper()}", books))
+        self.assertFalse(mentions_any("read War and Peace", books))
 
 
 class AssistantTest(unittest.TestCase):
@@ -66,7 +129,7 @@ class AssistantTest(unittest.TestCase):
         self.assertIn("Summary: An astronaut", user["content"])
 
     def test_recommend_must_name_a_candidate(self):
-        good = f"I'd suggest {CANDIDATES[0].title}, it is similar."
+        good = f"I'd suggest {CANDIDATES[0].book.title}, it is similar."
         self.assertEqual(run(BookAssistant(FakeClient([good])).recommend(MARTIAN, CANDIDATES)), good)
         with self.assertLogs("robot.book_llm", level="WARNING"):
             self.assertIsNone(run(BookAssistant(FakeClient(["Try War and Peace."])).recommend(MARTIAN, CANDIDATES)))

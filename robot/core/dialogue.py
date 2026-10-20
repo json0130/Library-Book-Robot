@@ -12,6 +12,8 @@ States and the events that move between them:
     closing     --visitor speaks-->                   invited      (they want something else)
     offering/closing --anything else about the book-->  stays (answered by the LLM from the catalogue entry)
     closing     --visitor asks for another book-->    invited
+    idle/invited/offering/closing --"where is <title>"-->  stays (says level, section and shelf; idle -> invited)
+    idle/invited/offering/closing --"guide me"-->           stays (publishes NavigationRequested to the shelf)
     any         --visitor says bye/thanks-->          closing
     any         --everyone left (group_size 0)-->     idle
 
@@ -23,29 +25,38 @@ back, and a new person is. When it can't (typed context, head count only), the h
 Every action reads the current StyleVector, so the same step is whispered and printed in a
 quiet zone but spoken aloud in a common area (Actuators.deliver picks the channels).
 
-The three choices are grounded in the catalogue: return gives the shelf and storage slot (facts,
-never the model's words), explain and recommend ask the LLM (services/book_llm.py) to put the
-catalogue record, or up to three similar catalogue books, into speech. Once a book is scanned, it stays
-the topic until the visitor leaves or scans another: a follow-up (return/explain/recommend again, or a
-free question such as "who wrote it?") is about that book and goes to the LLM with the conversation so far. If there is no LLM, the
-server is down or the answer is unusable, they use the plain catalogue text instead. A book that
-is not in the catalogue never goes to the model.
+The three choices are grounded in the catalogue: return gives the storage slot and where the book belongs
+(level, section and shelf: facts, never the model's words), explain and recommend ask the LLM
+(services/book_llm.py) to put the catalogue record, or up to three books the book graph found similar
+(with its reasons why), into speech. Once a book is scanned, it stays the topic until the visitor leaves or
+scans another: a follow-up (return/explain/recommend again, or a free question such as "who wrote it?") is
+about that book and goes to the LLM with the conversation so far. If there is no LLM, the server is down or
+the answer is unusable, they use the plain catalogue text instead. A book that is not in the catalogue never
+goes to the model.
+
+After a return or a recommendation the robot offers to guide the visitor to the shelf. "Guide me" (or yes)
+publishes NavigationRequested with the shelf's map pose; "where is <title>" says where a book lives and
+offers the same. A shelf without a map pose is described but not driven to.
 """
 
 from __future__ import annotations
 
 import difflib
 import logging
+import re
 import time
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
 from robot.persona import NAME
-from robot.events import (BookPlaced, BookScanned, ContextChanged, ReplySentence, ScanFailed,
+from robot.events import (BookPlaced, BookScanned, ContextChanged, NavigationRequested, ReplySentence, ScanFailed,
                           UserUtterance)
+from robot.services.book_graph import Location
 
 log = logging.getLogger("robot.dialogue")
 
 STATES = ("idle", "invited", "book_placed", "scanning", "offering", "acting", "closing")
+FREE_STATES = ("idle", "invited", "offering", "closing")       # the visitor can ask where a book is, or to be guided
 GOODBYES = ("bye", "goodbye", "thanks", "thank you", "that's all", "thats all", "that is all", "no thanks",
             "that's everything", "thats everything", "that is everything", "that's it", "thats it",
             "nothing else", "nothing more", "no more", "i'm good", "im good", "i am good", "i'm done", "im done",
@@ -61,6 +72,16 @@ CHOICE_WORDS = {                    # what the visitor may say for each choice
     "recommend": ("recommend", "similar", "suggest", "something like", "related",
                   "other books", "more books", "read next", "what else"),
 }
+GUIDE_WORDS = ("guide me", "guide us", "take me to it", "take me there", "take us there", "lead me", "lead us",
+               "walk me", "show me the way", "follow you")
+WHERE_PATTERNS = (                  # (regex, True if the visitor also asks to be taken there); the title is `q`
+    (r"\bwhere (?:does|do|would|should) (?P<q>.+?) (?:go|belong|live|sit)\b", False),
+    (r"\b(?:guide|take|lead|walk) (?:me|us) to (?P<q>.+)", True),
+    (r"\bshow me where (?P<q>.+?) is\b", False),
+    (r"\bwhere(?:'s| is| are| can i find| can i get| do i find| would i find| might i find| do you keep)\s+(?P<q>.+)", False),
+    (r"\b(?:find|locate|look for|looking for|search for)\s+(?:me\s+)?(?P<q>.+)", False),
+)
+THIS_BOOK = ("it", "this", "this book", "that", "that book", "this one", "that one", "here")
 ANOTHER_BOOK_WORDS = ("another book", "next book", "different book", "new book", "one more book",
                       "scan another", "another one")
 YES_WORDS = ("yes", "yeah", "yep", "yup", "sure", "please", "ok", "okay")
@@ -122,6 +143,23 @@ def is_greeting(text: str) -> bool:
     return 0 < len(words) <= 3 and (words[0] in GREETINGS or " ".join(words[:2]) in GREETINGS)
 
 
+def where_query(text: str) -> Optional[tuple]:
+    """(what the visitor is asking about, True if they also want to be taken there) for "where is Dune?",
+    "find me the hitchhiker's guide", "guide me to cosmos"; None if it isn't that kind of question."""
+    for pattern, guide in WHERE_PATTERNS:
+        if match := re.search(pattern, text):
+            query = re.sub(r"[?!.,]+", " ", match.group("q"))
+            query = re.sub(r"\b(?:please|for me|located|now|right now|exactly|book|novel)\b", " ", query)
+            query = re.sub(r"^\s*(?:the|a|an|my)\s+(?=\w+\s+\w+)", "", " ".join(query.split()))
+            if query.strip():
+                return query.strip(), guide
+    return None
+
+
+def is_guide(text: str) -> bool:
+    return any(w in text for w in GUIDE_WORDS)
+
+
 def is_yes(text: str) -> bool:
     """A short yes ("yes", "yeah please", "ok sure"): not "sure, who wrote it?"."""
     words = text.replace(",", " ").strip(" .!?").split()
@@ -130,6 +168,23 @@ def is_yes(text: str) -> bool:
 
 def join_names(items: list) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+@dataclass(frozen=True)
+class GuideTarget:
+    """Where "guide me" goes: a book and the shelf it lives on."""
+    isbn: str
+    title: str
+    location: Optional[Location]
+
+    @property
+    def can_drive(self) -> bool:
+        return self.location is not None and self.location.has_pose
+
+
+def location_of(book: BookScanned) -> Location:
+    """The Location the scanner put on a BookScanned (any part may be None)."""
+    return Location(book.isbn, book.shelf, book.section, book.floor, book.zone, book.map_x, book.map_y, book.map_yaw)
 
 
 class Dialogue:
@@ -148,6 +203,8 @@ class Dialogue:
         self.last_greeting: Optional[float] = None
         self.state = "idle"
         self.book = None
+        self.guide_target: Optional[GuideTarget] = None     # set by a return, a recommendation or "where is X"
+        self.awaiting_guide = False                         # the last thing said offered to guide them
         self.transitions: list[tuple[str, str, str]] = []    # (from, trigger, to)
 
     def attach(self, bus) -> None:
@@ -168,6 +225,7 @@ class Dialogue:
     async def on_context(self, event: ContextChanged) -> None:
         if event.group_size <= 0:
             self.greeted = False
+            self.guide_target, self.awaiting_guide = None, False
             if self.state != "idle":
                 self.book = None
                 if self.assistant is not None:
@@ -191,9 +249,12 @@ class Dialogue:
         text = event.text.strip().lower()
         if self.assistant is not None:
             self.assistant.hear(event.text.strip())
+        was_awaiting, self.awaiting_guide = self.awaiting_guide, False
         if self.state != "idle" and is_done(text, self.state):
             self._go("closing", "visitor said goodbye")
             await self.say("You're welcome. Enjoy your reading!", "happy")
+            return
+        if self.state in FREE_STATES and await self.navigation_request(text, was_awaiting):
             return
         if self.state == "idle":
             self._go("invited", "visitor spoke")
@@ -207,6 +268,79 @@ class Dialogue:
             await self.talk_without_book(text, event.text.strip(), "Place a book on the pad and I'll help with it.")
         else:                                    # book_placed / scanning / acting: busy
             await self.say("One moment, please.", "neutral")
+
+    # ---- where is it / guide me ----
+    async def navigation_request(self, text: str, was_awaiting: bool) -> bool:
+        """"Where is Dune?", "guide me", or yes to the offer to guide: handled here, True if so. Anything else
+        (including "where is the bathroom", which names no book) is left to the rest of the dialogue."""
+        asked = where_query(text)
+        if asked is not None:
+            query, take_me = asked
+            book = self.find_book(query)
+            if book is None:
+                return False
+            if self.state == "idle":
+                self._go("invited", "visitor asked where")
+            self.guide_target = self.target_for(book.isbn13, book.title)
+            if take_me:
+                await self.guide()
+            else:
+                await self.tell_where(self.guide_target)
+            return True
+        if is_guide(text) or (was_awaiting and is_yes(text)):
+            if self.state == "idle":
+                self._go("invited", "visitor asked to be guided")
+            await self.guide()
+            return True
+        return False
+
+    def find_book(self, query: str):
+        """The catalogue book a "where is ..." means: a title (loosely spelt), an ISBN, or "this book"."""
+        if query in THIS_BOOK:
+            return self.catalogue_record(self.book)
+        return self.finder.catalog.find_title(query) if self.finder is not None else None
+
+    def target_for(self, isbn: str, title: str) -> GuideTarget:
+        return GuideTarget(isbn, title, self.finder.locate(isbn) if self.finder is not None else None)
+
+    async def tell_where(self, target: GuideTarget) -> None:
+        where = target.location.describe() if target.location else ""
+        if not where:
+            reason = self.finder.locate_with_reason(target.isbn)[1] if self.finder is not None else ""
+            log.info("[dialogue] no location for %s: %s", target.isbn, reason)
+            await self.say(f"I don't know where {target.title} is shelved yet. The help desk can tell you.", "neutral")
+            return
+        offer = " Would you like me to guide you there?" if target.can_drive else ""
+        self.awaiting_guide = target.can_drive
+        await self.say(f"{target.title} is {where}.{offer}", "happy")
+
+    async def guide(self) -> None:
+        """Lead the visitor to the current target: say where, and publish NavigationRequested with the pose."""
+        target = self.guide_target
+        if target is None and self.book is not None and self.book.found_in_catalog:
+            target = GuideTarget(self.book.isbn, self.book.title or "that book", location_of(self.book))
+        if target is None:
+            await self.say("I'm not sure where to take you yet. Ask me where a book is, or return a book or ask "
+                           "for a recommendation first.", "neutral")
+            return
+        where = target.location.describe() if target.location else ""
+        if not target.can_drive:
+            tail = f" It's {where}." if where else " The help desk can tell you where it is."
+            await self.say(f"I don't have a map position for {target.title} yet, so I can't take you there.{tail}", "neutral")
+            return
+        loc = target.location
+        await self.say(f"Okay, follow me to {target.title}. It's {where}.", "happy")
+        if self.publish is not None:
+            await self.publish(NavigationRequested(target.isbn, target.title, loc.map_x, loc.map_y, loc.map_yaw,
+                                                   shelf=loc.shelf, section=loc.section, floor=loc.floor, zone=loc.zone))
+
+    def follow_up(self, action: str) -> str:
+        """What the robot says after an action: after a return or a recommendation, an offer to guide."""
+        target = self.guide_target
+        if action in ("return", "recommend") and target is not None and target.can_drive:
+            self.awaiting_guide = True
+            return f"Would you like me to guide you to {target.title}, or is there anything else I can help with?"
+        return "Is there anything else I can help with?"
 
     async def talk_without_book(self, text: str, said: str, nudge: str) -> None:
         """The visitor spoke with no book on the pad. A plain greeting gets the nudge; anything else goes to
@@ -229,7 +363,7 @@ class Dialogue:
             self._go("acting", f"chose {action}")
             await self.act(action)
             self._go("closing", f"{action} done")
-            await self.say("Is there anything else I can help with?", "neutral")
+            await self.say(self.follow_up(action), "neutral")
             return
         if self.state == "closing" and (any(w in text for w in ANOTHER_BOOK_WORDS) or is_yes(text)):
             self._go("invited", "visitor wants more")
@@ -275,6 +409,7 @@ class Dialogue:
         if self.state != "scanning":
             return
         had_book, self.book = self.book is not None, event
+        self.guide_target = None
         if self.assistant is not None and had_book:
             self.assistant.reset()                  # another book starts a new conversation; the chat before
                                                     # the first book of a visit carries on
@@ -291,6 +426,7 @@ class Dialogue:
             return
         log.info("[dialogue] scan failed: %s", event.reason)
         self.book = None
+        self.guide_target = None
         if self.assistant is not None:
             self.assistant.reset()
         self.out.lights.spotlight(False)
@@ -338,8 +474,10 @@ class Dialogue:
                 parts.append(f"I've put it in storage slot {book.slot}.")
             except ValueError:
                 log.warning("catalogue slot %s is outside the storage ring", book.slot)
-        if book.shelf:
-            parts.append(f"It belongs on shelf {book.shelf}.")
+        place = location_of(book)
+        if place.describe():
+            parts.append(f"It belongs {place.describe()}.")
+        self.guide_target = GuideTarget(book.isbn, title, place)
         await self.say(" ".join(parts), "happy")
 
     async def act_recommend(self, book, title: str) -> None:
@@ -347,17 +485,41 @@ class Dialogue:
             await self.say(f"I can only recommend from books in our catalogue, and {title} isn't in it.",
                            "neutral")
             return
-        similar = self.finder.similar_to(book.isbn, 3)
-        if not similar:
+        picks = self.finder.recommend(book.isbn, self.get_style().recommendations)
+        if not picks:
             await self.say(f"I couldn't find books like {title} in the catalogue.", "neutral")
             return
+        for pick in picks:                                  # the full reasons go to the log (and to the LLM below)
+            log.info("[dialogue] candidate %s (%.2f): %s", pick.book.title, pick.total, "; ".join(pick.reasons))
         if self.assistant is not None:
-            spoken = await self.assistant.recommend(self.finder.catalog.lookup(book.isbn), similar)
+            spoken = await self.assistant.recommend(self.finder.catalog.lookup(book.isbn), picks)
             if spoken:
+                best = self.first_mentioned(spoken, picks)
+                self.guide_target = self.target_for(best.book.isbn13, best.book.title)
                 await self.say(spoken, "happy")
                 return
-        names = [f"{b.title} by {b.author}" if b.author else b.title for b in similar]
-        await self.say(f"If you like {title}, you might enjoy {join_names(names)}.", "happy")
+        best = picks[0]
+        self.guide_target = self.target_for(best.book.isbn13, best.book.title)
+        await self.say(self.recommendation_text(title, picks), "happy")
+
+    @staticmethod
+    def recommendation_text(title: str, picks: list) -> str:
+        """The catalogue wording of a recommendation, with ONE reason (the top pick's), never a list of topics:
+        "If you like Cosmos, you might enjoy A Brief History of Time by Stephen Hawking because the librarians
+        suggest it after Cosmos." With several picks they are named first and the reason goes to the top one."""
+        names = [f"{p.book.title} by {p.book.author}" if p.book.author else p.book.title for p in picks]
+        best = picks[0]
+        because = best.because or f"because it's similar to {title}"
+        if len(picks) == 1:
+            return f"If you like {title}, you might enjoy {names[0]} {because}."
+        return f"If you like {title}, you might enjoy {join_names(names)}. I'd start with {best.book.title} {because}."
+
+    @staticmethod
+    def first_mentioned(spoken: str, picks: list):
+        """The pick whose title comes first in the spoken recommendation (the LLM has to name one of them)."""
+        low = spoken.lower()
+        found = [(low.index(p.book.title.lower()), i, p) for i, p in enumerate(picks) if p.book.title.lower() in low]
+        return min(found)[2] if found else picks[0]
 
     async def say(self, text: str, tag: Optional[str] = None) -> None:
         """Deliver a message in the current style and announce it for the face."""

@@ -38,6 +38,7 @@ ESP32 to Jetson, unsolicited events (no `id`):
 | `ring` | `slot` (0..7) | `actuation/storage_ring.py` |
 | `print` | `text` (up to 500 chars) | `actuation/printer.py` |
 | `speed_limit` | `mps` (metres per second) | `actuation/navigation.py` |
+| `navigate` | `x`, `y` (metres), `yaw` (radians): a pose on the current floor's map, e.g. a shelf | `actuation/navigation.py` |
 | `ping` | none | driver health check, replies `{"id": n, "ok": true}` |
 
 The Jetson sends one command at a time and waits up to 1 s for the reply; three missed replies mark the link as down. The ESP32 stops the base motors if it hears nothing (not even `ping`) for 2 s.

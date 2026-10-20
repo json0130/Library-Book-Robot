@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 
+DEFAULT_SLOTS = 8                # slots 0..7; tools/catalog_check.py checks the catalogue against this
+
+
 class StorageRing:
-    def __init__(self, esp32, slots: int = 8):
+    def __init__(self, esp32, slots: int = DEFAULT_SLOTS):
         self.esp32 = esp32
         self.slots = slots
 

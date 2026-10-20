@@ -3,6 +3,8 @@
 #   speech    spoken through the speaker       screen     text on the display
 #   gaze      eye contact / looking at the book spotlight  light on the book or pad
 #   print     a printed slip
+# recommendations: how many books a recommendation names. One in a quiet place (the top pick only), up to three
+# in a common area.
 # Fields missing from an entry are taken from `default`.
 
 default:                 # safe fallback for any combination not listed: quiet and unobtrusive
@@ -16,8 +18,10 @@ default:                 # safe fallback for any combination not listed: quiet a
   screen_layout: split
   proactive: false
   speed_limit: 0.3       # m/s
+  recommendations: 1
 
 quiet_alone:
+  recommendations: 1
   voice: whisper
   volume: 0.35
   channels: [gaze, spotlight, print]
@@ -30,6 +34,7 @@ quiet_alone:
   speed_limit: 0.3
 
 quiet_group:
+  recommendations: 1
   voice: whisper
   volume: 0.35
   channels: [screen, spotlight]
@@ -42,6 +47,7 @@ quiet_group:
   speed_limit: 0.3
 
 common_alone:
+  recommendations: 3
   voice: normal
   volume: 0.8
   channels: [speech, screen]
@@ -54,6 +60,7 @@ common_alone:
   speed_limit: 0.6
 
 common_group:
+  recommendations: 3
   voice: normal
   volume: 1.0                # louder, to reach everyone
   channels: [speech, screen]
@@ -67,6 +74,7 @@ common_group:
 
 # Baseline condition for the study: one behaviour everywhere, context ignored.
 fixed:
+  recommendations: 3
   voice: normal
   volume: 0.8
   channels: [speech, screen]

@@ -88,3 +88,31 @@ class StyleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecommendationCountTest(unittest.TestCase):
+    """How many books a recommendation names is part of the style: one in a quiet place, up to three out loud."""
+
+    def setUp(self):
+        self.policy = StylePolicy(load_config().styles)
+
+    def count(self, zone, social):
+        return self.policy.style_for(derive_context(zone, 1 if social == "alone" else 3)).recommendations
+
+    def test_quiet_names_one_and_common_names_three(self):
+        self.assertEqual(self.count("quiet", "alone"), 1)
+        self.assertEqual(self.count("quiet", "group"), 1)
+        self.assertEqual(self.count("common", "alone"), 3)
+        self.assertEqual(self.count("common", "group"), 3)
+        self.assertEqual(self.policy.style_for(None, fixed=True).recommendations, 3)      # the study's baseline speaks aloud
+
+    def test_the_default_is_the_quiet_one_and_it_shows_in_the_summary(self):
+        self.assertEqual(StyleVector().recommendations, 1)
+        self.assertEqual(StylePolicy({}).style_for(None).recommendations, 1)
+        self.assertIn("recs=3", self.policy.style_for(derive_context("common", 1)).summary())
+
+    def test_entries_may_override_and_bad_values_are_rejected(self):
+        self.assertEqual(StylePolicy({"quiet_alone": {"recommendations": 2}}).styles["quiet_alone"].recommendations, 2)
+        for bad in (0, 6, "three", 2.5, None):
+            with self.assertRaises(ValueError, msg=bad):
+                StylePolicy({"quiet_alone": {"recommendations": bad}})

@@ -16,8 +16,23 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
 
 
+SIMILARITY_DEFAULTS = {             # see services/book_graph.py for what each component measures
+    "topics": 0.30,                 # shared topics, IDF-weighted (a rare topic counts for more)
+    "broader": 0.10,                # topics related through a broader topic
+    "author": 0.12,
+    "series": 0.15,                 # same series (the next book is always ranked first)
+    "call_number": 0.08,            # shared prefix of the Dewey / LC call numbers
+    "curated": 0.10,                # librarian_pick and related rows in curated_links.csv
+    "text": 0.15,                   # TF-IDF similarity of summary and subjects
+    "min_score": 0.08,              # books scoring less than this (0..1) are not recommended
+    "general_topics": 0.4,          # a general topic (one with a narrower child in topics.yaml) counts for this fraction
+}
+
 BOOKS_DEFAULTS = {
     "catalog_path": "data/catalog.csv",
+    "topics_path": "data/topics.yaml",
+    "shelves_path": "data/shelves.csv",
+    "links_path": "data/curated_links.csv",
     "online_fallback": True,
     "cache_dir": "data/cache",
     "scan_timeout_s": 5.0,
@@ -37,6 +52,7 @@ class Config:
         """The `books:` section with defaults filled in."""
         merged = dict(BOOKS_DEFAULTS)
         merged.update(self.robot.get("books") or {})
+        merged["similarity"] = {**SIMILARITY_DEFAULTS, **((self.robot.get("books") or {}).get("similarity") or {})}
         return merged
 
     @property

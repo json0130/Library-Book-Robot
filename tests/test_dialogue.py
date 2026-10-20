@@ -13,7 +13,11 @@ from robot.services.book_llm import BookAssistant
 from robot.services.llm import LLMError
 from robot.core.dialogue import OFFER, SCAN_FAILED_MESSAGE, choice_from
 from robot.events import (BookPlaced, BookScanned, ContextChanged, EmotionDetected, ExpressionRequested,
-                          ReplySentence, ScanFailed, StyleChanged, UserUtterance)
+                          NavigationRequested, ReplySentence, ScanFailed, StyleChanged, UserUtterance)
+from robot.services.book_graph import BookGraph, Shelf
+from robot.services.books import Book, BookFinder, Catalog
+from robot.services.topics import TopicVocabulary
+from robot.config import ROOT
 
 HITCH, MARTIAN, CLEAN_CODE = "9780345391803", "9780553418026", "9780132350884"
 
@@ -44,12 +48,12 @@ class StubClient:
         return self.replies.pop(0)
 
 
-def make_app(log_dir=None, llm=None):
+def make_app(log_dir=None, llm=None, finder=None):
     cfg = load_config()
     cfg.robot.setdefault("books", {})["online_fallback"] = False      # tests never touch the network
     assistant = BookAssistant(llm) if llm is not None else None
     app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
-                    assistant=assistant)
+                    assistant=assistant, finder=finder)
     if log_dir is not None:
         app.session_log = SessionLog(log_dir, "test")
     return app
@@ -167,8 +171,11 @@ def scanned(isbn):
     """A BookScanned for a catalogue book, as the scanner would publish it."""
     app = make_app()
     book = app.finder.find(isbn)
+    place = app.finder.locate(isbn)
     return BookScanned(isbn=isbn, title=book.title, author=book.author, summary=book.summary,
-                       shelf=book.shelf, slot=book.slot, found_in_catalog=True)
+                       shelf=book.shelf, slot=book.slot, found_in_catalog=True, call_number=book.call_number,
+                       section=place.section, floor=place.floor, zone=place.zone,
+                       map_x=place.map_x, map_y=place.map_y, map_yaw=place.map_yaw)
 
 
 class BookChoicesTest(unittest.TestCase):
@@ -205,7 +212,7 @@ class BookChoicesTest(unittest.TestCase):
         run(app, UserUtterance("return"))
         said = " ".join(app.said)
         self.assertIn("storage slot 4", said)
-        self.assertIn("shelf Level 2 SF-WEI", said)
+        self.assertIn("It belongs on shelf 2-SF-C, in the Science Fiction section on level 2.", said)
         self.assertIn(("ring", {"slot": 4}), app.actuators.ring.esp32.sent)
         self.assertEqual(app.dialogue.state, "closing")
 
@@ -232,11 +239,13 @@ class BookChoicesTest(unittest.TestCase):
         run(app, UserUtterance("recommend"))
         said = app.said[-2]
         self.assertIn("If you like The Martian", said)
-        expected = [b.title for b in app.finder.similar_to(MARTIAN, 3)]
+        expected = [r.book.title for r in app.finder.recommend(MARTIAN, 3)]
         self.assertEqual(len(expected), 3)
         for title in expected:
             self.assertIn(title, said)
         self.assertNotIn("The Martian by", said)               # never recommends the book itself
+        self.assertIn(f"I'd start with {expected[0]} because", said)       # ONE reason, for the top pick, without an LLM
+        self.assertEqual(said.count("because"), 1)
 
     def test_recommend_edge_cases(self):
         app = self.offer(isbn=CLEAN_CODE)                       # shares no tags with anything
@@ -276,6 +285,257 @@ class BookChoicesTest(unittest.TestCase):
         said = []
         app.bus.subscribe(ReplySentence, lambda e: said.append(e.text))
         return said
+
+    # ---- where a book lives, and guiding the visitor there ----
+    @staticmethod
+    def fresh(**kw):
+        """A new app that records what it says in app.said (like offer() does)."""
+        app = make_app(**kw)
+        app.said = []
+        app.bus.subscribe(ReplySentence, lambda e: app.said.append(e.text))
+        return app
+
+    @staticmethod
+    def navigation(app):
+        events = []
+        app.bus.subscribe(NavigationRequested, events.append)
+        return events
+
+    @staticmethod
+    def finder_with(shelves):
+        """A finder over the sample catalogue whose shelves.csv is replaced by `shelves` (a dict)."""
+        catalog = Catalog.load(ROOT / "data" / "catalog.csv")
+        graph = BookGraph(catalog, TopicVocabulary.load(ROOT / "data" / "topics.yaml"), shelves)
+        return BookFinder(catalog, online_fallback=False, graph=graph)
+
+    def test_return_without_location_data_still_gives_the_slot(self):
+        app = self.offer(event=BookScanned(isbn=MARTIAN, title="The Martian", slot=4, found_in_catalog=True))
+        run(app, UserUtterance("return"))
+        said = " ".join(app.said)
+        self.assertIn("storage slot 4", said)
+        self.assertNotIn("It belongs", said)
+        self.assertEqual(app.dialogue.guide_target.location.describe(), "")
+        self.assertIn("Is there anything else", app.said[-1])                      # nothing to guide to, so no offer
+
+    def test_after_a_return_the_robot_offers_to_guide_and_yes_sends_it_to_the_shelf(self):
+        app = self.offer(isbn=MARTIAN)
+        events = self.navigation(app)
+        run(app, UserUtterance("return"))
+        self.assertIn("Would you like me to guide you to The Martian", app.said[-1])
+        run(app, UserUtterance("yes please"))
+        self.assertIn("Okay, follow me to The Martian. It's on shelf 2-SF-C, in the Science Fiction section on level 2.",
+                      app.said[-1])
+        (event,) = events
+        self.assertEqual((event.isbn, event.title, event.shelf, event.section, event.floor, event.zone),
+                         (MARTIAN, "The Martian", "2-SF-C", "Science Fiction", 2, "common"))
+        self.assertEqual((event.x, event.y, event.yaw), (1.0, 6.0, 1.57))
+        self.assertIn(("navigate", {"x": 1.0, "y": 6.0, "yaw": 1.57}), app.actuators.nav.esp32.sent)   # the fake base logs it
+
+    def test_after_a_recommendation_the_offer_is_for_the_top_pick(self):
+        app = self.offer(isbn=MARTIAN)
+        events = self.navigation(app)
+        top = app.finder.recommend(MARTIAN, 3)[0]
+        run(app, UserUtterance("recommend"))
+        self.assertIn(f"guide you to {top.book.title}", app.said[-1])
+        run(app, UserUtterance("guide me"))
+        self.assertEqual([e.title for e in events], [top.book.title])
+        place = app.finder.locate(top.book.isbn13)
+        self.assertEqual((events[0].shelf, events[0].x, events[0].y), (place.shelf, place.map_x, place.map_y))
+
+    def group_offer(self, zone, size, isbn=MARTIAN, llm=None):
+        """An app that has just offered the choices for a book to a group of `size` people in `zone`."""
+        app = make_app(llm=llm)
+        app.said = []
+        app.bus.subscribe(ReplySentence, lambda e: app.said.append(e.text))
+        run(app, ContextChanged(zone, size), BookPlaced(), scanned(isbn))
+        return app
+
+    def recommendation(self, app):
+        run(app, UserUtterance("recommend"))
+        return app.said[-2]                                                         # the last line is the follow-up question
+
+    def test_quiet_alone_names_only_the_top_pick_with_one_reason(self):
+        app = self.group_offer("quiet", 1)
+        top, second = app.finder.recommend(MARTIAN, 3)[:2]
+        said = self.recommendation(app)
+        self.assertEqual(app.dialogue.get_style().recommendations, 1)
+        self.assertIn(top.book.title, said)
+        self.assertNotIn(second.book.title, said)
+        self.assertEqual(said, f"If you like The Martian, you might enjoy {top.book.title} by {top.book.author} {top.because}.")
+        self.assertNotIn("I'd start with", said)
+
+    def test_common_group_names_three_and_gives_one_reason_for_the_first(self):
+        app = self.group_offer("common", 3)
+        picks = app.finder.recommend(MARTIAN, 3)
+        said = self.recommendation(app)
+        for pick in picks:
+            self.assertIn(pick.book.title, said)
+        self.assertEqual(said.count("because"), 1)
+        self.assertIn(f"I'd start with {picks[0].book.title} {picks[0].because}.", said)
+
+    def test_the_spoken_fallback_never_lists_several_topics(self):
+        for zone, size in (("quiet", 1), ("common", 1), ("common", 3)):
+            for isbn in (MARTIAN, HITCH, "9780345539434"):
+                app = self.group_offer(zone, size, isbn)
+                said = self.recommendation(app)
+                self.assertNotIn("both about", said)
+                self.assertNotIn(" stands out", said)
+                self.assertEqual(said.count("because"), 1, said)
+
+    def test_the_llm_gets_one_candidate_when_quiet_and_three_when_common(self):
+        for zone, size, expected in (("quiet", 1, 1), ("common", 1, 3), ("common", 3, 3)):
+            llm = StubClient("Nothing useful.")
+            app = self.group_offer(zone, size, llm=llm)
+            with self.assertLogs("robot.book_llm", level="WARNING"):                # the reply names no candidate: discarded
+                run(app, UserUtterance("recommend"))
+            prompt = llm.prompts[0]
+            self.assertEqual(prompt.count("Candidate "), expected, (zone, size))
+            self.assertEqual(prompt.count("Why it fits:"), expected)
+
+    def test_the_llm_still_gets_every_reason_while_speech_gets_one(self):
+        llm = StubClient("Nothing useful.")
+        app = self.group_offer("common", 1, isbn="9780345539434", llm=llm)             # Cosmos -> A Brief History of Time first
+        top = app.finder.recommend("9780345539434", 3)[0]
+        with self.assertLogs("robot.book_llm", level="WARNING"):
+            run(app, UserUtterance("recommend"))
+        self.assertGreater(len(top.reasons), 1)
+        self.assertIn("Why it fits: " + "; ".join(top.reasons), llm.prompts[0])
+        self.assertEqual(app.said[-2].count("because"), 1)                              # but the spoken fallback has one
+
+    def test_the_full_reasons_are_logged(self):
+        logging.disable(logging.NOTSET)                                                 # this class mutes INFO; here we want it
+        self.addCleanup(logging.disable, logging.INFO)
+        app = self.group_offer("common", 3, isbn="9780345539434")
+        with self.assertLogs("robot.dialogue", level="INFO") as logs:
+            run(app, UserUtterance("recommend"))
+        text = "\n".join(logs.output)
+        self.assertEqual(text.count("candidate "), 3)
+        self.assertIn("candidate A Brief History of Time", text)
+        self.assertIn("librarian's pick", text)                                         # the full list, not the one spoken reason
+        self.assertIn("both about", text)
+
+    def test_the_offer_follows_whichever_candidate_the_llm_named(self):
+        picks = make_app().finder.recommend(MARTIAN, 3)
+        llm = StubClient(f"How about {picks[1].book.title}? It is a good one.")
+        app = self.offer(isbn=MARTIAN, llm=llm)
+        events = self.navigation(app)
+        run(app, UserUtterance("recommend"), UserUtterance("take me there"))
+        self.assertEqual([e.title for e in events], [picks[1].book.title])
+
+    def test_explain_does_not_offer_a_guide_and_yes_means_another_book(self):
+        app = self.offer(isbn=MARTIAN)
+        events = self.navigation(app)
+        run(app, UserUtterance("explain"))
+        self.assertEqual(app.said[-1], "Is there anything else I can help with?")
+        run(app, UserUtterance("yes"))
+        self.assertEqual(events, [])
+        self.assertEqual(app.dialogue.state, "invited")
+
+    def test_an_unanswered_offer_expires_after_one_utterance(self):
+        app = self.offer(isbn=MARTIAN)
+        events = self.navigation(app)
+        run(app, UserUtterance("return"), UserUtterance("who wrote it?"), UserUtterance("yes"))
+        self.assertEqual(events, [])                                              # that yes is no longer about the offer
+
+    def test_guide_me_with_nowhere_to_go_says_so(self):
+        app = self.fresh()
+        events = self.navigation(app)
+        run(app, UserUtterance("can you guide me?"))
+        self.assertEqual(events, [])
+        self.assertIn("Ask me where a book is", app.said[-1])
+        self.assertEqual(app.dialogue.state, "invited")
+
+    def test_guide_me_after_scanning_goes_to_the_scanned_book(self):
+        app = self.offer(isbn=MARTIAN)
+        events = self.navigation(app)
+        run(app, UserUtterance("guide me"))
+        self.assertEqual([e.title for e in events], ["The Martian"])
+        self.assertEqual(app.dialogue.state, "offering")                          # still waiting for a choice
+
+    def test_where_is_a_title_says_where_and_offers_to_guide(self):
+        for phrase in ("where is dune?", "Where's Dune", "where can I find DUNE", "find me dune please",
+                       "where is 9780441172719", "show me where dune is"):
+            app = self.fresh()
+            events = self.navigation(app)
+            run(app, UserUtterance(phrase))
+            self.assertEqual(app.said[-1], "Dune is on shelf 2-SF-B, in the Science Fiction section on level 2. "
+                                           "Would you like me to guide you there?", phrase)
+            self.assertEqual(app.dialogue.state, "invited", phrase)                # idle -> invited
+            self.assertEqual(events, [], phrase)                                    # it only told them
+            run(app, UserUtterance("yes"))
+            self.assertEqual([e.title for e in events], ["Dune"], phrase)
+
+    def test_where_is_matches_titles_loosely(self):
+        app = self.fresh()
+        run(app, UserUtterance("where is the hitchhikers guide to the galaxy"))
+        self.assertIn("The Hitchhiker's Guide to the Galaxy is on shelf 2-SF-A", app.said[-1])
+        run(app, UserUtterance("where is frankenstien?"))
+        self.assertIn("Frankenstein is on shelf 2-SF-C", app.said[-1])
+
+    def test_where_does_this_book_go_means_the_scanned_book(self):
+        app = self.offer(isbn=MARTIAN)
+        run(app, UserUtterance("where does this book go?"))
+        self.assertIn("The Martian is on shelf 2-SF-C", app.said[-1])
+        self.assertEqual(app.dialogue.state, "offering")
+
+    def test_guide_me_to_a_title_asks_and_goes_in_one_step(self):
+        app = self.fresh()
+        events = self.navigation(app)
+        run(app, UserUtterance("guide me to the martian"))
+        self.assertEqual([e.title for e in events], ["The Martian"])
+        self.assertIn("Okay, follow me to The Martian", app.said[-1])
+
+    def test_questions_that_name_no_book_are_left_alone(self):
+        for phrase in ("where is the bathroom?", "where do you live?", "find me a book about space"):
+            app = self.fresh()
+            events = self.navigation(app)
+            run(app, UserUtterance(phrase))
+            self.assertEqual(events, [], phrase)
+            self.assertNotIn("is on shelf", app.said[-1], phrase)
+            self.assertIn("Place a book on the pad", app.said[-1], phrase)         # the ordinary no-book answer
+
+    def test_where_works_in_a_quiet_zone_too_through_the_style_channels(self):
+        app = self.fresh()
+        run(app, ContextChanged("quiet", 1), UserUtterance("where is cosmos"))
+        self.assertIn("Cosmos is on shelf 3-SCI-A, in the Science section on level 3", app.said[-1])
+
+    def test_a_shelf_with_no_map_pose_is_described_but_not_driven_to(self):
+        app = self.fresh(finder=self.finder_with({"2-SF-B": Shelf("2-SF-B", "Science Fiction", 2, "common")}))
+        events = self.navigation(app)
+        run(app, UserUtterance("where is dune"))
+        self.assertEqual(app.said[-1], "Dune is on shelf 2-SF-B, in the Science Fiction section on level 2.")   # no offer
+        run(app, UserUtterance("guide me"))
+        self.assertIn("I don't have a map position for Dune yet", app.said[-1])
+        self.assertIn("It's on shelf 2-SF-B", app.said[-1])
+        self.assertEqual(events, [])
+
+    def test_a_shelf_missing_from_shelves_csv_still_gives_section_and_floor(self):
+        app = self.fresh(finder=self.finder_with({}))
+        run(app, UserUtterance("where is dune"))
+        self.assertEqual(app.said[-1], "Dune is on shelf 2-SF-B, in the Science Fiction section on level 2.")
+
+    def test_a_book_with_no_known_location_sends_the_visitor_to_the_help_desk(self):
+        finder = BookFinder(Catalog([Book(MARTIAN, "The Martian")]), online_fallback=False)
+        app = self.fresh(finder=finder)
+        run(app, UserUtterance("where is the martian"))
+        self.assertEqual(app.said[-1], "I don't know where The Martian is shelved yet. The help desk can tell you.")
+
+    def test_goodbye_still_wins_over_the_offer(self):
+        app = self.offer(isbn=MARTIAN)
+        run(app, UserUtterance("return"), UserUtterance("no thanks"))
+        self.assertIn("Enjoy your reading", app.said[-1])
+
+    def test_a_new_scan_or_everyone_leaving_forgets_the_target(self):
+        app = self.offer(isbn=MARTIAN)
+        run(app, UserUtterance("return"))
+        self.assertIsNotNone(app.dialogue.guide_target)
+        run(app, BookPlaced(), scanned(HITCH))
+        self.assertIsNone(app.dialogue.guide_target)
+        run(app, UserUtterance("where is dune"))
+        self.assertIsNotNone(app.dialogue.guide_target)
+        run(app, ContextChanged("common", 0))
+        self.assertIsNone(app.dialogue.guide_target)
+        self.assertFalse(app.dialogue.awaiting_guide)
 
     # ---- before any book: who is the robot, small talk ----
     def test_the_robot_is_stuart(self):
@@ -442,13 +702,15 @@ class BookChoicesTest(unittest.TestCase):
             self.assertIn("another book", app.said[-1])
 
     def test_recommend_uses_the_llm_with_only_catalogue_candidates(self):
-        expected = [b.title for b in make_app().finder.similar_to(MARTIAN, 3)]
+        picks = make_app().finder.recommend(MARTIAN, 3)
+        expected = [r.book.title for r in picks]
         llm = StubClient(f"You might enjoy {expected[0]}.")
         app = self.offer(isbn=MARTIAN, llm=llm)
         run(app, UserUtterance("recommend"))
         self.assertEqual(app.said[-2], f"You might enjoy {expected[0]}.")
-        for title in expected:
-            self.assertIn(f"Title: {title}", llm.prompts[0])
+        for pick in picks:
+            self.assertIn(f"Title: {pick.book.title}", llm.prompts[0])
+            self.assertIn("Why it fits: " + "; ".join(pick.reasons), llm.prompts[0])      # the reasons reach the LLM
 
     def test_recommend_that_names_no_candidate_falls_back_to_the_catalogue_text(self):
         app = self.offer(isbn=MARTIAN, llm=StubClient("Read War and Peace."))
