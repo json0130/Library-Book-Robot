@@ -7,8 +7,8 @@ from robot.actuation.face import FaceDisplay
 from robot.app import build_app, fake_drivers
 from robot.bus import Bus
 from robot.config import load_config
-from robot.events import ContextChanged, ReplySentence
-from robot.perception.people import PeopleCounter
+from robot.events import (ContextChanged, PersonEngaged, PersonLeft, PersonNearbyBusy, ReplySentence)
+from robot.perception.people import EngagementDetector, PeopleCounter
 from robot.sim.keyboard import Sim
 
 FACE = {"box": [10, 60, 60, 10], "detection_confidence": 0.99}
@@ -205,28 +205,138 @@ class HelloOnArrivalTest(unittest.TestCase):
         logging.disable(logging.INFO)
         self.addCleanup(logging.disable, logging.NOTSET)
 
-    def test_a_face_makes_the_robot_say_hello_and_leaving_resets_it(self):
+    def test_an_engaged_face_makes_the_robot_say_hello_and_leaving_ends_the_visit(self):
         cfg = load_config()
         cfg.robot.setdefault("books", {})["online_fallback"] = False
-        app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False)
+        app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
+                        persist_storage=False)
         sim = Sim(app, io.StringIO())
         said = []
         app.bus.subscribe(ReplySentence, lambda e: said.append(e.text))
-        counter = PeopleCounter(app.bus, JpegCamera(), ScriptedVision(1, 1, 0, 0), leave_after_s=1,
-                                on_change=sim.people_changed, clock=Clock())
+        clock = Clock()
+        app.dialogue.clock = clock
+        detector = EngagementDetector(min_face_px=40, dwell_s=2, left_after_s=2, clock=clock)
+        counter = PeopleCounter(app.bus, JpegCamera(), ScriptedVision(1, 1, 1, 0, 0, 0, 0), leave_after_s=1,
+                                on_change=sim.people_changed, clock=clock, engagement=detector)
+
+        async def look():
+            await counter.step()
+            await app.dialogue.tick()
+            clock.now += 1
 
         async def go():
-            await counter.step()
-            await counter.step()
-            self.assertTrue(said[0].startswith("Hello!"))
-            self.assertEqual(app.dialogue.state, "invited")
-            counter.clock.now += 1
-            await counter.step()
-            counter.clock.now += 1
-            await counter.step()
-            self.assertEqual(app.dialogue.state, "idle")
+            await look()
+            await look()
+            self.assertEqual(said, [])                       # a face in view is not yet engaging...
+            await look()
+            self.assertTrue(said[0].startswith("Hello!"))     # ...after the dwell it is
+            self.assertEqual(app.dialogue.state, "ENGAGED.OFFER")
+            await look()
+            await look()                                       # no face for left_after_s: PersonLeft
+            self.assertEqual(app.dialogue.state, "ENGAGED.FAREWELL")
+            for _ in range(5):
+                clock.now += 1
+                await app.dialogue.tick()
+            self.assertEqual(app.dialogue.state, "IDLE")
         asyncio.run(go())
-        self.assertEqual(len(said), 1)
+        self.assertEqual(len([t for t in said if t.startswith("Hello")]), 1)
+
+
+class EngagementDetectorTest(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.detector = EngagementDetector(min_face_px=60, dwell_s=1.5, left_after_s=5, clock=self.clock)
+
+    @staticmethod
+    def face(height, person=None):
+        d = {"box": [10, 80, 10 + height, 10], "detection_confidence": 0.99}
+        if person:
+            d["person"] = person
+        return d
+
+    def look(self, *faces, advance=1.0):
+        events = self.detector.update(list(faces))
+        self.clock.now += advance
+        return events
+
+    def test_a_close_face_engages_only_after_the_dwell_time(self):
+        self.assertEqual(self.look(self.face(80)), [])
+        self.assertEqual(self.look(self.face(80)), [])
+        self.assertEqual(self.look(self.face(80)), [("engaged", ())])                    # 2 s >= 1.5 s
+        self.assertEqual(self.look(self.face(80)), [])                                     # once per arrival
+
+    def test_a_face_that_is_too_small_is_nearby_but_busy_not_engaged(self):
+        events = [self.look(self.face(30)) for _ in range(4)]
+        self.assertEqual([e for e in events if e], [[("busy", ())]])
+        self.assertEqual(self.detector.state, "nearby")
+
+    def test_a_nearby_person_who_steps_closer_then_engages(self):
+        for _ in range(3):
+            self.look(self.face(30))
+        self.assertEqual(self.detector.state, "nearby")
+        self.look(self.face(90))
+        self.look(self.face(90))
+        self.assertEqual(self.look(self.face(90)), [("engaged", ())])                    # the dwell starts when they step closer
+
+    def test_a_short_glance_does_not_engage(self):
+        self.look(self.face(80))
+        self.look()                                                                        # turned away for a second
+        self.look(self.face(80))
+        self.assertEqual(self.look(self.face(80)), [])                                     # the dwell started again
+
+    def test_left_is_reported_after_left_after_s_without_a_face(self):
+        for _ in range(3):
+            self.look(self.face(80))
+        self.assertEqual(self.detector.state, "engaged")
+        events = [self.look() for _ in range(7)]
+        self.assertEqual([e for e in events if e], [[("left", ())]])
+        self.assertEqual(self.detector.state, "absent")
+        self.assertEqual(self.look(self.face(80)), [])                                     # and a new arrival counts afresh
+        self.assertEqual(self.look(self.face(80)), [])
+        self.assertEqual(self.look(self.face(80)), [("engaged", ())])
+
+    def test_without_the_closeness_check_any_face_engages(self):
+        detector = EngagementDetector(min_face_px=60, dwell_s=0.5, left_after_s=5, clock=self.clock,
+                                      require_close=False)
+        self.assertEqual(detector.update([self.face(20)]), [])
+        self.clock.now += 1
+        self.assertEqual(detector.update([self.face(20)]), [("engaged", ())])          # a tiny face still greets
+
+    def test_the_configured_default_greets_for_any_face(self):
+        from robot.config import load_config
+        cfg = load_config().engagement
+        self.assertFalse(cfg["require_close"])
+        detector = EngagementDetector.from_config(cfg, self.clock)
+        detector.update([self.face(20)])
+        self.clock.now += cfg["dwell_s"] + 0.1
+        self.assertEqual(detector.update([self.face(20)]), [("engaged", ())])
+
+    def test_a_long_gap_between_samples_is_the_robot_being_busy_not_the_person_leaving(self):
+        for _ in range(3):
+            self.look(self.face(80))
+        self.assertEqual(self.detector.state, "engaged")
+        self.clock.now += 40                                      # the robot spoke for 40 s and took no samples
+        self.assertEqual(self.look(), [])                         # the first sample after it finds no face: not "left"
+        for _ in range(4):
+            self.assertEqual(self.look(), [])                     # and they still have left_after_s (5 s) of looking
+        self.assertEqual(self.look(), [("left", ())])
+
+    def test_person_numbers_are_passed_on(self):
+        self.look(self.face(80, 2), self.face(20, 5))
+        self.look(self.face(80, 2), self.face(20, 5))
+        self.assertEqual(self.look(self.face(80, 2), self.face(20, 5)), [("engaged", (2,))])
+
+    def test_the_counter_publishes_the_engagement_events_on_the_bus(self):
+        bus = Bus()
+        seen = []
+        bus.subscribe(object, lambda e: seen.append(type(e)))
+        clock = Clock()
+        counter = PeopleCounter(bus, JpegCamera(), ScriptedVision(1, 1, 1, 0, 0, 0), clock=clock,
+                                engagement=EngagementDetector(min_face_px=40, dwell_s=1, left_after_s=2, clock=clock))
+        steps(counter, clock, 6)
+        self.assertIn(PersonEngaged, seen)
+        self.assertIn(PersonLeft, seen)
+        self.assertNotIn(PersonNearbyBusy, seen)
 
 
 if __name__ == "__main__":

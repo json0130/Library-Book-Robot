@@ -264,6 +264,22 @@ class BookFinder:
         book = self.catalog.lookup(isbn)
         return self.graph.recommend(book.isbn13, n) if book else []
 
+    def recommend_interest(self, text: str, n: int = 3) -> list:
+        """Recommendations for what a visitor says they like (see BookGraph.recommend_for_interest)."""
+        return self.graph.recommend_for_interest(text, n)
+
+    def find_area(self, text: str):
+        """The section or topic area the words name (book_graph.Area), or None."""
+        return self.graph.find_area(text)
+
+    def titles_in(self, text: str) -> list:
+        """The catalogue books whose titles appear in the words ("recommend something like Dune"), longest title
+        first. Case, punctuation and a leading "the" don't matter; whole words only."""
+        padded = f" {title_key(text)} "
+        found = [(len(key), book) for book in self.catalog.books
+                 if (key := title_key(book.title)) and len(key) >= 4 and f" {key} " in padded]
+        return [book for _, book in sorted(found, key=lambda f: (-f[0], f[1].title))]
+
     def locate(self, isbn: str):
         """Where a catalogue book lives (book_graph.Location), or None."""
         return self.locate_with_reason(isbn)[0]

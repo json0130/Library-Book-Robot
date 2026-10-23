@@ -536,6 +536,72 @@ class SpokenReasonTest(unittest.TestCase):
         self.assertEqual(g.recommend("9780553294385", 1)[0].because, "because it's the next book in Asimov's Future History")
 
 
+class FindAreaTest(unittest.TestCase):
+    def area(self, text):
+        return sample_graph().find_area(text)
+
+    def test_a_section_named_in_the_words(self):
+        a = self.area("where is the history section")
+        self.assertEqual((a.name, a.kind, a.shelf.id, a.shelves), ("History", "section", "3-HIS-A", ("3-HIS-A",)))
+        a = self.area("science fiction")
+        self.assertEqual((a.name, a.shelves), ("Science Fiction", ("2-SF-A", "2-SF-B", "2-SF-C")))   # not plain "Science"
+        self.assertEqual(self.area("take me to science").name, "Science")
+
+    def test_a_topic_finds_the_shelf_with_most_books_on_it(self):
+        a = self.area("where are the astronomy books")
+        self.assertEqual((a.kind, a.shelf.id), ("topic", "3-SCI-A"))
+        self.assertEqual(self.area("space").shelf.id, "3-SCI-A")
+
+    def test_nothing_matches(self):
+        self.assertIsNone(self.area("the bathroom"))
+        self.assertIsNone(self.area(""))
+
+    def test_the_finder_names_books_by_title_in_a_sentence_longest_first(self):
+        from robot.services.books import BookFinder
+        finder = BookFinder(sample_graph().catalog, online_fallback=False, graph=sample_graph())
+        self.assertEqual([b.title for b in finder.titles_in("recommend something like dune please")], ["Dune"])
+        self.assertEqual([b.title for b in finder.titles_in("the hitchhiker's guide to the galaxy")],
+                         ["The Hitchhiker's Guide to the Galaxy"])
+        self.assertEqual(finder.titles_in("something about space"), [])
+        self.assertEqual(finder.titles_in("dunes"), [])                                                # whole words only
+
+
+class RecommendForInterestTest(unittest.TestCase):
+    """Recommendations from what a visitor says they like, with no book on the pad."""
+
+    def titles(self, text, n=3):
+        return [r.book.title for r in sample_graph().recommend_for_interest(text, n)]
+
+    def test_a_topic_in_the_words_finds_books_about_it(self):
+        self.assertEqual(self.titles("dystopian novels")[0], "Nineteen Eighty-Four")
+        space = self.titles("something about space")
+        self.assertIn("A Brief History of Time", space[:2])
+        self.assertEqual(len(space), 3)
+
+    def test_each_pick_has_one_natural_reason(self):
+        for rec in sample_graph().recommend_for_interest("space", 3):
+            self.assertRegex(rec.because, r"^because it's about \w")
+            self.assertEqual(rec.because.count("because"), 1)
+
+    def test_n_limits_and_nothing_matches_gives_an_empty_list(self):
+        g = sample_graph()
+        self.assertEqual(len(g.recommend_for_interest("space", 1)), 1)
+        self.assertEqual(g.recommend_for_interest("space", 0), [])
+        self.assertEqual(g.recommend_for_interest("zzzz qqqq", 3), [])
+        self.assertEqual(g.recommend_for_interest("", 3), [])
+
+    def test_the_result_is_stable(self):
+        g = sample_graph()
+        self.assertEqual([r.book.isbn13 for r in g.recommend_for_interest("space", 5)],
+                         [r.book.isbn13 for r in g.recommend_for_interest("space", 5)])
+
+    def test_the_finder_exposes_it_and_never_includes_visitor_data(self):
+        from robot.services.books import BookFinder
+        finder = BookFinder(sample_graph().catalog, online_fallback=False, graph=sample_graph())
+        self.assertEqual([r.book.title for r in finder.recommend_interest("dystopian", 1)], ["Nineteen Eighty-Four"])
+        self.assertEqual(finder.recommend_interest("dystopian", 0), [])
+
+
 class RecommendTest(unittest.TestCase):
     def titles(self, g, n, count=10):
         return [r.book.title for r in g.recommend(isbn(n), count)]

@@ -38,6 +38,46 @@ BOOKS_DEFAULTS = {
     "scan_timeout_s": 5.0,
     "scanner_camera_index": 0,
     "use_llm": True,
+    "reader": "camera",             # how the book on the pad is read: camera (barcode) or rfid (not implemented yet)
+}
+
+
+RETURNING_DEFAULTS = {
+    "auto_start": True,             # after a session ends with books in storage, go and put them back
+    "auto_start_delay_s": 10,       # ...once nobody has engaged for this long
+    "sim_drive_s": 6,               # how long a simulated drive to a shelf (or home) takes
+    "sim_unload_s": 3,              # how long a simulated unload at a shelf takes
+    "announce_s": 3,                # how long the "excuse me" signal lasts
+    "home": {"x": 0.0, "y": 0.0, "yaw": 0.0},   # the map pose of the robot's home spot
+}
+
+STORAGE_DEFAULTS = {
+    "slots": None,                  # None: the storage ring's own size (actuation/storage_ring.py DEFAULT_SLOTS)
+    "path": "data/state/storage.json",   # what is stored survives a restart; gitignored
+    "sim_drop_s": 4,                # the simulated BookDropped after a slot is lit; 0 = wait for the operator's `dropped`
+}
+
+TIMEOUTS_DEFAULTS = {               # how long each waiting state waits before the robot says goodbye (seconds)
+    "enabled": True,                # False: a waiting state waits for the visitor for ever (a person leaving still ends the visit)
+    "offer_s": 30, "await_book_s": 30, "scan_s": 20, "store_s": 30, "answer_s": 30, "anything_else_s": 20,
+    "farewell_s": 3,                # how long the goodbye lasts before the session is over
+}
+
+ENGAGEMENT_DEFAULTS = {
+    "require_close": False,         # False: any face engages (greets) after dwell_s. True: it must also be min_face_px tall (not in use yet)
+    "min_face_px": 60,              # a face this tall (pixels) or taller counts as close enough, about 1.5 m on a 640x480 webcam
+    "dwell_s": 0.5,                 # ...and must stay that way this long to count as engaging
+    "leave_grace_s": 60,            # the camera losing a visitor who spoke, typed or tapped within this long is not them leaving
+    "left_after_s": 12.0,           # no face for this long: the person has left (long: looking down at a book loses the face)
+}
+
+DISPLAY_DEFAULTS = {
+    "host": "127.0.0.1",            # where the robot reaches the display server
+    "port": 8765,
+    "bind_host": "127.0.0.1",       # what the display server listens on; 0.0.0.0 lets a laptop open /operator
+    "camera_fps": 15,               # pictures per second sent to the operator page while it is open (one a second when nobody watches)
+    "camera_width": 480,            # ...shrunk to this many pixels wide
+    "poll_s": 0.3,                  # how often the robot asks the display server for button taps and operator input
 }
 
 
@@ -54,6 +94,33 @@ class Config:
         merged.update(self.robot.get("books") or {})
         merged["similarity"] = {**SIMILARITY_DEFAULTS, **((self.robot.get("books") or {}).get("similarity") or {})}
         return merged
+
+    def section(self, name: str, defaults: dict) -> dict:
+        """A section of robot.yaml with defaults filled in (one level deep, so `returning.home` can be partial)."""
+        merged = {k: (dict(v) if isinstance(v, dict) else v) for k, v in defaults.items()}
+        for key, value in (self.robot.get(name) or {}).items():
+            merged[key] = {**merged[key], **value} if isinstance(merged.get(key), dict) and isinstance(value, dict) else value
+        return merged
+
+    @property
+    def returning(self) -> dict:
+        return self.section("returning", RETURNING_DEFAULTS)
+
+    @property
+    def storage(self) -> dict:
+        return self.section("storage", STORAGE_DEFAULTS)
+
+    @property
+    def timeouts(self) -> dict:
+        return self.section("timeouts", TIMEOUTS_DEFAULTS)
+
+    @property
+    def engagement(self) -> dict:
+        return self.section("engagement", ENGAGEMENT_DEFAULTS)
+
+    @property
+    def display(self) -> dict:
+        return self.section("display", DISPLAY_DEFAULTS)
 
     @property
     def ai_host(self) -> str:

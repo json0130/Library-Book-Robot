@@ -31,7 +31,7 @@ Lines starting with `#` and blank lines are ignored. The first other line is the
 | `subjects` | | What the book is about, separated by semicolons: `space;cosmos;popular science`. They are folded into topics through `topics.yaml` (see below). An older file with a `tags` column instead still loads. Give each book at least two topics (genre counts) or it is hard to match. |
 | `summary` | | One or two sentences of what the book is about, in your own words. The robot reads it aloud when someone asks "what is it about?" and compares summaries when ranking recommendations. Keep it on one line. |
 | `shelf` | | The shelf's id from `shelves.csv`, e.g. `3-SCI-A`. This is how the robot knows the section, floor, zone and map position. Leave it empty if you don't know yet. |
-| `slot` | | The storage-ring slot, `0` to `7`, that a returned copy goes into. Empty if unknown. Several books may share a slot. |
+| `slot` | | The storage-ring slot, `0` to `7`, that a returned copy prefers. Empty if unknown. Several books may share a preferred slot: the state machine gives the book this slot if it is free and otherwise the lowest free one (`robot/core/storage.py`), and says which slot it used. |
 | `call_number` | optional | The call number, Dewey (`520.1 SAG`) or Library of Congress (`QB981 .S24`). Shelf codes such as `F HER` or `FIC-FIT` work too. See below. |
 | `section` | optional | The section name, e.g. `Science`. Only needed if the book has no shelf; otherwise the shelf's section is used (and a mismatch is a warning). |
 | `floor` | optional | The floor number, e.g. `3`. Same rule as `section`. |

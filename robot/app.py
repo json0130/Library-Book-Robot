@@ -5,13 +5,16 @@ Event flow (see docs/architecture.md):
     EmotionDetected  -> remembered (if confident enough) for expression blending
     ReplySentence    -> blend(user emotion, reply tag) -> ExpressionRequested -> face
     every event      -> session log, with the context and style in force
-The dialogue state machine subscribes to the same bus (core/dialogue.py).
+    StateTransition / ScreenUpdate -> the display page and the operator page (when the display server is running)
+The dialogue state machine (core/dialogue.py, a table on top of core/fsm.py) subscribes to the same bus; App.run_ticker()
+drives its timers.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from robot.actuation import Actuators
@@ -19,20 +22,22 @@ from robot.actuation.face import FaceDisplay
 from robot.actuation.lights import Lights
 from robot.actuation.navigation import Navigation
 from robot.actuation.neck import Neck
+from robot.actuation.pad import Pad
 from robot.actuation.printer import Printer
-from robot.actuation.storage_ring import StorageRing
+from robot.actuation.storage_ring import DEFAULT_SLOTS, StorageRing
 from robot.actuation.voice import Voice
 from robot.bus import Bus
 from robot.config import Config
 from robot.core.context import Context, NoiseThresholds, derive_context, resolve_area
-from robot.core.dialogue import Dialogue
+from robot.core.dialogue import Dialogue, Settings
 from robot.core.expression import blend
 from robot.core.session_log import SessionLog
+from robot.core.storage import Storage
 from robot.core.style import StylePolicy, StyleVector
 from robot.drivers import DriverNotImplemented
 from robot.events import (ContextChanged, EmotionDetected, ExpressionRequested, NavigationRequested,
-                          ReplySentence, StyleChanged)
-from robot.perception.book_scanner import BookScanner
+                          ReplySentence, ScreenUpdate, StyleChanged)
+from robot.perception.book_reader import BookReader, build_reader
 from robot.services.book_llm import BookAssistant
 from robot.services.book_graph import BookGraph
 from robot.services.books import BookFinder
@@ -111,8 +116,9 @@ class App:
     dialogue: Optional[Dialogue] = None
     finder: Optional[BookFinder] = None           # catalogue + online fallback
     scanner_camera: object = None                 # camera pointed at the scan pad
-    scanner: Optional[BookScanner] = None
+    scanner: Optional[BookReader] = None          # the BookReader (camera scanner or RFID)
     assistant: object = None                      # services.book_llm.BookAssistant, or None (catalogue text only)
+    storage: Optional[Storage] = None             # which book is in which slot of the storage ring
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
@@ -120,7 +126,9 @@ class App:
         self.style = self.policy.style_for(self.context, self.fixed)
         cooldown = float((self.cfg.robot.get("dialogue") or {}).get("greet_cooldown_s", 120))
         self.dialogue = Dialogue(self.actuators, lambda: self.style, self.bus.publish, self.finder, self.assistant,
-                                 greet_cooldown_s=cooldown)
+                                 greet_cooldown_s=cooldown, storage=self.storage,
+                                 settings=Settings.from_config(self.cfg), get_zone=lambda: self.context.zone)
+        self.storage = self.dialogue.storage
         # order matters: log first, then update context/style, then the dialogue reacts
         self.bus.subscribe(object, self._log)
         self.bus.subscribe(ContextChanged, self._on_context)
@@ -128,12 +136,13 @@ class App:
         self.bus.subscribe(ReplySentence, self._on_reply)
         self.bus.subscribe(ExpressionRequested, self._on_expression)
         self.bus.subscribe(NavigationRequested, self._on_navigation)
+        self.bus.subscribe(ScreenUpdate, self._on_screen)
         self.dialogue.attach(self.bus)
         if self.scanner_camera is not None and self.finder is not None:
             books = self.cfg.books
             # subscribed after the dialogue, so the dialogue is already "scanning" when the scan starts
-            self.scanner = BookScanner(self.bus, self.scanner_camera, self.finder,
-                                       timeout_s=float(books["scan_timeout_s"]))
+            self.scanner = build_reader(books.get("reader", "camera"), self.bus, self.scanner_camera, self.finder,
+                                        timeout_s=float(books["scan_timeout_s"]))
 
     # ---- handlers ----
     def _log(self, event) -> None:
@@ -147,6 +156,39 @@ class App:
             self.actuators.apply_style(style)
             await self.bus.publish(StyleChanged(style, self.context))
             await self.bus.publish(ExpressionRequested(style.eye_expression))
+        self.show_state()
+
+    def state_info(self) -> dict:
+        """What the operator page shows: where the machine is, the zone, the mode and the storage."""
+        d = self.dialogue
+        return {"state": d.state, "zone": self.context.zone, "social": self.context.social, "fixed": self.fixed,
+                "stored": len(d.storage), "slots": d.storage.size,
+                "books": [{"slot": b.slot, "title": b.title, "shelf": b.shelf, "section": b.section}
+                          for b in d.storage.stored()], "style": self.style.summary(),
+                "states": list(d.fsm.spec.leaves()), "tree": d.state_tree(), "leaf": d.leaf,
+                "next": d.next_actions()}
+
+    def show_state(self) -> bool:
+        return self.actuators.face.show_state(self.state_info())
+
+    def _on_screen(self, event: ScreenUpdate) -> None:
+        """A state was entered: show its screen, and tell the operator page where the machine is now."""
+        update = asdict(event)
+        update["options"] = list(event.options)
+        buttons = f" buttons: {' | '.join(o['label'] for o in event.options)}" if event.options else ""
+        log.info("[screen] %s (%s, %s) %s%s", event.state_path, event.layout, event.zone,
+                 f"{event.title!r}: {event.text!r}" if event.text else repr(event.title), buttons)
+        self.actuators.face.show_screen(update)
+        self.show_state()
+
+    async def run_ticker(self, interval_s: float = 0.2) -> None:
+        """Drive the state machine's timers until cancelled."""
+        while True:
+            try:
+                await self.dialogue.tick()
+            except Exception:                        # a failing action must not stop the clock
+                log.exception("state machine tick failed")
+            await asyncio.sleep(interval_s)
 
     async def _on_context(self, event: ContextChanged) -> None:
         zone = resolve_area(event.zone, self.cfg.zones)
@@ -191,24 +233,34 @@ def build_assistant(cfg: Config) -> BookAssistant:
     return BookAssistant(LLMClient(cfg.ai_host, cfg.ai_port, float(server.get("llm_timeout_s", 20))))
 
 
+def build_storage(cfg: Config, persist: bool = True) -> Storage:
+    """The storage ring's data: the slot count from config (else the ring's own) and, if `persist`, the file it is
+    saved to (data/state/storage.json)."""
+    settings = cfg.storage
+    path = cfg.path(settings["path"]) if persist and settings.get("path") else None
+    return Storage(int(settings.get("slots") or DEFAULT_SLOTS), path)
+
+
 def build_app(cfg: Config, drivers: Drivers, face: Optional[FaceDisplay] = None, speech=None,
               log_sessions: bool = True, fixed: bool = False, finder: Optional[BookFinder] = None,
-              assistant=None) -> App:
+              assistant=None, persist_storage: bool = True) -> App:
     """Wire drivers and services into an App. speech: services.speech.Speech, or None to only log.
     finder: the book lookup; built from config/robot.yaml `books:` if not given.
-    assistant: the LLM helper (build_assistant); None answers from the catalogue text alone."""
-    display = cfg.robot.get("display", {})
-    face = face or FaceDisplay(display.get("host", "127.0.0.1"), int(display.get("port", 8765)))
+    assistant: the LLM helper (build_assistant); None answers from the catalogue text alone.
+    persist_storage: keep the stored books in data/state/storage.json (tests turn this off)."""
+    display = cfg.display
+    face = face or FaceDisplay(display["host"], int(display["port"]), background=True)
     voice_cfg = cfg.robot.get("voice", {})
     actuators = Actuators(
         voice=Voice(drivers.audio, speech.synthesize if speech else None, face,
                     float(voice_cfg.get("whisper_volume", 0.35))),
         face=face, lights=Lights(drivers.esp32), neck=Neck(drivers.esp32),
-        ring=StorageRing(drivers.esp32), printer=Printer(drivers.esp32), nav=Navigation(drivers.esp32))
+        ring=StorageRing(drivers.esp32, slots=int(cfg.storage.get("slots") or DEFAULT_SLOTS)), printer=Printer(drivers.esp32), nav=Navigation(drivers.esp32),
+        pad=Pad(drivers.esp32))
     session_log = None
     if log_sessions:
         session_log = SessionLog(cfg.path(cfg.robot.get("logging", {}).get("session_dir", "data/logs")))
     return App(cfg=cfg, bus=Bus(), actuators=actuators, policy=StylePolicy(cfg.styles),
                thresholds=NoiseThresholds.from_zones(cfg.zones), session_log=session_log, fixed=fixed,
                finder=finder or build_finder(cfg), scanner_camera=drivers.scanner_camera or drivers.camera,
-               assistant=assistant)
+               assistant=assistant, storage=build_storage(cfg, persist_storage))

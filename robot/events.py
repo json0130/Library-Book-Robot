@@ -1,7 +1,13 @@
 """Events carried on the bus. Each is a plain dataclass; `timestamp` is filled in automatically.
 
-Perception publishes ContextChanged, BookPlaced, BookScanned, ScanFailed, UserUtterance and EmotionDetected.
-Core publishes StyleChanged, ReplySentence, ExpressionRequested and NavigationRequested for actuation to act on.
+Perception publishes ContextChanged, PersonEngaged, PersonNearbyBusy, PersonLeft, BookPlaced, BookIdentified (a
+BookReader read the book), ScanFailed, BookDropped, UserUtterance, UserChoice and EmotionDetected.
+Core publishes StyleChanged, StateTransition, ScreenUpdate, ReplySentence, ExpressionRequested and
+NavigationRequested for actuation and the display to act on.
+
+`source` says where an event came from: "sensor" (the real hardware or the camera), "operator" (the terminal or the
+/operator page), "screen" (a touch button), "timeout" (a state's timer). It goes into the session log with every
+state transition.
 """
 
 from __future__ import annotations
@@ -28,14 +34,48 @@ class ContextChanged:
 
 
 @dataclass
-class BookPlaced:
-    """A book was put on the scan pad (before it is identified)."""
+class PersonEngaged:
+    """Someone is facing the robot, close enough, for long enough: they want to talk. person_ids are the numbers
+    PersonTracker gave the faces that are engaging (empty if it can't tell people apart)."""
+    person_ids: tuple = ()
     timestamp: float = field(default_factory=_now)
+    source: str = "sensor"
 
 
 @dataclass
-class BookScanned:
-    """The book on the pad was identified by its ISBN barcode. found_in_catalog is False when only
+class PersonNearbyBusy:
+    """A person is near but not engaging (turned away, too far, busy): the robot may signal but should not start
+    a conversation."""
+    person_ids: tuple = ()
+    timestamp: float = field(default_factory=_now)
+    source: str = "sensor"
+
+
+@dataclass
+class PersonLeft:
+    """No face has been seen for a while: whoever was there has gone."""
+    timestamp: float = field(default_factory=_now)
+    source: str = "sensor"
+
+
+@dataclass
+class BookPlaced:
+    """A book was put on the scan pad (before it is identified)."""
+    timestamp: float = field(default_factory=_now)
+    source: str = "sensor"
+
+
+@dataclass
+class BookDropped:
+    """The pad has dropped the book into its storage slot (the pad's weight sensor, simulated by a timer or the
+    operator's `dropped`)."""
+    timestamp: float = field(default_factory=_now)
+    source: str = "sensor"
+
+
+@dataclass
+class BookIdentified:
+    """A BookReader (the camera scanner today, RFID later) identified the book on the pad. found_in_catalog is False when only
     the online fallback knew it (then summary, shelf, slot and everything about where it lives are None).
     section, floor, zone and the map pose come from data/shelves.csv through the book graph; any of them
     may be None (a shelf without a pose, say)."""
@@ -56,6 +96,9 @@ class BookScanned:
     timestamp: float = field(default_factory=_now)
 
 
+BookScanned = BookIdentified               # the old name
+
+
 @dataclass
 class ScanFailed:
     """No ISBN could be read from the book on the pad; reason says why (for the log and the sim)."""
@@ -68,6 +111,16 @@ class UserUtterance:
     """What the visitor said (speech-to-text) or typed."""
     text: str
     timestamp: float = field(default_factory=_now)
+    source: str = "sensor"
+
+
+@dataclass
+class UserChoice:
+    """The visitor tapped a button on the screen (or the operator picked for them): one of the option ids the
+    last ScreenUpdate offered (return, ask, recommend, done, more, guide)."""
+    choice: str
+    timestamp: float = field(default_factory=_now)
+    source: str = "screen"
 
 
 @dataclass
@@ -99,6 +152,34 @@ class NavigationRequested:
     section: Optional[str] = None
     floor: Optional[int] = None
     zone: Optional[str] = None
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class StateTransition:
+    """The state machine moved (or ran an internal transition). Paths look like "ENGAGED.OFFER"; `source` is where
+    the causing event came from (sensor, operator, screen, timeout) and `zone` the zone in force."""
+    from_path: str
+    to_path: str
+    event: str
+    source: str = "sensor"
+    zone: str = "common"
+    internal: bool = False
+    guard: Optional[str] = None
+    action: Optional[str] = None
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class ScreenUpdate:
+    """What the touch screen should show for the state just entered (placeholder layouts for now): the state path,
+    the zone, a layout name, a title, some text and the option buttons (each {"id", "label"}) when there are any."""
+    state_path: str
+    zone: str = "common"
+    layout: str = "full_face"
+    title: str = ""
+    text: str = ""
+    options: tuple = ()
     timestamp: float = field(default_factory=_now)
 
 

@@ -1,4 +1,4 @@
-"""Reads the ISBN barcode of the book on the pad: BookPlaced -> scan -> BookScanned or ScanFailed.
+"""Reads the ISBN barcode of the book on the pad: BookPlaced -> scan -> BookIdentified or ScanFailed.
 
     decode_isbn(frame)    one camera frame -> ISBN-13 string or None (needs pyzbar and OpenCV)
     BookScanner           listens for BookPlaced, grabs frames until a valid ISBN is read or the
@@ -20,6 +20,7 @@ from itertools import islice
 from typing import Callable, Iterator, Optional
 
 from robot.events import BookPlaced, BookScanned, ScanFailed
+from robot.perception.book_reader import BookReader
 from robot.services.isbn import to_isbn13
 
 log = logging.getLogger("robot.scanner")
@@ -86,8 +87,8 @@ def quick_isbn(frame) -> Optional[str]:
     return None
 
 
-class BookScanner:
-    """Scans when a book is placed. Frames come from `camera.read_frame()`.
+class BookScanner(BookReader):
+    """The camera implementation of BookReader: scans when a book is placed. Frames come from `camera.read_frame()`.
 
     finder: services.books.BookFinder (catalogue, then the online fallback).
     decode: frame -> ISBN or None. Defaults to the camera's own `decode` if it has one (the fake
@@ -96,7 +97,8 @@ class BookScanner:
 
     def __init__(self, bus, camera, finder, timeout_s: float = 5.0, poll_s: float = 0.1,
                  decode: Optional[Callable] = None):
-        self.bus, self.camera, self.finder = bus, camera, finder
+        super().__init__(bus, finder)
+        self.camera = camera
         self.timeout_s, self.poll_s = timeout_s, poll_s
         self.decode = decode or getattr(camera, "decode", decode_isbn)
         self._task: Optional[asyncio.Task] = None
@@ -153,3 +155,6 @@ class BookScanner:
                            section=place.section if place else None, floor=place.floor if place else None,
                            zone=place.zone if place else None, map_x=place.map_x if place else None,
                            map_y=place.map_y if place else None, map_yaw=place.map_yaw if place else None)
+
+
+CameraBookReader = BookScanner

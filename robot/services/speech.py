@@ -55,7 +55,8 @@ class Speech:
     @classmethod
     def from_config(cls, cfg) -> "Speech":
         voice = cfg.robot.get("voice") or {}
-        return cls(cfg.ai_host, cfg.ai_port, voice.get("tts_voice", "af_heart"),
+        port = cfg.robot["ai_server"].get("tts_port") or cfg.ai_port         # TTS may be on its own port
+        return cls(cfg.ai_host, int(port), voice.get("tts_voice", "af_heart"),
                    float(cfg.robot["ai_server"].get("timeout_s", 300)), float(voice.get("deepen", 1.0)),
                    float(voice.get("pace", 1.0)))
 

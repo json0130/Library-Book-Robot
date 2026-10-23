@@ -20,6 +20,15 @@ When the confirmed people change, on_change(count, person_ids) is called (person
 `identify`). The default publishes ContextChanged(map_zone, count, person_ids=...); the dialogue then greets
 a person it hasn't greeted yet and resets when the count reaches 0. The newest raw detections, with a
 "person" number each when known, stay in `detections` for the live view to draw.
+
+EngagementDetector turns the same detections into the events the state machine runs on:
+
+    PersonEngaged       a face at least `engagement.min_face_px` tall (close, about 1.5 m) for `engagement.dwell_s`
+    PersonNearbyBusy    a face for that long that is never big enough (far away, or not coming closer): near, not engaging
+    PersonLeft          no face for `engagement.left_after_s`
+
+The server's face detector only finds faces that look at the camera, so "a face" is a frontal face. A person who
+turns away simply stops being seen, and they are only reported gone after `left_after_s`.
 """
 
 from __future__ import annotations
@@ -29,7 +38,7 @@ import logging
 import time
 from typing import Awaitable, Callable, Optional
 
-from robot.events import ContextChanged
+from robot.events import ContextChanged, PersonEngaged, PersonLeft, PersonNearbyBusy
 
 log = logging.getLogger("robot.people")
 
@@ -39,11 +48,71 @@ def names(ids) -> str:
         ", ".join(f"person {i}" for i in ids[:-1]) + f" and person {ids[-1]}"
 
 
+class EngagementDetector:
+    """update(detections) is called once per camera sample and returns the events that sample caused, as
+    [("engaged", person_ids), ("busy", person_ids), ("left", ())]. Each is reported once per arrival."""
+
+    def __init__(self, min_face_px: float = 60, dwell_s: float = 1.5, left_after_s: float = 5.0, clock=time.monotonic,
+                 require_close: bool = True):
+        """require_close False: any face engages (the closeness check is not in use yet), after dwell_s."""
+        self.min_face_px, self.dwell_s, self.left_after_s, self.clock = min_face_px, dwell_s, left_after_s, clock
+        self.require_close = require_close
+        self.state = "absent"                       # absent | nearby | engaged
+        self._near_since: Optional[float] = None    # a face that is big enough has been in view since
+        self._far_since: Optional[float] = None     # a face that is too small has been in view since
+        self._last_seen: Optional[float] = None
+        self._last_update: Optional[float] = None   # when update() last ran
+
+    @classmethod
+    def from_config(cls, settings: dict, clock=time.monotonic) -> "EngagementDetector":
+        """From config/robot.yaml `engagement:` (keys the detector does not use, like leave_grace_s, are skipped)."""
+        keys = ("min_face_px", "dwell_s", "left_after_s", "require_close")
+        return cls(clock=clock, **{k: settings[k] for k in keys if k in settings})
+
+    STALL_S = 3.0               # a gap this long between samples is the robot being busy, not the person being gone
+
+    @staticmethod
+    def size(detection: dict) -> int:
+        top, _, bottom, _ = detection["box"]
+        return bottom - top
+
+    def update(self, detections: list) -> list:
+        now = self.clock()
+        events = []
+        if self._last_update is not None and now - self._last_update > self.STALL_S and self._last_seen is not None:
+            self._last_seen += now - self._last_update      # the robot was busy (speaking...), not nobody there
+        self._last_update = now
+        big = [d for d in detections if not self.require_close or self.size(d) >= self.min_face_px]
+        if detections:
+            self._last_seen = now
+        if big:
+            self._far_since = None
+            self._near_since = self._near_since if self._near_since is not None else now
+            if self.state != "engaged" and now - self._near_since >= self.dwell_s:
+                self.state = "engaged"
+                events.append(("engaged", tuple(sorted({d["person"] for d in big if d.get("person")}))))
+        elif detections:                              # faces, but none close enough
+            self._near_since = None
+            self._far_since = self._far_since if self._far_since is not None else now
+            if self.state == "absent" and now - self._far_since >= self.dwell_s:
+                self.state = "nearby"
+                events.append(("busy", tuple(sorted({d["person"] for d in detections if d.get("person")}))))
+        else:                                         # nobody in view
+            self._near_since = self._far_since = None
+            if self.state != "absent" and self._last_seen is not None and now - self._last_seen >= self.left_after_s:
+                self.state = "absent"
+                events.append(("left", ()))
+        return events
+
+
+EVENT_FOR = {"engaged": PersonEngaged, "busy": PersonNearbyBusy}
+
+
 class PeopleCounter:
     def __init__(self, bus, camera, vision, map_zone: str = "common", interval_s: float = 1.0,
                  arrive_frames: int = 2, leave_after_s: float = 8.0,
                  on_change: Optional[Callable[[int, tuple], Awaitable]] = None, clock=time.monotonic,
-                 identify: Optional[Callable] = None):
+                 identify: Optional[Callable] = None, engagement: Optional[EngagementDetector] = None):
         self.bus, self.camera, self.vision = bus, camera, vision
         self.map_zone = map_zone
         self.interval_s = interval_s
@@ -52,6 +121,7 @@ class PeopleCounter:
         self.on_change = on_change or self._publish
         self.clock = clock
         self.identify = identify
+        self.engagement = engagement                # optional: also report PersonEngaged / PersonNearbyBusy / PersonLeft
         self.count = 0                      # the confirmed head count
         self.person_ids: tuple = ()         # the confirmed people (with `identify`)
         self.detections: list[dict] = []    # raw detections of the newest frame ({"box": [t, r, b, l], ...})
@@ -90,6 +160,12 @@ class PeopleCounter:
                 if person is not None:
                     d["person"] = person
         self.detections, self.detected_at = detections, self.clock()
+        if self.engagement is not None:
+            for kind, person_ids in self.engagement.update(detections):
+                log.info("[camera] %s%s", {"engaged": "someone is engaging", "busy": "someone is near but busy",
+                                           "left": "they have left"}[kind],
+                         f" ({', '.join(f'person {p}' for p in person_ids)})" if person_ids else "")
+                await self.bus.publish(PersonLeft() if kind == "left" else EVENT_FOR[kind](person_ids))
         if self.identify is not None:
             await self._update_people({p for p in (people or []) if p is not None})
         else:

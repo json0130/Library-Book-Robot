@@ -7,10 +7,26 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: #000; }
+  body.split canvas { height: 56%; }
+  body.buttons { cursor: auto; }
+  /* The text area and option buttons for a ScreenUpdate: placeholder layouts, to be designed. */
+  #panel { position: fixed; left: 0; right: 0; bottom: 0; height: 44%; box-sizing: border-box; padding: 2vh 5vw;
+           display: none; flex-direction: column; justify-content: center; gap: 2vh; color: #bff; font-family: system-ui, sans-serif;
+           text-align: center; }
+  body.split #panel { display: flex; }
+  #title { font-size: 4vh; font-weight: 600; color: #2debeb; }
+  #text { font-size: 3.2vh; line-height: 1.35; max-height: 16vh; overflow: hidden; }
+  #options { display: flex; flex-wrap: wrap; justify-content: center; gap: 2vh 2vw; }
+  #options button { font: inherit; font-size: 3.4vh; padding: 1.6vh 3vw; min-width: 16vw; color: #021; background: #2debeb;
+                    border: 0; border-radius: 3vh; cursor: pointer; }
+  #options button:active { background: #fff; }
+  #state { position: fixed; top: 0.6vh; left: 1vw; font: 1.6vh monospace; color: #155; }
 </style>
 </head>
 <body>
 <canvas id="face"></canvas>
+<div id="panel"><div id="title"></div><div id="text"></div><div id="options"></div></div>
+<div id="state"></div>
 <script>
 "use strict";
 // Robot face: glowing cyan eyes and a thin mouth on pure black.
@@ -19,6 +35,8 @@
 //   {"emotion": "happy", "hold_s": 3.0}      ("idle" returns to the resting face)
 //   {"talk": {"levels": [0..1, ...], "fps": 30, "delay_s": 0}}   mouth follows a speech loudness envelope
 //   {"talk": {"seconds": 3}}                                       generic talking (0 stops)
+//   {"screen": {"state_path", "zone", "layout": "full_face"|"split", "title", "text", "options": [{"id","label"}]}}
+//                                         what the state machine wants shown; a tapped option POSTs /input {"choice": id}
 // Debug: open the page with ?emotion=happy to freeze that face without a server (&talk=0.7 opens the mouth).
 
 // ---------- expressions ----------
@@ -91,6 +109,8 @@ let emotion = "idle", holdUntil = 0;
 let W = 0, H = 0, scale = 1, dpr = 1;
 const params = new URLSearchParams(location.search);
 const frozenTalk = clamp(Number(params.get("talk")) || 0, 0, 1);
+const preview = params.has("preview");          // embedded in the operator page: look, don't touch
+if (preview) document.documentElement.style.pointerEvents = "none";
 const frozen = (ALIASES[(params.get("emotion") || "").toLowerCase()] || "").replace("idle", "neutral") || null;
 
 function setEmotion(name, holdS, now) {
@@ -280,8 +300,8 @@ function drawScene(c, now, blink, fat, sharp) {
 function resize() {
   // Render at device pixels (capped at 2x) so edges stay sharp on high-density screens.
   dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = canvas.width = Math.round(window.innerWidth * dpr);
-  H = canvas.height = Math.round(window.innerHeight * dpr);
+  W = canvas.width = Math.round(canvas.clientWidth * dpr);
+  H = canvas.height = Math.round(canvas.clientHeight * dpr);
   scale = Math.min(W / 110, H / 70);
   for (const g of [glowSrc, ...GLOWS]) {
     g.cv.width = Math.max(8, Math.ceil(W / GLOW_DIV));
@@ -341,6 +361,29 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+// ---------- the screen: text area and option buttons ----------
+const el = id => document.getElementById(id);
+function showScreen(u) {
+  const split = u.layout === "split";
+  const options = Array.isArray(u.options) ? u.options : [];
+  document.body.classList.toggle("split", split);
+  document.body.classList.toggle("buttons", split && options.length > 0);
+  el("title").textContent = u.title || "";
+  el("text").textContent = u.text || "";
+  el("state").textContent = new URLSearchParams(location.search).has("debug") ? `${u.state_path} · ${u.zone}` : "";
+  const box = el("options");
+  box.replaceChildren(...options.map(o => {
+    const b = document.createElement("button");
+    b.textContent = o.label || o.id;
+    b.addEventListener("click", () => {
+      fetch("/input", { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ choice: o.id }) }).catch(() => {});
+    });
+    return b;
+  }));
+  resize();
+}
+
 // ---------- events ----------
 function connect() {
   let es;
@@ -349,6 +392,7 @@ function connect() {
     try {
       const d = JSON.parse(ev.data);
       if (d.talk) { startTalk(d.talk, performance.now()); return; }
+      if (d.screen) { showScreen(d.screen); return; }
       const name = ALIASES[String(d.emotion || "").toLowerCase()];
       if (!name) return;
       const hold = Number(d.hold_s);

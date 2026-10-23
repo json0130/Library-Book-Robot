@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
@@ -51,7 +52,7 @@ from typing import Iterable, Mapping, Optional
 from robot.services.books import Book, Catalog, CatalogError, read_rows, whole_number
 from robot.services.call_numbers import CLOSE_BY, CallNumber, closeness, parse_call_number, shared_area
 from robot.services.isbn import to_isbn13
-from robot.services.text_similarity import Embedder, TfidfEmbedder
+from robot.services.text_similarity import Embedder, TfidfEmbedder, stem, words_of
 from robot.services.topics import TopicVocabulary, norm_key
 
 log = logging.getLogger("robot.graph")
@@ -90,6 +91,16 @@ class Shelf:
     @property
     def has_pose(self) -> bool:
         return None not in (self.map_x, self.map_y, self.map_yaw)
+
+
+@dataclass(frozen=True)
+class Area:
+    """A part of the library a visitor asks about: `name` is the section (kind "section") or the topic (kind "topic",
+    then `shelf` is the shelf with most books on it); `shelves` are all the shelf ids of that shelf's section."""
+    name: str
+    shelf: Shelf
+    shelves: tuple
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -540,6 +551,91 @@ class BookGraph:
             return f"because, like {title}, it falls under {broader.reason.removeprefix('both fall under ')}"
         return f"because it's similar to {title}"
 
+    def _topics_named(self, text: str) -> list:
+        """The canonical topics the words name (through topics.yaml, longest phrase first)."""
+        padded = f" {words_of_text(text)} "
+        known = {**self.vocabulary.words, **{t: t for t in self._df}}
+        wanted = []
+        for word in sorted(known, key=len, reverse=True):
+            if len(word) > 2 and f" {word} " in padded:
+                wanted.append(known[word])
+                padded = padded.replace(f" {word} ", " | ")
+        return list(dict.fromkeys(wanted))
+
+    def find_area(self, text: str) -> Optional["Area"]:
+        """The part of the library a visitor means by "the history section", "where are the astronomy books",
+        "science fiction": a section named in the words (the longest name wins, so "science fiction" is not
+        "science"), else the shelf holding most books on a topic they name. None if neither. Plain dicts and the
+        shelves/topics already loaded: nothing about visitors."""
+        stems = {stem(w) for w in words_of(text)}
+        sections: dict[str, list] = {}
+        for shelf in self.shelves.values():
+            if shelf.section:
+                sections.setdefault(shelf.section, []).append(shelf)
+        named = [(len(name.split()), name) for name in sections
+                 if {stem(w) for w in words_of(name)} <= stems]
+        if named:
+            name = max(named)[1]
+            shelves = sorted(sections[name], key=lambda s: s.id)
+            return Area(name, shelves[0], tuple(s.id for s in shelves), "section")
+        wanted = self._topics_named(text)
+        if not wanted:
+            return None
+        count: dict[str, float] = {}
+        for book in self.catalog.books:
+            mine = self._topics[book.isbn13]
+            direct = any(t in wanted for t in mine)
+            if direct or any(set(self.vocabulary.ancestors(t)) & set(wanted) for t in mine):
+                place = self.locate(book.isbn13)
+                if place and place.shelf in self.shelves:
+                    count[place.shelf] = count.get(place.shelf, 0) + (1.0 if direct else 0.5)
+        for shelf_id, shelf in self.shelves.items():          # a shelf whose description names the topic is the place
+            described = {stem(w) for w in words_of(f"{shelf.section} {shelf.description}")}
+            if any(stem(w) in described for t in wanted for w in words_of(t)):
+                count[shelf_id] = count.get(shelf_id, 0) + 10
+        if not count:
+            return None
+        best = min(count, key=lambda s: (-count[s], s))
+        shelf = self.shelves[best]
+        same = sorted(s.id for s in self.shelves.values() if s.section == shelf.section)
+        return Area(wanted[0], shelf, tuple(same), "topic")
+
+    def recommend_for_interest(self, text: str, n: int = 3) -> list:
+        """Recommendations for someone who says what they like instead of showing a book ("something about space",
+        "robots"). The topics the words name (through topics.yaml, longest phrase first) are matched against each
+        book's topics: a book about the topic itself, or about something narrower under it, qualifies, the first
+        better. With no topic named, the words are matched against the summaries and subjects instead. Each
+        Recommendation has ONE reason ("because it's about astronomy"); ties are broken by title, then ISBN.
+        [] if nothing matches."""
+        padded = f" {words_of_text(text)} "
+        known = {**self.vocabulary.words, **{t: t for t in self._df}}
+        wanted = []
+        for word in sorted(known, key=len, reverse=True):
+            if len(word) > 2 and f" {word} " in padded:
+                wanted.append(known[word])
+                padded = padded.replace(f" {word} ", " | ")
+        wanted = list(dict.fromkeys(wanted))
+        scored = []
+        for book in self.catalog.books:
+            mine = self._topics[book.isbn13]
+            direct = [t for t in wanted if t in mine]
+            under = [t for t in mine if t not in wanted and set(self.vocabulary.ancestors(t)) & set(wanted)]
+            if direct or under:
+                weight = sum(self.topic_weight(t) for t in direct) * 2 + sum(self.topic_weight(t) for t in under) * 0.5
+                chosen = min(direct or under, key=lambda t: (-self.vocabulary.depth(t), -self.idf(t), t))
+                scored.append((weight, book, f"because it's about {chosen}"))
+        if not scored:
+            stems = {stem(w) for w in words_of(text)}
+            for book in self.catalog.books:
+                hay = {stem(w): w for w in words_of(" ".join([book.summary or "", book.genre, *book.subjects]))}
+                hits = sorted(stems & set(hay))
+                if hits:
+                    scored.append((float(len(hits)), book, f"because it's about {hay[hits[0]]}"))
+        scored.sort(key=lambda s: (-round(s[0], 9), s[1].title.lower(), s[1].isbn13))
+        top = scored[0][0] if scored else 1.0
+        return [Recommendation(book, Score("", book.isbn13, min(1.0, weight / top), ()), because)
+                for weight, book, because in scored[:max(0, n)]]
+
     def _is_next(self, a: str, b: str) -> bool:
         """b follows a: the next series_index of the same series, or a series_next row from a to b."""
         if any(l.relation == "series_next" and (l.from_isbn, l.to_isbn) == (a, b) for l in self._linked(a, b)):
@@ -615,6 +711,11 @@ class BookGraph:
             return value, ""
         terms = self.embedder.shared_terms(a, b, 3)
         return value, "similar descriptions" + (f" (both mention {natural_join(terms)})" if terms else "")
+
+
+def words_of_text(text: str) -> str:
+    """Lower-case words with single spaces: "Something about Outer-Space!" is "something about outer space"."""
+    return norm_key(" ".join(re.findall(r"[a-z0-9']+", str(text).lower())))
 
 
 def _document_frequency(sets: Iterable) -> dict:

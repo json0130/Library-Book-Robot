@@ -15,6 +15,10 @@ class Navigation:
         """Drive to a map pose (metres, metres, radians), e.g. a shelf from data/shelves.csv."""
         self.esp32.send("navigate", x=round(x, 2), y=round(y, 2), yaw=round(yaw, 2))
 
+    def stop(self) -> None:
+        """Stop where it is (someone wants to talk). The drive is started again with go_to_pose."""
+        self.esp32.send("stop")
+
     def go_to(self, area: str) -> None:
         """Drive to a named area from config/zones.yaml. Not implemented: needs localisation."""
         raise NotImplementedError("navigation is not implemented yet")

@@ -2,7 +2,7 @@ import asyncio
 import unittest
 
 from robot.bus import Bus
-from robot.events import BookScanned, UserUtterance
+from robot.events import BookIdentified, UserUtterance
 
 
 def run(coro):
@@ -32,11 +32,11 @@ class BusTest(unittest.TestCase):
 
     def test_only_matching_types_and_base_class_subscribers(self):
         bus, seen = Bus(), []
-        bus.subscribe(BookScanned, lambda e: seen.append("book"))
+        bus.subscribe(BookIdentified, lambda e: seen.append("book"))
         bus.subscribe(object, lambda e: seen.append(type(e).__name__))
         run(bus.publish(UserUtterance("x")))
-        run(bus.publish(BookScanned("1")))
-        self.assertEqual(seen, ["UserUtterance", "book", "BookScanned"])
+        run(bus.publish(BookIdentified("1")))
+        self.assertEqual(seen, ["UserUtterance", "book", "BookIdentified"])
 
     def test_failing_handler_does_not_stop_others(self):
         bus, seen = Bus(), []

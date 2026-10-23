@@ -219,5 +219,170 @@ class DisplayServerTest(unittest.TestCase):
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
+class StateAndOperatorEndpointsTest(DisplayServerTest):
+    """The state machine's screen, the touch-button input and the operator page (display server side)."""
+
+    def post_to(self, path, body):
+        req = urllib.request.Request(self.url(path), data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        return urllib.request.urlopen(req, timeout=5)
+
+    def get_json(self, path):
+        with urllib.request.urlopen(self.url(path), timeout=5) as r:
+            return json.loads(r.read())
+
+    SCREEN = {"state_path": "ENGAGED.OFFER", "zone": "quiet", "layout": "split", "title": "How can I help?",
+              "text": "Hello", "options": [{"id": "return", "label": "Return a book"}]}
+
+    def test_a_screen_update_reaches_every_page_on_the_event_stream(self):
+        clients = [self.listen() for _ in range(2)]
+        self.wait_for_clients(2)
+        with self.post_to("/screen", self.SCREEN) as r:
+            self.assertEqual(json.loads(r.read())["clients"], 2)
+        for c in clients:
+            self.assertEqual(self.read_event(c), {"screen": self.SCREEN})
+
+    def test_a_page_that_connects_late_is_shown_the_last_screen_and_state(self):
+        self.post_to("/screen", self.SCREEN).close()
+        self.post_to("/state", {"state": "ENGAGED.OFFER", "zone": "quiet"}).close()
+        self.post_to("/screen", {**self.SCREEN, "state_path": "ENGAGED.SCAN"}).close()
+        c = self.listen()
+        seen = {k: v for _ in range(2) for k, v in self.read_event(c).items()}
+        self.assertEqual(seen["screen"]["state_path"], "ENGAGED.SCAN")                # the newest one only
+        self.assertEqual(seen["state"]["zone"], "quiet")
+
+    def test_a_screen_update_needs_a_state_path(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.post_to("/screen", {"title": "x"})
+        self.assertEqual(cm.exception.code, 400)
+
+    def test_input_queues_a_choice_for_the_robot(self):
+        self.assertEqual(self.get_json("/inbox?after=0"), {"last": 0, "items": []})
+        with self.post_to("/input", {"choice": "return"}) as r:
+            self.assertEqual(json.loads(r.read()), {"queued": 1})
+        self.post_to("/input", {"choice": "done"}).close()
+        inbox = self.get_json("/inbox?after=0")
+        self.assertEqual(inbox["last"], 2)
+        self.assertEqual([(i["id"], i["type"], i["choice"]) for i in inbox["items"]],
+                         [(1, "choice", "return"), (2, "choice", "done")])
+        self.assertEqual([i["id"] for i in self.get_json("/inbox?after=1")["items"]], [2])
+        self.assertEqual(self.get_json("/inbox?after=2")["items"], [])
+
+    def test_input_rejects_unknown_choices(self):
+        for body in ({"choice": "launch"}, {"choice": 5}, {}):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self.post_to("/input", body)
+            self.assertEqual(cm.exception.code, 400)
+        self.assertEqual(self.get_json("/inbox")["items"], [])
+
+    def test_operator_commands_are_queued_and_checked(self):
+        with self.post_to("/operator", {"command": "goto", "arg": "OFFER"}) as r:
+            self.assertEqual(json.loads(r.read()), {"queued": 1})
+        self.post_to("/operator", {"command": "engage"}).close()
+        items = self.get_json("/inbox")["items"]
+        self.assertEqual([(i["type"], i["command"], i["arg"]) for i in items], [("operator", "goto", "OFFER"), ("operator", "engage", "")])
+        for body in ({"command": "rm -rf"}, {"command": "say", "arg": 5}, {"command": "say", "arg": "x" * 501}, {}):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self.post_to("/operator", body)
+            self.assertEqual(cm.exception.code, 400)
+
+    def test_the_operator_page_and_the_screen_page_are_served(self):
+        with urllib.request.urlopen(self.url("/operator"), timeout=5) as r:
+            page = r.read().decode()
+            self.assertIn("text/html", r.headers["Content-Type"])
+        for needle in ("Robot operator", "/operator", "EventSource", "goto", "zone-quiet", "reset"):
+            self.assertIn(needle, page)
+        with urllib.request.urlopen(self.url("/"), timeout=5) as r:
+            index = r.read().decode()
+        for needle in ("options", "/input", "showScreen"):
+            self.assertIn(needle, index)
+
+    def test_the_server_listens_on_localhost_by_default(self):
+        from robot.config import load_config
+        from robot.config import DISPLAY_DEFAULTS
+        self.assertEqual(DISPLAY_DEFAULTS["bind_host"], "127.0.0.1")
+        self.assertEqual(self.server.server_address[0], "127.0.0.1")
+        self.assertEqual(make_server.__defaults__[1], "127.0.0.1")
+
+    def test_another_computer_may_only_use_the_operator_page(self):
+        from display.server import allowed, is_local
+        for addr in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            self.assertTrue(is_local(addr), addr)
+        for addr in ("172.24.10.190", "192.168.1.5", "fe80::1%eth0", "nonsense"):
+            self.assertFalse(is_local(addr), addr)
+        for method, path in (("GET", "/operator"), ("GET", "/events"), ("GET", "/"), ("POST", "/operator")):
+            self.assertTrue(allowed(method, path, False), (method, path))
+        for method, path in (("POST", "/input"), ("POST", "/screen"), ("POST", "/state"), ("POST", "/emotion"),
+                             ("POST", "/talk"), ("GET", "/inbox"), ("GET", "/emotion"), ("GET", "/talk")):
+            self.assertFalse(allowed(method, path, False), (method, path))
+            self.assertTrue(allowed(method, path, True), (method, path))
+
+    def test_the_camera_picture_is_posted_by_the_robot_and_streamed_to_the_page(self):
+        jpg = b"\xff\xd8\xff\xe0fake-jpeg-data\xff\xd9"
+        with self.assertRaises(urllib.error.HTTPError) as cm:                           # nothing yet
+            urllib.request.urlopen(self.url("/camera.jpg"), timeout=5)
+        self.assertEqual(cm.exception.code, 404)
+        req = urllib.request.Request(self.url("/camera"), data=jpg, headers={"Content-Type": "image/jpeg"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            self.assertEqual(json.loads(r.read()), {"bytes": len(jpg), "viewers": 0})
+        with urllib.request.urlopen(self.url("/camera.jpg"), timeout=5) as r:
+            self.assertEqual((r.headers["Content-Type"], r.read()), ("image/jpeg", jpg))
+        stream = urllib.request.urlopen(self.url("/camera.mjpg"), timeout=5)
+        self.streams.append(stream)
+        self.assertIn("multipart/x-mixed-replace", stream.headers["Content-Type"])
+        self.assertEqual(stream.readline(), b"--frame\r\n")
+        stream.readline()
+        stream.readline()
+        stream.readline()
+        self.assertEqual(stream.read(len(jpg)), jpg)
+        for bad in (b"not a jpeg", b""):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(urllib.request.Request(self.url("/camera"), data=bad, method="POST"), timeout=5)
+            self.assertEqual(cm.exception.code, 400)
+
+    def test_another_computer_may_watch_the_camera_but_not_post_to_it(self):
+        from display.server import allowed
+        self.assertTrue(allowed("GET", "/camera.mjpg", False))
+        self.assertTrue(allowed("GET", "/camera.jpg", False))
+        self.assertFalse(allowed("POST", "/camera", False))
+        self.assertTrue(allowed("POST", "/camera", True))
+
+    def test_the_operator_page_shows_the_camera_the_books_on_board_and_is_landscape(self):
+        with urllib.request.urlopen(self.url("/operator"), timeout=5) as r:
+            page = r.read().decode()
+        for needle in ("/camera.mjpg", "Books on board", "grid-template-columns", "showBooks", "What can happen next", "showMap"):
+            self.assertIn(needle, page)
+
+    def test_the_robot_sends_to_the_display_from_a_worker_thread_so_it_never_waits(self):
+        from robot.actuation.face import FaceDisplay
+        import time
+        c = self.listen()
+        self.wait_for_clients(1)
+        face = FaceDisplay("127.0.0.1", self.port, background=True)
+        self.addCleanup(face._pool.shutdown)
+        started = time.monotonic()
+        self.assertTrue(face.show_screen(self.SCREEN))          # returns at once, before it is sent
+        self.assertTrue(face.show_state({"state": "IDLE"}))
+        face.flush()
+        self.assertEqual(self.read_event(c), {"screen": self.SCREEN})            # in the order they were queued
+        self.assertEqual(self.read_event(c), {"state": {"state": "IDLE"}})
+        # a display that is not there: the call still returns at once and only the worker waits
+        down = FaceDisplay("127.0.0.1", 1, background=True)
+        self.addCleanup(down._pool.shutdown)
+        t = time.monotonic()
+        self.assertTrue(down.show_screen(self.SCREEN))
+        self.assertLess(time.monotonic() - t, 0.1)
+        down.flush()
+        self.assertFalse(down.available)
+
+    def test_the_inbox_keeps_only_the_newest_items(self):
+        from display.server import INBOX_KEEP
+        for i in range(INBOX_KEEP + 5):
+            self.hub.inbox.add({"type": "choice", "choice": "done"})
+        items = self.get_json("/inbox?after=0")["items"]
+        self.assertEqual(len(items), INBOX_KEEP)
+        self.assertEqual(items[-1]["id"], INBOX_KEEP + 5)
+
+
 if __name__ == "__main__":
     unittest.main()

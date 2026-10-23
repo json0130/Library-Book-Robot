@@ -12,3 +12,8 @@ class Lights:
 
     def spotlight(self, on: bool) -> None:
         self.esp32.send("spotlight", on=bool(on))
+
+    def pattern(self, name: str) -> None:
+        """A short animation on the LED ring: "pulse" (they have my attention) or "announce" (excuse me, I'm
+        passing). The ring goes back to the style's colour afterwards."""
+        self.esp32.send("light_pattern", name=name)

@@ -30,23 +30,25 @@ config/            robot.yaml (server, devices, thresholds), styles.yaml (behavi
 robot/             the robot program: python -m robot check | sim | run
   app.py           wires drivers, core logic and the bus together
   bus.py           in-process asyncio publish/subscribe
-  events.py        the events on the bus (ContextChanged, BookScanned, UserUtterance, ...)
+  events.py        the events on the bus (ContextChanged, PersonEngaged, BookIdentified, UserChoice, StateTransition, ScreenUpdate, ...)
+  operator.py      operator controls (goto, zone, engage, busy, dropped, pick, book, say, reset): the sim's terminal and the /operator page share it
+  display_link.py  collects button taps and /operator commands from the display server
   config.py        loads config/*.yaml
-  perception/      book_scanner (barcode -> ISBN -> BookScanned), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged); noise level (stub)
-  core/            context, style, dialogue state machine, expression blending, session log
+  perception/      book_reader (the BookReader interface: camera scanner, RFID stub), book_scanner (barcode -> ISBN -> BookIdentified), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged; EngagementDetector -> PersonEngaged / PersonNearbyBusy / PersonLeft); noise level (stub)
+  core/            context, style, fsm (the generic state machine), dialogue (the table: IDLE / ENGAGED / RETURNING), storage (which book is in which slot), state_doc, expression blending, session log
   services/        AI server wrappers: llm (client + sentence splitter), speech, vision;
                    isbn (validation), books (catalogue, Open Library fallback), book_graph (the book knowledge graph:
                    recommendations and shelf locations), topics, call_numbers, text_similarity
   actuation/       voice, face display, lights, neck, storage ring, printer, navigation
   drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), fake (logs only)
   sim/             keyboard simulator
-display/           face display: server.py (SSE) + ui/index.html, start_display.sh (kiosk)
+display/           face display: server.py (SSE, /screen, /input, /operator) + ui/index.html (face, text, option buttons), ui/operator.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
 tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes;
                    book data tools: catalog_check, import_books, similarity_report, graph_view
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
-docs/              architecture notes, reference images
+docs/              architecture notes, state_machine.md (generated), reference images
 data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv (SAMPLE book data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
                    cache/, logs/, graph.html and catalog_draft.csv (generated, gitignored)
 ```
@@ -70,6 +72,7 @@ PyYAML is the only required package. OpenCV (the camera tools and driver) comes 
 python -m robot check     # is the AI server reachable?
 python -m robot sim       # try the logic from the keyboard: fake hardware, no AI server needed
 python -m robot sim --live   # webcam + camera window, face detection, auto-scan, speaker and LLM: step up (hello), show a book, ask, hear the answer
+python -m robot states --mermaid   # the state machine as a Mermaid diagram, from its transition table
 python -m robot run       # on the hardware; for now exits naming the drivers that are missing (esp32)
 ```
 
@@ -87,18 +90,44 @@ scan <image path>            fake camera only: the real barcode decoder reads a 
 return | explain | recommend say that to the robot once it has offered
 <anything else you type>     the visitor says it, e.g. "can you explain it?" (`say <text>` also works)
 feel <emotion> [confidence]  the camera sees this emotion on the visitor
-leave                        everyone walks away
+leave                        everyone walks away (also PersonLeft)
 fixed on | fixed off         baseline condition: one style everywhere
+state                        where the state machine is, the zone, what is in storage
+goto <state>                 force a state (OFFER, ENGAGED.SCAN, NAVIGATING...); fills in a sample book, or two stored books for RETURNING
+zone quiet | zone common     change the zone only (a style setting, not a state)
+engage | busy                a person engages / is near but busy (PersonEngaged / PersonNearbyBusy)
+dropped                      the pad dropped the book into its slot (BookDropped)
+pick return|ask|recommend|more|guide|done   press that screen button for the visitor
+reset | reset all            back to IDLE (`all` also empties the storage)
+wait <seconds> | wait idle   let the timers run, for scripted runs
 help, quit
 ```
 
-Options: `--llm` (the AI server's LLM words explain and recommend), `--camera` (scan with the real webcam and show a live camera window), `--faces` (find the people the webcam sees with the AI server's face detection: a new face makes the robot say hello, and nobody in view for `perception.leave_after_s` seconds ends the visit; needs `--camera`), `--auto-scan` (start a scan as soon as a book's barcode is held up to the camera, so you don't type `book`; the camera stands in for the pad's weight sensor; needs `--camera`), `--no-preview` (no camera window, e.g. over SSH), `--speak` (speak replies through the speaker with TTS from the AI server, and the face display's mouth moves), `--live` (webcam, faces, auto-scan, speaker and LLM together). With `--live`: step in front of the camera and the robot says hello. Faces are told apart (`person 1`, `person 2`...), so each person is greeted once, even after leaving the view and coming back, and a new face is greeted (see Person IDs below); hold a book's barcode up to the camera (or type `book`); then type "can you explain it?" or "can you recommend something?" and the robot answers aloud. Replies are spoken only in styles with the speech channel (a common area, the default); in a quiet zone they are printed or go through other channels instead, and a quiet zone doesn't greet. With `--faces` the head count comes from the camera, so typing `common group` or `leave` is overridden at the next change. If the TTS server fails, the reply is only shown and the conversation carries on.
+Typing `engage` is how a visit starts in the simulator (with `--faces` the camera does it: any frontal face for `engagement.dwell_s`; the closeness check is off until `engagement.require_close: true`). `--no-persist` starts with an empty storage ring and does not save it. Piped input waits at the end for the goodbye and any trip putting books back to finish (`--settle 0` to quit at once).
 
-After each command it prints the context, the style and the dialogue state, and the fake drivers print what the hardware would do (`[esp32] neck pose=lowered`, `[voice whisper, volume 0.12] ...`). If the face display is running, expressions and the talking mouth show on it; otherwise they are only printed. Each session is logged to `data/logs/session-<time>.jsonl` (`--no-log` turns that off).
+Options: `--llm` (the AI server's LLM words explain and recommend), `--camera` (scan with the real webcam; the camera picture shows on the operator page), `--faces` (find the people the webcam sees with the AI server's face detection: any frontal face that stays in view for `engagement.dwell_s` (0.5 s) makes the robot engage and say hello (set `engagement.require_close: true` to also require `min_face_px`), and no face for `engagement.left_after_s` ends the visit; needs `--camera`), `--auto-scan` (start a scan as soon as a book's barcode is held up to the camera, so you don't type `book`; the camera stands in for the pad's weight sensor; needs `--camera`), `--local-faces` (detect faces on the robot with OpenCV instead of the AI server, for when the server's face detection is down; also `perception.detector: local`), `--preview` (also open a camera window on the robot; off by default), `--speak` (speak replies through the speaker with TTS from the AI server, and the face display's mouth moves), `--live` (webcam, faces, auto-scan, speaker and LLM together). With `--live`: step in front of the camera and the robot says hello. Faces are told apart (`person 1`, `person 2`...), so each person is greeted once, even after leaving the view and coming back, and a new face is greeted (see Person IDs below); hold a book's barcode up to the camera (or type `book`); then type "can you explain it?" or "can you recommend something?" and the robot answers aloud. Replies are spoken only in styles with the speech channel (a common area, the default); in a quiet zone they are printed or go through other channels instead, and a quiet zone doesn't say hello aloud (the robot looks at the person, pulses its light and shows the greeting on the screen). With `--faces` the head count comes from the camera, so typing `common group` or `leave` is overridden at the next change. If the TTS server fails, the reply is only shown and the conversation carries on.
+
+After each command it prints the context, the style and the dialogue state, every state transition with its path (`ENGAGED.OFFER -> ENGAGED.AWAIT_BOOK  (Choice, operator)`) and every screen the display is sent, and the fake drivers print what the hardware would do (`[esp32] neck pose=lowered`, `[voice whisper, volume 0.12] ...`). If the face display is running, expressions and the talking mouth show on it; otherwise they are only printed. Each session is logged to `data/logs/session-<time>.jsonl` (`--no-log` turns that off).
 
 ```bash
 printf 'quiet alone\nbook\ncommon group\nquit\n' | python -m robot sim
+printf 'zone common\nengage\npick return\nbook\ndropped\ndone\n' | python -m robot sim   # a return, then the automatic trip to the shelf
 ```
+
+### The state machine
+
+The robot's behaviour is a hierarchical, table-driven state machine (`robot/core/fsm.py` is the generic machine, `robot/core/dialogue.py` the table). The diagram and every transition are in [docs/state_machine.md](docs/state_machine.md), generated from the table (`python -m robot states --write`; a test fails if it is out of date).
+
+- **IDLE** waits. **ENGAGED** is a visit: GREET, OFFER (return / ask about a book / recommend), AWAIT_BOOK, SCAN, STORE, ANSWER, RECOMMEND, ANYTHING_ELSE, FAREWELL. **RETURNING** puts the stored books back: PLAN, NAVIGATING, AT_SHELF, ANNOUNCE, HOMING.
+- A person engaging (or a book placed) starts a visit. When it ends with books in storage, the robot waits `returning.auto_start_delay_s` (10 s) and starts putting them back, shelf by shelf. **Switched off for now** (`returning.auto_start: false`), so returned books stay in storage for testing; `goto RETURNING` on the operator page starts a trip by hand. Someone engaging during the trip pauses it; when that visit ends the trip resumes at the shelf it was heading for, with the drive time that was left. Someone nearby who isn't engaging gets an "excuse me" (a soft chime and a light pattern in a common zone; the light pattern and text on the screen only in a quiet one) and the trip carries on.
+- Every waiting state has a timeout value (`timeouts` in `config/robot.yaml`) and a way out when the person leaves; both end in FAREWELL, which is silent in a quiet zone (eyes and light only). **The timeouts are switched off for now (`timeouts.enabled: false`)**: the robot waits for the visitor to answer, and only the person leaving, or saying bye, ends the visit.
+- **Only returning needs the book on the pad.** Explaining, recommending and general talk work without one: name a title ("tell me about Dune", "something like The Martian"), say what you like ("something about space"), or ask for a place ("where is the history section", "where are the astronomy books", "take me to science fiction"; the robot says the level and shelf and offers to guide you there). A book you only named can't be returned: that still asks you to place it.
+- **It knows what it is holding.** "Are you holding any books?", "what's in your storage?" are answered from the storage ring itself (titles, slots, the shelves they go back to, and the book on the pad), never by the LLM.
+- **Every visit starts with an introduction** ("Hello! My name is Stuart."), even for the same person who was here a minute ago; once per visit.
+- The zone (quiet or common) and fixed mode are style settings, never states. The quiet styles show touch buttons on the screen (`touch_buttons` in `config/styles.yaml`); tapping one sends a `UserChoice` back to the robot.
+- Every transition is written to the session log with the time, from, to, event, source (`sensor`, `operator`, `screen` for a touch button, or `timeout`) and the zone.
+
+**Operator controls.** Besides the sim's terminal commands above there is a web page. Start the display server (`python -m display.server`) and open `http://localhost:8765/operator`: it shows the live state path, zone and storage, has a quiet/common toggle, a map of the states with the current one highlighted and the ones it can go to next outlined (double-click a state to go there), the list of what can happen next with arrows to where each leads, why, and a button that makes it happen (person engages, book placed, visitor picks a choice...; timers and the robot's own steps show as "by itself" with the seconds left), a dropdown to go to any state, a box to say something as the visitor, and reset. From another computer open `http://<the robot's address>:8765/operator` (`display.bind_host` is `0.0.0.0` in `config/robot.yaml`; set `127.0.0.1` to allow only the robot's own computer). The page is laid out in landscape for a monitor (three columns: the robot camera plus a view-only face and screen preview, the controls, and the books on board with a log). It shows the robot's camera with the faces boxed (the simulator posts the picture to the display server when run with `--camera`), and the books the robot is holding in their slots (it holds up to `storage.slots`, 6, and remembers them across restarts in `data/state/storage.json`). Another computer can use only `/operator` (and that preview); the face page's buttons, `/screen`, `/input`, `/inbox` and the emotion and talk endpoints answer 403 unless the request comes from the robot itself. There is no login, so use a network you trust. Commands travel through the server's inbox, which the robot polls every `display.poll_s`, so the robot (or `python -m robot sim`) must be running too.
 
 ### Books
 
@@ -135,7 +164,7 @@ python tools/graph_view.py                               # writes data/graph.htm
 
 In the simulator: `book <isbn>`, `recommend`, `guide`, `where <title or isbn>` (the title is matched loosely) and `reload` (read the data files again after editing them).
 
-**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three catalogue books the graph found similar, each with its reasons, to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. **Before a book is scanned,** a plain hello gets a greeting and anything else ("what's your name?", "what can you do?") goes to the LLM as small talk with no catalogue, so it names no books and asks the visitor to place one on the pad; without the LLM, who-are-you is still answered. **Follow-ups:** the scanned book stays the topic until the visitor leaves or scans another, so after an answer they can ask for something else about it ("what's it about again?", "any related books?") or a free question ("who wrote it?", "does he get food somehow?"). Free questions go to the LLM with the book's catalogue entry and the conversation so far, and are told to use only that entry; if the LLM is down, who-wrote-it and genre questions are still answered from the catalogue, and anything else gets a short "I can't answer that right now". Saying "another book" (or just "yes") after an answer asks for the next book. *Return* (storage slot, section, floor and shelf) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
+**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three catalogue books the graph found similar, each with its reasons, to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. **Before a book is scanned,** a plain hello gets a greeting and anything else ("what's your name?", "what can you do?") goes to the LLM as small talk with no catalogue, so it names no books and asks the visitor to place one on the pad; without the LLM, who-are-you is still answered. **Follow-ups:** the scanned book stays the topic until the visitor leaves or scans another, so after an answer they can ask for something else about it ("what's it about again?", "any related books?") or a free question ("who wrote it?", "does he get food somehow?"). Free questions go to the LLM with the book's catalogue entry and the conversation so far, and are told to use only that entry; if the LLM is down, who-wrote-it and genre questions are still answered from the catalogue, and anything else gets a short "I can't answer that right now". Saying "another book" after an answer asks for the next one, and "yes" to "anything else?" offers the choices again. Saying what you like ("something about space") recommends without a book. *Return* (storage slot, section, floor and shelf) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
 
 ### Person IDs
 
@@ -150,7 +179,7 @@ python tools/identity_test.py       # live check: look at the camera, step out a
 
 ### Behaviour rules
 
-How the robot behaves in each context is data, not code: [config/styles.yaml](config/styles.yaml) has one entry per `quiet_alone`, `quiet_group`, `common_alone` and `common_group`, plus `fixed` (the study baseline) and `default` (the safe fallback, and the source of any field an entry leaves out). Each entry sets the voice (normal or whisper) and volume, the channels a message goes through (speech, screen, gaze, spotlight, print), light colour and brightness, the resting eye expression, neck pose, screen layout, whether the robot approaches people, the speed limit, and how many books a recommendation names (`recommendations`: the top pick only in a quiet zone, up to three in a common area). [config/zones.yaml](config/zones.yaml) maps named areas to zones and sets the noise thresholds.
+How the robot behaves in each context is data, not code: [config/styles.yaml](config/styles.yaml) has one entry per `quiet_alone`, `quiet_group`, `common_alone` and `common_group`, plus `fixed` (the study baseline) and `default` (the safe fallback, and the source of any field an entry leaves out). Each entry sets the voice (normal or whisper) and volume, the channels a message goes through (speech, screen, gaze, spotlight, print), light colour and brightness, the resting eye expression, neck pose, screen layout, whether the robot approaches people, the speed limit, and how many books a recommendation names (`recommendations`: the top pick only in a quiet zone, up to three in a common area) and whether the screen shows touch buttons (`touch_buttons`: yes in quiet zones). [config/zones.yaml](config/zones.yaml) maps named areas to zones and sets the noise thresholds.
 
 ## Face display
 
@@ -158,6 +187,8 @@ How the robot behaves in each context is data, not code: [config/styles.yaml](co
 display/start_display.sh          # server + Chromium kiosk on http://localhost:8765 (falls back to chromium-browser, firefox)
 python -m display.server          # server only; open http://localhost:8765 (--port 9000 to change)
 ```
+
+The page also shows what the state machine sends it (`POST /screen`): a text area and, in a quiet zone, option buttons whose taps go to `POST /input`. Layouts are placeholders (`full_face` or `split`) to be designed. `GET /operator` is the operator page (see The state machine). `display.bind_host` (`0.0.0.0` in `config/robot.yaml`, `127.0.0.1` if unset) is the address the server listens on.
 
 Type in the server's terminal: an emotion with optional hold seconds (`happy`, `sad 5`), `idle`, `talk [seconds]`, `list`, `quit`. Or over HTTP:
 

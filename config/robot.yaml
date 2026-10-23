@@ -5,10 +5,18 @@ ai_server:
   port: 7898
   timeout_s: 300          # LLM/TTS requests can be slow on a busy server
   llm_timeout_s: 20       # book explanations/recommendations: if the LLM is slower, use the catalogue text
+  tts_port: 8791          # text-to-speech (IndexTTS) is on its own port; the older orchestrator on `port` (Kokoro) fails. null = use `port`
 
 display:                  # the face page served by `python -m display.server`
-  host: 127.0.0.1
+  host: 127.0.0.1         # where the robot reaches it
   port: 8765
+  bind_host: 0.0.0.0      # what the display server listens on. 0.0.0.0 lets a laptop on the same network open
+                          # http://<robot-ip>:8765/operator (a view-only face/screen preview is inside it). Only the robot's own computer can
+                          # use everything else (the face page's buttons, /screen, /input...). There is no password: use a network you trust,
+                          # or set 127.0.0.1 to allow only this computer.
+  camera_fps: 15          # pictures per second sent to the operator page while someone has it open (1 a second when nobody does)
+  camera_width: 480       # ...shrunk to this width in pixels (smaller = quicker); the page shows it at about this size
+  poll_s: 0.3             # how often the robot asks the display server for button taps and operator input
 
 devices:
   esp32_port: /dev/ttyUSB0
@@ -28,6 +36,7 @@ books:
   cache_dir: data/cache            # cached Open Library answers, gitignored
   scan_timeout_s: 5                # how long to look for a barcode after a book is placed
   scanner_camera_index: 0          # camera pointed at the scan pad
+  reader: camera                   # how the book on the pad is read: camera (barcode); rfid is a stub that says "not implemented"
   use_llm: true                    # explain/recommend through the LLM (falls back to catalogue text); false = catalogue only
   similarity:                      # how recommendations are scored (services/book_graph.py); each component is 0..1
     topics: 0.30                   # shared topics, weighted by rarity (IDF): "astronomy" counts for more than "fiction"
@@ -40,10 +49,46 @@ books:
     min_score: 0.08                # books scoring below this (the total is 0..1) are not recommended
     general_topics: 0.4            # a general topic (science, fiction: it has a narrower child in topics.yaml) is worth this fraction of its rarity weight
 
+# The state machine (docs/state_machine.md). All times are seconds.
+timeouts:                 # how long each waiting state waits for the visitor before the robot says goodbye
+  enabled: false          # OFF for now: the robot waits for the visitor to answer, and only a person leaving (or "bye") ends the
+                          # visit. true = the values below apply. (The goodbye itself, farewell_s, always runs.)
+  offer_s: 30
+  await_book_s: 30
+  scan_s: 20              # a safety net: the book reader gives up on its own after books.scan_timeout_s
+  store_s: 30             # waiting for the pad to drop the book into its slot
+  answer_s: 30
+  anything_else_s: 20
+  farewell_s: 3           # how long the goodbye lasts
+
+engagement:               # when a person counts as wanting to talk (perception/people.py)
+  require_close: false    # false: any human face greets (no closeness check yet). true: the face must also be min_face_px tall
+  min_face_px: 60         # (with require_close) a face this tall or taller is close enough (about 1.5 m on a 640x480 webcam; measure yours with tools/camera_test.py)
+  dwell_s: 0.5            # a face must stay in view this long before the robot greets
+  leave_grace_s: 60       # if the visitor spoke, typed or tapped within this long, the camera losing their face does not end the visit;
+                          # the goodbye waits until they have been quiet this long with no face in view
+  left_after_s: 12        # no face seen for this long: they have left. Long, because a face is lost while looking down at a book
+                          # or turning to the pad (the OpenCV detector loses turned faces more than the server's)
+
+storage:                  # the storage ring that holds returned books until they are put back on their shelves
+  slots: 6                # how many books the robot holds at once (null = the ring's own size, 8). Remembered across restarts
+  path: data/state/storage.json   # kept here so a restart does not lose the stored books (gitignored)
+  sim_drop_s: 4           # simulated "the pad dropped the book"; 0 = wait for the operator's `dropped`
+
+returning:                # putting the stored books back
+  auto_start: false       # OFF for testing: returned books stay in storage. true = after a session ends with books in storage,
+                          # go and put them back by itself (the operator's `goto RETURNING` still starts a trip by hand)
+  auto_start_delay_s: 10  # ...once nobody has engaged for this long
+  sim_drive_s: 6          # simulated drive to a shelf (or home)
+  sim_unload_s: 3         # simulated unload at a shelf
+  announce_s: 3           # how long the "excuse me" signal lasts when someone is near but busy
+  home: {x: 0.0, y: 0.0, yaw: 0.0}   # the robot's home spot on the map (TODO: set the real one)
+
 dialogue:
   greet_cooldown_s: 120   # say hello at most once per visit and once per this many seconds (a person leaving the camera's view and returning isn't greeted again)
 
 perception:               # face detection for `python -m robot sim --faces`
+  detector: server        # server = the AI server's model; local = OpenCV on the robot (same as --local-faces; frontal faces, less accurate)
   face_interval_s: 1.0    # how often a camera frame is sent to the AI server
   arrive_frames: 2        # samples in a row with a new face before the person counts as arrived
   identify: true          # give faces person numbers (person 1, 2...) so a returning visitor isn't greeted again; needs `python tools/get_face_models.py`

@@ -65,5 +65,16 @@ class ShapeVoiceTest(unittest.TestCase):
                 self.assertIs(shape_voice(wav, 0.8), wav)
 
 
+class SpeechPortTest(unittest.TestCase):
+    def test_tts_uses_its_own_port_and_the_llm_keeps_the_main_one(self):
+        from robot.config import load_config
+        from robot.services.speech import Speech
+        cfg = load_config()
+        self.assertEqual(Speech.from_config(cfg).port, 8791)
+        self.assertEqual(cfg.ai_port, 7898)
+        cfg.robot["ai_server"]["tts_port"] = None                      # unset: back to the main port
+        self.assertEqual(Speech.from_config(cfg).port, cfg.ai_port)
+
+
 if __name__ == "__main__":
     unittest.main()

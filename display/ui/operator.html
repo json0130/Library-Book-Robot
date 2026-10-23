@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot operator</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --ink: #1b1f24; --muted: #66707a; --line: #d8dde3;
+          --accent: #0a7f86; --warn: #b4540a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1317; --card: #181e24; --ink: #e6ebf0; --muted: #8a96a2;
+          --line: #2a323a; --accent: #3cc7cf; --warn: #f0a050; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 24px; padding: 10px 16px;
+           background: var(--card); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 1.05rem; margin: 0; }
+  #path { font: 600 1.4rem ui-monospace, monospace; color: var(--accent); }
+  #meta { color: var(--muted); font-size: .85rem; flex: 1 1 20rem; }
+  #conn { font-size: .8rem; color: var(--warn); }
+  #conn.ok { color: var(--accent); }
+  /* landscape: three columns side by side (the pictures | the controls | the books and the log) */
+  main { display: grid; grid-template-columns: minmax(360px, 1.15fr) minmax(320px, 1fr) minmax(280px, .85fr);
+         gap: 12px; padding: 12px 16px; align-items: start; }
+  .col { display: grid; gap: 12px; min-width: 0; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  h2.sub { margin-top: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button { font: inherit; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg);
+           color: var(--ink); cursor: pointer; min-height: 38px; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { color: var(--warn); }
+  input, select { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--bg); color: var(--ink); min-height: 38px; }
+  input[type=text] { flex: 1; min-width: 10rem; }
+  .view { width: 100%; background: #000; border: 1px solid var(--line); border-radius: 8px; display: block; }
+  #camera { aspect-ratio: 4 / 3; object-fit: contain; }
+  #preview { aspect-ratio: 16 / 10; }
+  #camnote { color: var(--muted); font-size: .8rem; margin-top: 4px; }
+  #screen, #log { color: var(--muted); font-size: .85rem; }
+  #log { font-family: ui-monospace, monospace; max-height: 16rem; overflow: auto; white-space: pre-wrap; }
+  #screen { margin-top: 6px; }
+  #map { display: grid; gap: 8px; }
+  .group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .group > .gname { font: 600 .7rem ui-monospace, monospace; color: var(--muted); min-width: 5.5rem; }
+  .chip { font: .78rem ui-monospace, monospace; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px;
+          background: var(--bg); color: var(--muted); cursor: pointer; min-height: 0; }
+  .chip.next { border-color: var(--accent); color: var(--ink); border-style: dashed; }
+  .chip.next::before { content: "\2192\00a0"; color: var(--accent); }
+  .chip.current { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700;
+                  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  ul#next { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ul#next li { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: center; padding: 6px 8px;
+               border: 1px solid var(--line); border-radius: 8px; }
+  ul#next li.auto { border-style: dashed; color: var(--muted); }
+  ul#next .go { grid-row: span 2; }
+  ul#next .what { font-weight: 600; }
+  ul#next .arrow { color: var(--accent); }
+  ul#next .why { grid-column: 2; color: var(--muted); font-size: .8rem; }
+  ol#books { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ol#books li { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border: 1px solid var(--line);
+                border-radius: 8px; }
+  ol#books li.empty { color: var(--muted); border-style: dashed; }
+  ol#books .slot { font: 600 .8rem ui-monospace, monospace; color: var(--accent); min-width: 3.2rem; }
+  ol#books .title { font-weight: 600; }
+  ol#books .where { color: var(--muted); font-size: .8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Robot operator <span id="conn">connecting…</span></h1>
+  <div id="path">–</div>
+  <div id="meta"></div>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>Robot camera</h2>
+      <img id="camera" class="view" alt="robot camera">
+      <div id="camnote">Waiting for the camera (run the simulator with --camera).</div>
+    </section>
+    <section>
+      <h2>Face and screen (view only)</h2>
+      <iframe id="preview" class="view" src="/?preview=1" title="face and screen preview" loading="lazy"></iframe>
+      <div id="screen">–</div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section>
+      <h2>Zone (a style setting, not a state)</h2>
+      <div class="row"><button id="zone-quiet" data-zone="quiet">Quiet</button><button id="zone-common" data-zone="common">Common</button></div>
+    </section>
+    <section>
+      <h2>State</h2>
+      <div id="map"></div>
+      <h2 class="sub">What can happen next</h2>
+      <ul id="next"></ul>
+    </section>
+    <section>
+      <h2>Go to a state</h2>
+      <div class="row"><select id="states"></select><button id="goto">Go</button></div>
+      <div class="row" style="margin-top:8px"><button id="reset" class="danger">Reset to IDLE</button>
+        <button id="resetall" class="danger">Reset and empty storage</button></div>
+    </section>
+    <section>
+      <h2>The visitor says</h2>
+      <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
+        <button>Say</button></form>
+    </section>
+  </div>
+
+  <div class="col">
+    <section>
+      <h2>Books on board <span id="count"></span></h2>
+      <ol id="books"></ol>
+    </section>
+    <section><h2>Recent changes</h2><div id="log"></div></section>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let lastPath = "";
+
+async function send(command, arg = "") {
+  try {
+    const r = await fetch("/operator", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ command, arg }) });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+  } catch (e) { note("could not send " + command + ": " + e.message); }
+}
+function note(text) {
+  const log = $("log");
+  log.textContent = `${new Date().toLocaleTimeString()}  ${text}\n` + log.textContent.split("\n").slice(0, 60).join("\n");
+}
+function showBooks(s) {
+  const slots = s.slots || 0, held = new Map((s.books || []).map(b => [b.slot, b]));
+  $("count").textContent = `(${s.stored || 0} of ${slots})`;
+  const items = [];
+  for (let i = 0; i < slots; i++) {
+    const li = document.createElement("li"), b = held.get(i);
+    li.className = b ? "" : "empty";
+    const slot = document.createElement("span"); slot.className = "slot"; slot.textContent = `slot ${i}`;
+    li.append(slot);
+    if (b) {
+      const title = document.createElement("span"); title.className = "title"; title.textContent = b.title || "(unknown title)";
+      const where = document.createElement("span"); where.className = "where";
+      where.textContent = [b.shelf && `shelf ${b.shelf}`, b.section].filter(Boolean).join(" · ");
+      li.append(title, where);
+    } else { li.append("empty"); }
+    items.push(li);
+  }
+  $("books").replaceChildren(...items);
+}
+function showMap(s) {
+  const nextTo = new Set((s.next || []).map(a => a.to));
+  const chip = (name, parent) => {
+    const path = parent ? `${parent}.${name}` : name;
+    const b = document.createElement("button");
+    b.className = "chip" + (path === s.state ? " current" : nextTo.has(path) ? " next" : "");
+    b.textContent = name;
+    b.title = `double-click to go to ${path}`;
+    b.ondblclick = () => send("goto", path);
+    return b;
+  };
+  const groups = (s.tree || []).map(([top, kids]) => {
+    const g = document.createElement("div"); g.className = "group";
+    const n = document.createElement("span"); n.className = "gname"; n.textContent = top;
+    g.append(n);
+    if (kids.length) kids.forEach(k => g.append(chip(k, top))); else g.append(chip(top, ""));
+    return g;
+  });
+  $("map").replaceChildren(...groups);
+  const items = (s.next || []).map(a => {
+    const li = document.createElement("li");
+    li.className = a.command ? "" : "auto";
+    if (a.command) {
+      const b = document.createElement("button"); b.className = "go"; b.textContent = "do it";
+      b.onclick = () => send(a.command, a.arg || "");
+      li.append(b);
+    } else {
+      const t = document.createElement("span"); t.className = "go"; t.textContent = a.in_s != null ? `in ${a.in_s} s` : "by itself";
+      li.append(t);
+    }
+    const what = document.createElement("span");
+    what.innerHTML = `<span class="what"></span> <span class="arrow">\u2192</span> <span class="to"></span>`;
+    what.querySelector(".what").textContent = a.label;
+    what.querySelector(".to").textContent = a.to;
+    const why = document.createElement("span"); why.className = "why"; why.textContent = a.why || "";
+    li.append(what, why);
+    return li;
+  });
+  if (!items.length) { const li = document.createElement("li"); li.className = "auto"; li.textContent = "(nowhere: waiting)"; items.push(li); }
+  $("next").replaceChildren(...items);
+}
+function showState(s) {
+  $("path").textContent = s.state || "–";
+  $("meta").textContent = `zone ${s.zone} (${s.social})${s.fixed ? ", fixed mode" : ""} · ${s.style || ""}`;
+  for (const z of ["quiet", "common"]) $("zone-" + z).classList.toggle("on", s.zone === z);
+  if (s.states && $("states").options.length !== s.states.length) {
+    $("states").replaceChildren(...s.states.map(n => new Option(n, n)));
+  }
+  showBooks(s);
+  showMap(s);
+  if (s.state && s.state !== lastPath) { note(`${lastPath || "(start)"} → ${s.state}`); lastPath = s.state; }
+}
+function showScreen(u) {
+  const buttons = (u.options || []).map(o => `[${o.label}]`).join(" ");
+  $("screen").textContent = `${u.layout} · ${u.title || "(no title)"} — ${u.text || "(no text)"} ${buttons}`;
+}
+document.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => send("zone", b.dataset.zone));
+$("goto").onclick = () => send("goto", $("states").value);
+$("reset").onclick = () => send("reset");
+$("resetall").onclick = () => send("reset", "all");
+$("sayform").onsubmit = e => { e.preventDefault(); const t = $("say").value.trim(); if (t) { send("say", t); $("say").value = ""; } };
+
+// the robot's camera: a multipart stream; if it is not there yet, look again every few seconds
+function camera() {
+  const img = $("camera");
+  img.onload = () => { $("camnote").textContent = "Live."; };
+  img.onerror = () => { $("camnote").textContent = "No camera picture yet (run the simulator with --camera)."; setTimeout(camera, 3000); };
+  img.src = "/camera.mjpg?" + Date.now();
+}
+camera();
+
+function connect() {
+  const es = new EventSource("/events");
+  es.onopen = () => { $("conn").textContent = "live"; $("conn").className = "ok"; };
+  es.onmessage = ev => {
+    try {
+      const d = JSON.parse(ev.data);
+      if (d.state) showState(d.state);
+      if (d.screen) showScreen(d.screen);
+    } catch (_) {}
+  };
+  es.onerror = () => { $("conn").textContent = "disconnected, retrying…"; $("conn").className = ""; };
+}
+connect();
+</script>
+</body>
+</html>
