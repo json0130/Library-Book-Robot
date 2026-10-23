@@ -412,10 +412,13 @@ class ScreenTest(unittest.TestCase):
 
     def test_anything_else_has_buttons_in_a_quiet_zone_and_a_guide_button_when_it_can_drive(self):
         app = new_app("quiet")
-        run(app, PersonEngaged(), UserChoice("return"), BookPlaced(), scanned(MARTIAN), BookDropped())
+        run(app, PersonEngaged(), UserUtterance("where is dune"))
         buttons = [o["id"] for o in app.screens[-1].options]
         self.assertEqual(app.screens[-1].state_path, "ENGAGED.ANYTHING_ELSE")
         self.assertEqual(buttons, ["more", "guide", "done"])
+        again = new_app("quiet")                                                  # after a return there is nothing to guide to
+        run(again, PersonEngaged(), UserChoice("return"), BookPlaced(), scanned(MARTIAN), BookDropped())
+        self.assertEqual([o["id"] for o in again.screens[-1].options], ["more", "done"])
 
     def test_a_button_tap_is_a_choice_from_the_screen_and_is_logged_as_such(self):
         app = new_app("quiet")
@@ -804,6 +807,56 @@ class HoldBooksForTestingTest(unittest.TestCase):
         self.assertEqual(app.dialogue.state, "RETURNING.NAVIGATING")
 
 
+class RecommendationFallbacksTest(unittest.TestCase):
+    """From a live test: a book with no close neighbour, "any other books?", "no, can you tell me about the martion"."""
+
+    def setUp(self):
+        quiet_logs(self)
+
+    GATSBY = "9780743273565"
+
+    def test_a_book_with_no_close_neighbours_gets_the_nearest_ones_said_honestly(self):
+        app = new_app()
+        run(app, PersonEngaged(), UserUtterance("can you recommend me some books similar to the great gatsby?"))
+        self.assertIn("I don't have anything very close to The Great Gatsby, but if you like The Great Gatsby", " ".join(app.said))
+        self.assertEqual(app.screens[-1].view, "book_list")
+
+    def test_any_other_books_after_that_asks_what_they_like_instead_of_repeating(self):
+        app = new_app()
+        run(app, PersonEngaged(), UserUtterance("recommend books similar to the great gatsby"),
+            UserUtterance("then any other books you can recommend?"))
+        self.assertEqual(app.dialogue.state, "ENGAGED.AWAIT_BOOK")
+        self.assertIn("What kind of books do you like?", app.said[-1])
+        run(app, UserUtterance("space"))
+        self.assertIn("If you're interested in space", " ".join(app.said))
+
+    def test_no_followed_by_a_request_is_not_goodbye(self):
+        from robot.core.dialogue import is_done
+        for text in ("no can tell me about the martion", "no, where is dune", "nope, recommend something else",
+                     "no what about another book"):
+            self.assertFalse(is_done(text, "closing"), text)
+        for text in ("no", "no thanks", "nope that's all", "no i'm good"):
+            self.assertTrue(is_done(text, "closing"), text)
+        app = new_app()
+        run(app, PersonEngaged(), UserUtterance("tell me about dune"), UserUtterance("no can tell me about the martion"))
+        self.assertEqual(app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
+        self.assertIn("astronaut", " ".join(app.said))
+
+    def test_typed_titles_with_typos_still_find_the_book(self):
+        app = new_app()
+        run(app, PersonEngaged(), UserUtterance("recommend something like foundaton"))
+        self.assertIn("If you like Foundation", " ".join(app.said))
+
+    def test_the_returned_books_card_stays_after_storing(self):
+        app = new_app()
+        run(app, PersonEngaged(), UserChoice("return"), BookPlaced(), scanned(self.GATSBY), BookDropped())
+        self.assertEqual(app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
+        card = app.screens[-1]
+        self.assertEqual((card.view, card.payload["title"], card.payload["badge"]),
+                         ("book_card", "The Great Gatsby", "In storage slot 1"))
+        self.assertEqual(card.payload["buttons"], [])                               # handed in: nothing to ask about it
+
+
 class TimeoutsOffTest(unittest.TestCase):
     def setUp(self):
         quiet_logs(self)
@@ -824,6 +877,32 @@ class TimeoutsOffTest(unittest.TestCase):
         self.assertEqual(app.dialogue.state, "ENGAGED.FAREWELL")
         advance(app, 5)
         self.assertEqual(app.dialogue.state, "IDLE")
+
+
+class ScreenTimingTest(unittest.TestCase):
+    def setUp(self):
+        quiet_logs(self)
+
+    def test_the_screen_changes_when_the_robot_starts_speaking_not_when_it_finishes(self):
+        import time
+        app = new_app()
+        events = []                                                              # ("screen", view) / ("spoken", text)
+        app.bus.subscribe(ScreenUpdate, lambda e: events.append(("screen", e.view)))
+        real = app.actuators.deliver
+
+        def slow(text, style):
+            time.sleep(0.2)                                                      # speaking takes time
+            real(text, style)
+            events.append(("spoken", text))
+        app.actuators.deliver = slow
+        run(app, PersonEngaged())
+        offer_screen = events.index(("screen", "options"))
+        spoken_offer = next(i for i, e in enumerate(events) if e[0] == "spoken" and e[1].startswith("I can take back"))
+        self.assertLess(offer_screen, spoken_offer)                              # the buttons are up before the offer ends
+        events.clear()
+        run(app, UserUtterance("where is dune?"))
+        self.assertLess(events.index(("screen", "directions")),
+                        next(i for i, e in enumerate(events) if e[0] == "spoken" and e[1].startswith("Dune is on shelf")))
 
 
 class SpeakingDoesNotBlockTest(unittest.TestCase):
@@ -897,14 +976,23 @@ class NextActionsAndLayoutTest(unittest.TestCase):
         self.assertEqual([name for name, _ in info["tree"]], ["IDLE", "ENGAGED", "RETURNING"])
         self.assertTrue(info["next"])
 
-    def test_a_common_area_keeps_the_face_full_screen_and_a_quiet_one_shows_the_text_panel(self):
-        common, quiet = new_app("common"), new_app("quiet")
-        for app in (common, quiet):
+    def test_the_screen_follows_the_state_in_both_zones_without_anyone_choosing_a_view(self):
+        for zone in ZONES:
+            app = new_app(zone)
             run(app, PersonEngaged())
-        self.assertEqual({u.layout for u in common.screens}, {"full_face"})
-        self.assertIn("split", {u.layout for u in quiet.screens})
-        offer = next(u for u in reversed(common.screens) if u.state_path == "ENGAGED.OFFER")
-        self.assertTrue(offer.text)                                    # the text is still sent to the operator page
+            by_state = {u.state_path: u.view for u in app.screens}
+            self.assertEqual(by_state["ENGAGED.GREET"], "face")
+            self.assertEqual(by_state["ENGAGED.OFFER"], "options")                  # the choices, in every zone
+            offer = next(u for u in reversed(app.screens) if u.state_path == "ENGAGED.OFFER")
+            self.assertEqual([o["id"] for o in offer.payload["options"]], ["return", "ask", "recommend"])
+            self.assertTrue(offer.text)
+            run(app, UserUtterance("where is dune?"))
+            self.assertEqual(app.screens[-1].view, "directions")
+            run(app, UserUtterance("recommend something like dune"))
+            self.assertEqual(app.screens[-1].view, "book_list")
+            run(app, PersonLeft(source="operator"))
+            self.assertEqual(app.screens[-1].view, "face")
+            self.assertEqual(app.screens[-1].layout, "full_face")
 
     def test_a_face_lost_for_a_few_seconds_does_not_end_the_visit(self):
         from robot.config import load_config

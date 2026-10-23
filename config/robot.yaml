@@ -7,6 +7,11 @@ ai_server:
   llm_timeout_s: 20       # book explanations/recommendations: if the LLM is slower, use the catalogue text
   tts_port: 8791          # text-to-speech (IndexTTS) is on its own port; the older orchestrator on `port` (Kokoro) fails. null = use `port`
 
+screen:                   # what the robot's screen shows next to its face (robot/core/screen.py)
+  content_ttl_s: {quiet: 30, common: 15}    # a book card, list or map stays this long after the last interaction, then
+                                            # the face comes back (a quiet zone reads; a common area mostly listens)
+  summary_chars: {quiet: 180, common: 110}  # how much of a summary the book card shows
+
 display:                  # the face page served by `python -m display.server`
   host: 127.0.0.1         # where the robot reaches it
   port: 8765
@@ -36,6 +41,8 @@ books:
   cache_dir: data/cache            # cached Open Library answers, gitignored
   scan_timeout_s: 5                # how long to look for a barcode after a book is placed
   scanner_camera_index: 0          # camera pointed at the scan pad
+  floorplan_path: data/floorplan.yaml   # floors, sections (rectangles in map metres) and landmarks, for the directions view
+  covers_dir: data/covers          # covers from `python tools/import_books.py --covers-only` (gitignored); missing ones get a placeholder
   reader: camera                   # how the book on the pad is read: camera (barcode); rfid is a stub that says "not implemented"
   use_llm: true                    # explain/recommend through the LLM (falls back to catalogue text); false = catalogue only
   similarity:                      # how recommendations are scored (services/book_graph.py); each component is 0..1

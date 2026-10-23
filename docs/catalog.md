@@ -1,6 +1,7 @@
 # The book data
 
-The robot's knowledge of the library's books lives in four plain files in `data/`. Edit them in a spreadsheet or a text editor; no code changes are needed. All four ship with **sample data** (12 books, 7 shelves) that you replace with the real library.
+The robot's knowledge of the library's books lives in four plain files in `data/`, plus the floor plan and the covers
+described at the end. Edit them in a spreadsheet or a text editor; no code changes are needed. All four ship with **sample data** (12 books, 7 shelves) that you replace with the real library.
 
 | File | What it holds | Edit it when |
 |---|---|---|
@@ -8,6 +9,8 @@ The robot's knowledge of the library's books lives in four plain files in `data/
 | `topics.yaml` | the vocabulary of topics: synonyms and "broader" topics | a subject isn't recognised, or you want books under one heading to relate |
 | `shelves.csv` | one row per shelf: section, floor, quiet or common zone, and the robot's map position | you add a shelf, or survey the real map positions |
 | `curated_links.csv` | hand-made links between books | a librarian knows two books belong together |
+| `floorplan.yaml` | floors, sections as rectangles, landmarks, the robot's station (for the directions on the screen) | the building's layout changes, or you survey the real map |
+| `covers/<isbn>.jpg` | book covers for the screen (downloaded, gitignored) | you add books: `python tools/import_books.py --covers-only` |
 
 The robot reads them once at startup and builds a small graph from them (`robot/services/book_graph.py`). Paths are set under `books:` in `config/robot.yaml`. After editing, restart the robot, or type `reload` in the simulator, to pick up the changes.
 
@@ -155,3 +158,53 @@ A disagreement in the report usually means a missing or wrong topic: fix the boo
 The scanner puts the book's section, floor, zone and map pose on the `BookScanned` event. Returning a book says the storage slot and where it belongs ("on shelf 3-SCI-A, in the Science section on level 3"). After a return or a recommendation the robot offers to guide the visitor to that shelf, and "guide me" publishes a `NavigationRequested` event with the shelf's pose. Visitors can also ask "where is Dune?". In the simulator, `where <title or isbn>` and `guide` do the same, and the fake base just logs the `navigate` command.
 
 The graph holds books and the library's layout only. It never holds visitors, face identities or anything about people.
+
+## floorplan.yaml
+
+The screen draws directions on this plan: the target section highlighted, the robot ("You are here"), an approximate
+path and the distance. Coordinates are **metres in the same map frame as `shelves.csv` (`map_x`, `map_y`)**, one frame
+per floor, x to the right and y down the plan. The sample has three floors because the sample shelves are on levels 1,
+2 and 3; every rectangle in it is a placeholder until the real building is surveyed.
+
+```yaml
+floors:
+  - level: 3                 # the floor number used in shelves.csv
+    name: Level 3            # shown on the screen
+    width: 12                # the floor's size in metres
+    height: 8
+    sections:                # one rectangle per section: x, y = top-left corner, w, h = size (metres)
+      - {name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7}
+      - {name: History, x: 5.1, y: 0.3, w: 1.9, h: 2.7}
+    landmarks:               # kind: lift, help_desk, entrance, stairs, toilets or other
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+station:                     # where the robot waits for visitors: its "you are here" (and where it drives home to)
+  level: 1
+  x: 9.0
+  y: 5.5
+  yaw: 3.14
+```
+
+- A section's `name` must match `section` in `shelves.csv` exactly (case aside) and be unique across floors.
+- Give every floor a `lift` landmark: directions to another floor start with "Take the lift to Level N" and draw the
+  path from the lift.
+- The path is **approximate** (straight or L-shaped, first along x then y); it does not avoid shelves or walls.
+- `tools/catalog_check.py` loads the plan and reports, as errors, a rectangle outside its floor, a section name used
+  twice, a landmark of an unknown kind, a shelf whose section is not on its floor, and a shelf whose `map_x`/`map_y`
+  lies outside its section's rectangle.
+
+## Covers
+
+The book card and the list show each book's cover from `data/covers/<isbn>.jpg` (gitignored). Download them from Open
+Library's covers service:
+
+```bash
+python tools/import_books.py --covers-only             # every book in catalog.csv
+python tools/import_books.py isbns.txt --covers        # while drafting new books
+```
+
+It asks `https://covers.openlibrary.org/b/isbn/<isbn>-L.jpg?default=false` (with `default=false` Open Library answers
+404 when it has no cover instead of a blank image), skips covers already downloaded, and waits at least 3 s between
+requests (Open Library allows 100 cover look-ups by ISBN per 5 minutes per address). A book without a cover gets a
+generated placeholder: its title on a colour derived from its ISBN. `catalog_check.py` lists books without a cover as
+a warning.
+

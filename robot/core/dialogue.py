@@ -47,9 +47,11 @@ from typing import Awaitable, Callable, Optional
 from robot.config import ENGAGEMENT_DEFAULTS, RETURNING_DEFAULTS, STORAGE_DEFAULTS, TIMEOUTS_DEFAULTS
 from robot.core.fsm import Event, History, Machine, MachineSpec, Previous, StateDef, Timer, Transition
 from robot.core.storage import ShelfStop, Storage, StoredBook
-from robot.events import (BookDropped, BookIdentified, BookPlaced, ExpressionRequested, NavigationRequested,
-                          PersonEngaged, PersonLeft, PersonNearbyBusy, ReplySentence, ScanFailed, ScreenUpdate,
-                          StateTransition, UserChoice, UserUtterance)
+from robot.events import (BookDropped, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, ExpressionRequested,
+                          LocationResolved, NavigationRequested, PersonEngaged, PersonLeft, PersonNearbyBusy,
+                          RecommendationsReady, ReplySentence, ReturningProgress, ScanFailed, StateEntered,
+                          StateTransition, StoringBook, UserChoice, UserUtterance)
+from robot.services.places import PlaceResolver
 from robot.persona import NAME
 from robot.services.book_graph import Location
 from robot.services.books import title_key
@@ -101,6 +103,7 @@ GREETINGS = ("hi", "hello", "hey", "hiya", "yo", "good morning", "good afternoon
 NAME_WORDS = ("your name", "who are you", "introduce yourself", "what are you", "what should i call you")
 
 HELLO = f"Hello! My name is {NAME}."
+LOOSE_MIN_SCORE = 0.03            # when nothing reaches books.similarity.min_score: the nearest books above this
 RETURNING_OPENING = "Hi! I'm returning some books, can I help you with anything?"
 FOLLOW_UP_HELP = "I can tell you what it's about, suggest similar books, or return it."
 NO_ANSWER = "Sorry, I'm not sure how to answer that. " + FOLLOW_UP_HELP
@@ -146,8 +149,11 @@ def is_done(text: str, state: str) -> bool:
     if mentions(text, GOODBYES) or text.strip(" .!?") in ("done", "finished"):
         return True
     words = text.replace(",", " ").strip(" .!").split()
-    return (state == "closing" and 0 < len(words) <= 8 and "?" not in text
-            and words[0].strip(".,!") in NO_WORDS)
+    if not (state == "closing" and 0 < len(words) <= 8 and "?" not in text and words[0].strip(".,!") in NO_WORDS):
+        return False
+    rest = " ".join(words[1:])                    # "no, can you tell me about the Martian" asks for something else
+    return not (choice_from(rest) or is_question(rest) or re.search(
+        r"\b(?:can|could|tell|show|where|what|which|recommend|explain|about|take|guide|find|another|other)\b", rest))
 
 
 def is_question(text: str) -> bool:
@@ -396,6 +402,8 @@ class ChoiceInfo:
     question: str = ""                   # for ask: what they asked ("who wrote it?", "where is Dune")
     interest: str = ""                   # for recommend: what they said they like
     isbn: str = ""                       # a catalogue book they named ("tell me about Dune"): no book on the pad is needed
+    explicit: bool = False               # they picked that book on the screen: it becomes the topic even over the pad's
+    general: bool = False                # a recommendation not about the book in hand ("any other books?")
     area: bool = False                   # they asked about a section or topic area ("where are the history books")
 
 
@@ -414,6 +422,8 @@ class Session:
     replay: Optional[str] = None         # something they said before the machine was in OFFER: handled once there
     last_action: Optional[str] = None
     repeated_offer: bool = False
+    recommend_failed: bool = False       # nothing was found like the book: "any other?" means something else
+    awaiting_interest: bool = False      # it asked "what kind of books do you like?" outside AWAIT_BOOK
 
 
 @dataclass
@@ -433,17 +443,21 @@ class Dialogue:
                  publish: Optional[Callable[[object], Awaitable[int]]] = None, finder=None, assistant=None,
                  greet_cooldown_s: float = 0.0, clock: Callable[[], float] = time.monotonic,
                  storage: Optional[Storage] = None, settings: Optional[Settings] = None,
-                 get_zone: Callable[[], str] = lambda: "common"):
+                 get_zone: Callable[[], str] = lambda: "common", plan=None):
         self.out = actuators
         self.get_style = get_style
         self.get_zone = get_zone
         self.publish = publish
         self.finder = finder                # services.books.BookFinder: catalogue, graph, locations
+        self.plan = plan                    # services.floorplan.FloorPlan, or None
+        self.places = PlaceResolver(finder, plan)
+        self.last_choices: list = []        # the ids of the last list or options shown ("the second one")
         self.assistant = assistant          # services.book_llm.BookAssistant, or None for catalogue text only
         self.greet_cooldown_s = greet_cooldown_s
         self.clock = clock
         self.settings = settings or Settings()
         self.storage = storage if storage is not None else Storage(self._ring_slots())
+        self._entering = False              # between leaving a state and the machine reporting the new one
         self.present = False                # someone has engaged and not left (a quiet visitor is not a gone one)
         self.last_activity: Optional[float] = None    # when the visitor last spoke, typed, tapped or placed a book
         self.leave_pending = False          # the camera said they left while they were active: check again later
@@ -551,10 +565,33 @@ class Dialogue:
         """A button on the screen, or the operator picking for the visitor."""
         await self.start()
         self.active()
-        choice = event.choice.lower()
+        choice = event.choice.strip()
         if self.leaf in ("OFFER", "ANYTHING_ELSE", "AWAIT_BOOK", "ANSWER") or choice == "done":
             self.awaiting_guide = False
-        await self.fsm.dispatch("Choice", ChoiceInfo(choice, text=choice), event.source)
+        await self.fsm.dispatch("Choice", self.choice_info(choice), event.source)
+
+    def choice_info(self, choice: str) -> ChoiceInfo:
+        """A button's id as a ChoiceInfo. Besides the plain choices (return, ask, recommend, more, guide, done) the
+        content views send `book:<isbn>` (open that book), `where:<isbn>` (where it is), `guide:<isbn>` (take me to
+        it), `similar:<isbn>` (books like it), `section:<name>` and `floor:<n>`."""
+        kind, _, value = choice.partition(":")
+        kind = kind.lower()
+        book = self.finder.catalog.lookup(value) if value and self.finder is not None and kind in (
+            "book", "where", "guide", "similar") else None
+        if kind == "book" and book is not None:
+            return ChoiceInfo("ask", choice, question=f"tell me about {book.title}", isbn=book.isbn13, explicit=True)
+        if kind == "where" and book is not None:
+            return ChoiceInfo("ask", choice, question=f"where is {book.title}", isbn=book.isbn13, explicit=True)
+        if kind == "similar" and book is not None:
+            return ChoiceInfo("recommend", choice, isbn=book.isbn13, explicit=True)
+        if kind == "guide" and book is not None:
+            self.guide_target = self.target_for(book.isbn13, book.title)
+            return ChoiceInfo("guide", choice)
+        if kind == "section" and value:
+            return ChoiceInfo("ask", choice, question=f"where is the {value} section", area=True)
+        if kind == "floor" and value:
+            return ChoiceInfo("ask", choice, question=f"what is on level {value}", area=True)
+        return ChoiceInfo(choice.lower(), text=choice.lower())
 
     async def on_utterance(self, event: UserUtterance) -> None:
         await self.start()
@@ -579,11 +616,13 @@ class Dialogue:
         """A ChoiceInfo for words that choose something, None for free text."""
         if is_done(low, "closing" if self.leaf == "ANYTHING_ELSE" else self.leaf.lower()):
             return ChoiceInfo("done", text)
+        if (picked := self.ordinal_choice(low)) is not None:   # "the second one", after a list or choices
+            return self.choice_info(picked)
         asked = where_query(low)
         if asked is not None and self.find_book(asked[0]) is not None:
             return ChoiceInfo("ask", text, question=text)
         if asked is None or self.find_book(asked[0]) is None:
-            if self.area_request(low) is not None:         # "where are the history books", "take me to the science section"
+            if self.place_request(low) is not None:        # "where are the history books", "what's on level 2"
                 return ChoiceInfo("ask", text, question=text, area=True)
         if is_guide(low) or (was_awaiting and is_yes(low)):
             return ChoiceInfo("guide", text)
@@ -593,27 +632,37 @@ class Dialogue:
             if is_yes(low):
                 return ChoiceInfo("more", text)
         action, interest = choice_from(low), interest_from(low)
-        if self.leaf == "AWAIT_BOOK" and self.session.intent in ("recommend", "ask") and action is None and not interest:
-            reply = self.answer_to_prompt(low, text)       # they are answering "what do you like?" / "which book?"
+        prompted = (self.session.intent if self.leaf == "AWAIT_BOOK" else
+                    "recommend" if self.session.awaiting_interest else None)
+        if prompted in ("recommend", "ask") and action is None and not interest:
+            reply = self.answer_to_prompt(low, text, prompted)   # answering "what do you like?" / "which book?"
             if reply is not None:
                 return reply
         named = self.finder.titles_in(low) if self.finder is not None else []
-        if named and interest and title_key(named[0].title) in title_key(interest):
+        if not named and (action in ("explain", "recommend") or interest):
+            loose = self.places.fuzzy_title(interest or low)    # "tell me about the martion", "like foundaton": typos
+            if loose is not None and loose.kind == "book" and self.finder is not None:
+                named = [self.finder.catalog.lookup(loose.isbn)]
+        if named and interest and (title_key(named[0].title) in title_key(interest)
+                                   or self.places.fuzzy_title(interest) is not None):
             interest = ""                                  # "something like Dune": the book, not a topic called "dune"
         isbn = named[0].isbn13 if named and not interest else ""    # a title they said: no book on the pad is needed
         if action == "return":
             return ChoiceInfo("return", text)
         if interest or action == "recommend":
-            return ChoiceInfo("recommend", text, interest=interest, isbn=isbn)
+            general = not isbn and not interest and (
+                re.search(r"\b(?:other|different|else|new|any books|anything|something)\b", low) is not None
+                and self.session.recommend_failed)          # "any other books?" after nothing was found for this one
+            return ChoiceInfo("recommend", text, interest=interest, isbn=isbn, general=bool(general))
         if action == "explain":
             return ChoiceInfo("ask", text, question=text, isbn=isbn)
         return None
 
-    def answer_to_prompt(self, low: str, text: str) -> Optional[ChoiceInfo]:
+    def answer_to_prompt(self, low: str, text: str, intent: Optional[str] = None) -> Optional[ChoiceInfo]:
         """The reply to "what kind of books do you like?" or "which book?": a title they name, or (for a
         recommendation) whatever topic or author they say."""
         named = self.finder.titles_in(low) if self.finder is not None else []
-        intent = self.session.intent
+        intent = intent or self.session.intent
         if named:
             if intent == "recommend":
                 return ChoiceInfo("recommend", text, isbn=named[0].isbn13)
@@ -677,8 +726,9 @@ class Dialogue:
         return self._is(event, "recommend")
 
     def recommend_ready(self, event) -> bool:
-        return self._is(event, "recommend") and (self.has_book(event) or bool(event.payload.interest)
-                                                 or bool(event.payload.isbn))
+        info = event.payload
+        return self._is(event, "recommend") and (bool(info.interest) or bool(info.isbn) or
+                                                 (self.has_book(event) and not info.general))
 
     def choice_done(self, event) -> bool:
         return self._is(event, "done")
@@ -735,7 +785,8 @@ class Dialogue:
         s.intent = info.name if info.name in ("return", "ask", "recommend") else None
         s.question = info.question or None
         s.interest = info.interest or None
-        if info.isbn and (s.book is None or s.virtual):       # a book they named: talk about it without the pad
+        s.awaiting_interest = False
+        if info.isbn and (s.book is None or s.virtual or info.explicit):   # a book they named: no pad needed
             book = self.finder.catalog.lookup(info.isbn) if self.finder is not None else None
             if book is not None:
                 s.book, s.virtual = self.identified(book), True
@@ -800,7 +851,7 @@ class Dialogue:
         self._stored = True
         title = book.title or "this book"
         parts = [f"Done: {title} is in storage slot {slot}."]     # where it belongs is the robot's business
-        self.guide_target = GuideTarget(book.isbn, title, place)
+        self.guide_target = None                         # they handed it in: no "shall I guide you to it?"
         self.session.last_action = "return"
         self.session.book = None                         # the pad is empty now
         await self.say(" ".join(parts), "happy")
@@ -945,6 +996,8 @@ class Dialogue:
             self.fsm.post("full")
             return
         self.store_slot = slot
+        if self.publish is not None:
+            await self.publish(StoringBook(book.isbn, title, slot))
         try:
             self.out.ring.rotate_to(slot)
             self.out.ring.light_slot(slot, True)
@@ -976,6 +1029,8 @@ class Dialogue:
         book = s.book
         title = (book.title if book and book.title else None) or "this book"
         by = f" by {book.author}" if book and book.author else ""
+        if book is not None and book.found_in_catalog and self.publish is not None:
+            await self.publish(BookFocused(book.isbn, "ask"))
         await self.say(f"You have {title}{by}. What would you like to know? I can explain it, say where it belongs, "
                        "or answer a question.", "happy")
 
@@ -995,7 +1050,7 @@ class Dialogue:
         s = self.session
         if s.last_action is None and self.guide_target is None:
             s.last_action = "answer"
-        if s.last_action == "where":                     # "...Would you like me to guide you there?" already asked it
+        if s.last_action in ("where", "choose"):         # "...guide you there?" / "Did you mean...?" already asked it
             self.show(self.last_said)
             return
         await self.say(self.follow_up(s.last_action or "answer"), "neutral")
@@ -1033,13 +1088,20 @@ class Dialogue:
         stop = self.stops[0]
         self.current_shelf = stop.shelf
         self.show(f"Returning books to the {stop.section or 'library'} section.")
+        await self.progress("driving", stop)
         if event.name == "announced":                    # carrying on after "excuse me": the base is still driving
             return
         await self._navigate(f"shelf {stop.shelf}", stop.x, stop.y, stop.yaw, stop)
 
-    def enter_at_shelf(self, event) -> None:
+    async def enter_at_shelf(self, event) -> None:
         stop = self.stops[0] if self.stops else None
         self.show(f"Putting {len(stop.slots)} book(s) back on shelf {stop.shelf}." if stop else "Putting books back.")
+        await self.progress("unloading", stop)
+
+    async def progress(self, phase: str, stop: Optional[ShelfStop]) -> None:
+        if self.publish is not None:
+            await self.publish(ReturningProgress(phase, len(self.storage), stop.section if stop else None,
+                                                 stop.shelf if stop else None, stop.floor if stop else None))
 
     async def enter_announce(self, event) -> None:
         """Signal without starting a conversation. A style that speaks gets a soft chime and a light pattern; a quiet
@@ -1047,6 +1109,7 @@ class Dialogue:
         stop = self.stops[0] if self.stops else None
         where = f"the {stop.section} section" if stop and stop.section else "their shelves"
         self.show(f"Excuse me, I'm returning books to {where}.")
+        await self.progress("announcing", stop)
         if self.style_speaks():
             self.out.voice.chime(self.get_style())
         self.out.lights.pattern("announce")
@@ -1056,7 +1119,11 @@ class Dialogue:
             self.fsm.post("replan")
             return
         home = self.settings.returning.get("home") or {}
+        station = self.plan.station if self.plan is not None else None
+        if station is not None:                            # the floor plan's station is home
+            home = {"x": station.x, "y": station.y, "yaw": station.yaw}
         self.show("Heading home.")
+        await self.progress("homing", None)
         await self._navigate("home", float(home.get("x", 0.0)), float(home.get("y", 0.0)), float(home.get("yaw", 0.0)))
 
     # ---- saying things ----
@@ -1064,6 +1131,7 @@ class Dialogue:
         """Deliver a message in the current style and announce it for the face."""
         self.show(text)
         self.last_said = text
+        await self.screen_now()                          # the screen follows the words, not the end of them
         # speaking (text-to-speech, playing it) takes seconds: do it in a thread so the camera, the display and the
         # timers keep running, and a person leaving or a tap during it is queued and handled once it is said
         await asyncio.get_running_loop().run_in_executor(None, self.out.deliver, text, self.get_style())
@@ -1083,7 +1151,15 @@ class Dialogue:
         self.out.lights.pattern("pulse")
 
     # ---- the machine's own reports ----
+    async def screen_now(self) -> None:
+        """Publish the state's screen now, before a long entry action (speaking, the LLM) has finished: the entry
+        actions run before the machine reports it has arrived, so without this the screen would change only after
+        the last word."""
+        if self._entering and self.publish is not None and self.fsm.leaf:
+            await self._on_entered(self.fsm.leaf, early=True)
+
     async def _on_transition(self, record: dict) -> None:
+        self._entering = not record["internal"]
         self.transitions.append((record["from"], record["event"], record["to"]))
         state_log.info("%s -> %s  (%s, %s)%s", record["from"] or "(start)", record["to"], record["event"],
                        record["source"], "  [internal]" if record["internal"] else "")
@@ -1093,18 +1169,21 @@ class Dialogue:
         if record["internal"] and self._screen_text:        # said something without changing state: refresh the text
             await self._on_entered(self.fsm.leaf)
 
-    async def _on_entered(self, state: str) -> None:
-        layout, title = SCREENS.get(state, ("full_face", ""))
-        if self.get_style().screen_layout != "split":      # a common area speaks: the face stays full screen, no text panel
-            layout = "full_face"
-        text, self._screen_text = self._screen_text, ""
-        if self.publish is not None:
-            await self.publish(ScreenUpdate(self.fsm.spec.path(state), self.get_zone(), layout, title,
-                                            text, tuple(self.options_for(state))))
+    async def _on_entered(self, state: str, early: bool = False) -> None:
+        _, title = SCREENS.get(state, ("full_face", ""))
+        if early:                                         # keep the text: the real entry report follows with it
+            text = self._screen_text
+        else:
+            text, self._screen_text = self._screen_text, ""
+            self._entering = False
+        if self.publish is not None:                     # the screen composer (core/screen.py) picks the view
+            await self.publish(StateEntered(self.fsm.spec.path(state), self.get_zone(), title, text,
+                                            tuple(self.options_for(state)), tuple(self.options_for(state, True))))
 
-    def options_for(self, state: str) -> list:
-        """The buttons the screen shows in a state, when the style has touch buttons (quiet zones)."""
-        if not self.get_style().touch_buttons:
+    def options_for(self, state: str, any_zone: bool = False) -> list:
+        """The choices in a state: as touch buttons when the style has them (quiet zones), or for every zone with
+        any_zone (the screen composer shows them as an options view everywhere)."""
+        if not (any_zone or self.get_style().touch_buttons):
             return []
         if state == "OFFER":
             options = [{"id": "return", "label": "Return a book"}, {"id": "ask", "label": "Ask about a book"},
@@ -1194,32 +1273,47 @@ class Dialogue:
             await self.say(ACKNOWLEDGE, "happy")
         self.session.last_action = "answer"
 
-    def area_request(self, text: str):
-        """(Area, True if they want to be taken there) for "where is the history section", "where are the astronomy
-        books", "take me to science fiction", "go to the computing area"; None if they do not ask about a place."""
+    ORDINALS = {"first": 0, "1st": 0, "one": 0, "second": 1, "2nd": 1, "two": 1, "third": 2, "3rd": 2, "three": 2,
+                "last": -1}
+
+    def ordinal_choice(self, text: str) -> Optional[str]:
+        """The id of the item they mean by "the second one" / "number 2" / "the last one", from the last list or
+        choices shown; None if there was none or they said something else."""
+        if not self.last_choices or len(text.split()) > 6:
+            return None
+        words = re.findall(r"[a-z0-9]+", text)
+        for word in words:
+            index = self.ORDINALS.get(word, int(word) - 1 if word.isdigit() and 0 < int(word) <= 9 else None)
+            if index is not None and -len(self.last_choices) <= index < len(self.last_choices):
+                return self.last_choices[index]
+        return None
+
+    def place_request(self, text: str):
+        """(Place, True if they want to be taken there) for "where is the history section", "where are the astronomy
+        books", "take me to science fiction", "what's on level 2"; None if they do not ask about a place."""
         if self.finder is None:
             return None
         take_me = bool(re.search(r"\b(?:take|guide|lead|walk|bring) (?:me|us)\b|\bgo to\b|\bhead to\b", text))
-        asks_where = bool(re.search(r"\bwhere\b|\b(?:section|area|aisle|floor)s?\b|\bbrowse\b|\bshow me\b|\bfind\b", text))
+        asks_where = bool(re.search(r"\bwhere\b|\b(?:section|area|aisle|floor|level)s?\b|\bbrowse\b|\bshow me\b|"
+                                    r"\bfind\b|\bwhat(?:'s| is) on\b", text))
         if not (take_me or asks_where):
             return None
         if interest_from(text) and not re.search(r"\bwhere\b|\bsection\b|\barea\b", text):
             return None                                    # "find me a book about space" asks for a book, not a place
-        area = self.finder.find_area(text)
-        return (area, take_me) if area is not None else None
+        place = self.places.resolve(text)
+        return (place, take_me) if place is not None else None
+
+    def area_request(self, text: str):
+        """The old name: (Place, take_me) or None."""
+        return self.place_request(text)
 
     async def navigation_request(self, text: str) -> bool:
         """"Where is Dune?", "guide me to Dune", "where are the history books", "guide me": handled here, True if so."""
         asked = where_query(text)
         book = self.find_book(asked[0]) if asked is not None else None
-        if book is None and (found := self.area_request(text)) is not None:
-            area, take_me = found
-            self.guide_target = self.target_for_area(area)
-            if take_me:
-                await self.guide()
-            else:
-                await self.tell_area(area, self.guide_target)
-            self.session.last_action = "where"
+        if book is None and (found := self.place_request(text)) is not None:
+            place, take_me = found
+            await self.tell_place(place, take_me)
             return True
         if asked is not None:
             query, take_me = asked
@@ -1238,6 +1332,56 @@ class Dialogue:
             return True
         return False
 
+    async def tell_place(self, place, take_me: bool) -> None:
+        """Answer a place the resolver found: a book, a section, a floor, or a question when it was ambiguous."""
+        self.session.last_action = "where"
+        if place.kind == "ambiguous":
+            choices = [{"id": c.choice_id, "label": c.title[0].upper() + c.title[1:]} for c in place.choices]
+            self.last_choices = [c["id"] for c in choices]
+            names = join_names([c["label"] for c in choices]).replace(" and ", " or ")
+            await self.say(f"Did you mean {names}?", "neutral")
+            if self.publish is not None:
+                await self.publish(ChoicesOffered("Which one did you mean?", tuple(choices)))
+            self.session.last_action = "choose"
+            return
+        if place.kind == "book":
+            self.guide_target = self.target_for(place.isbn, place.title)
+            await (self.guide() if take_me else self.tell_where(self.guide_target))
+            return
+        if place.kind == "floor":
+            await self.tell_floor(place.floor)
+            return
+        shelves = [s for s in self.finder.graph.shelves.values() if s.section == place.section] \
+            if self.finder is not None and self.finder.graph is not None else []
+        if not shelves:
+            await self.say(f"{place.title[0].upper()}{place.title[1:]} is on level {place.floor}.", "happy")
+            return
+        from robot.services.book_graph import Area
+        shelves.sort(key=lambda s: s.id)
+        area = Area(place.topic or place.section, shelves[0], tuple(s.id for s in shelves),
+                    "topic" if place.topic else "section")
+        self.guide_target = self.target_for_area(area)
+        await (self.guide() if take_me else self.tell_area(area, self.guide_target))
+
+    async def tell_floor(self, level: int) -> None:
+        names = self.plan.sections_on(level) if self.plan is not None else []
+        if not names and self.finder is not None and self.finder.graph is not None:
+            names = sorted({s.section for s in self.finder.graph.shelves.values() if s.floor == level and s.section})
+        listed = join_names([f"the {n} section" for n in names]) if names else "no sections I know of"
+        if self.publish is not None:
+            await self.publish(LocationResolved("floor", f"Level {level}", floor=level))
+        await self.say(f"Level {level} has {listed}.", "happy")
+        if names:
+            self.last_choices = [f"section:{n}" for n in names]
+
+    async def publish_location(self, target: GuideTarget, take_me: bool = False) -> None:
+        loc = target.location
+        if self.publish is None or loc is None or loc.floor is None:
+            return
+        kind = "book" if target.isbn else "section"
+        await self.publish(LocationResolved(kind, target.title, target.isbn, loc.section, loc.floor, loc.shelf,
+                                            loc.map_x, loc.map_y, take_me))
+
     @staticmethod
     def target_for_area(area) -> GuideTarget:
         shelf = area.shelf
@@ -1255,6 +1399,7 @@ class Dialogue:
                      f"on shelf {shelf.id}.")
         offer = " Would you like me to guide you there?" if target.can_drive else ""
         self.awaiting_guide = target.can_drive
+        await self.publish_location(target)              # the map first, then the words
         await self.say(where + offer, "happy")
 
     async def tell_where(self, target: GuideTarget) -> None:
@@ -1266,6 +1411,7 @@ class Dialogue:
             return
         offer = " Would you like me to guide you there?" if target.can_drive else ""
         self.awaiting_guide = target.can_drive
+        await self.publish_location(target)
         await self.say(f"{target.title} is {where}.{offer}", "happy")
 
     async def guide(self) -> None:
@@ -1283,6 +1429,7 @@ class Dialogue:
             await self.say(f"I don't have a map position for {target.title} yet, so I can't take you there.{tail}", "neutral")
             return
         loc = target.location
+        await self.publish_location(target, take_me=True)
         await self.say(f"Okay, follow me to {target.title}. It's {where}.", "happy")
         if self.publish is not None:
             await self.publish(NavigationRequested(target.isbn, target.title, loc.map_x, loc.map_y, loc.map_yaw,
@@ -1324,6 +1471,8 @@ class Dialogue:
 
     async def act_explain(self, book, title: str) -> None:
         record = self.catalogue_record(book)
+        if record is not None and self.publish is not None:
+            await self.publish(BookFocused(record.isbn13, "explain"))
         if record is not None and self.assistant is not None:
             spoken = await self.assistant.explain(record)
             if spoken:
@@ -1341,12 +1490,21 @@ class Dialogue:
             await self.say(f"I can only recommend from books in our catalogue, and {title} isn't in it.",
                            "neutral")
             return
-        picks = self.finder.recommend(book.isbn, self.get_style().recommendations)
+        n = self.get_style().recommendations
+        picks = self.finder.recommend(book.isbn, n)
+        loose = False
+        if not picks:                                       # nothing close: the nearest ones, said honestly
+            picks = self.finder.recommend(book.isbn, n, min_score=LOOSE_MIN_SCORE)
+            loose = bool(picks)
         if not picks:
-            await self.say(f"I couldn't find books like {title} in the catalogue.", "neutral")
+            self.session.recommend_failed = self.session.awaiting_interest = True
+            await self.say(f"I don't have anything quite like {title} yet. What kind of books do you like? Tell me a "
+                           "topic, a title or an author.", "neutral")
             return
+        self.session.recommend_failed = loose
         for pick in picks:                                  # the full reasons go to the log (and to the LLM below)
             log.info("[dialogue] candidate %s (%.2f): %s", pick.book.title, pick.total, "; ".join(pick.reasons))
+        await self.publish_recommendations(picks, source_isbn=book.isbn)
         if self.assistant is not None:
             spoken = await self.assistant.recommend(self.finder.catalog.lookup(book.isbn), picks)
             if spoken:
@@ -1356,7 +1514,10 @@ class Dialogue:
                 return
         best = picks[0]
         self.guide_target = self.target_for(best.book.isbn13, best.book.title)
-        await self.say(self.recommendation_text(title, picks), "happy")
+        text = self.recommendation_text(title, picks)
+        if loose:
+            text = f"I don't have anything very close to {title}, but {text[0].lower()}{text[1:]}"
+        await self.say(text, "happy")
 
     async def recommend_by_interest(self, interest: str) -> None:
         """Recommend from what the visitor says they like, with no book on the pad."""
@@ -1367,9 +1528,17 @@ class Dialogue:
             return
         for pick in picks:
             log.info("[dialogue] candidate for %r: %s (%s)", interest, pick.book.title, pick.because)
+        await self.publish_recommendations(picks, interest=interest)
         best = picks[0]
         self.guide_target = self.target_for(best.book.isbn13, best.book.title)
         await self.say(self.recommendation_text(None, picks, interest), "happy")
+
+    async def publish_recommendations(self, picks: list, source_isbn: str = "", interest: str = "") -> None:
+        """Tell the screen (a list of covers with one reason each); "the second one" then means the second pick."""
+        self.last_choices = [f"book:{p.book.isbn13}" for p in picks]
+        if self.publish is not None:
+            await self.publish(RecommendationsReady(tuple({"isbn": p.book.isbn13, "because": p.because} for p in picks),
+                                                    source_isbn, interest))
 
     @staticmethod
     def recommendation_text(title: Optional[str], picks: list, interest: Optional[str] = None) -> str:

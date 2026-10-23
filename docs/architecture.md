@@ -47,7 +47,7 @@ BookPlaced ──> BookReader ──> frames from the camera ──> decode_isbn
 2. `BookScanner` (`robot/perception/book_scanner.py`, the camera `BookReader`; `books.reader` chooses it, and `rfid` is a stub that raises "not implemented") starts a scan in the background so the publisher isn't held up. It grabs camera frames for up to `books.scan_timeout_s`, and `decode_isbn` tries each frame as grayscale, contrast-boosted, upscaled and rotated 90, 180 and 270 degrees until it finds a valid ISBN (`robot/services/isbn.py` checks the checksum, converts ISBN-10 to ISBN-13 and ignores other barcodes such as library stickers and price add-ons).
 3. `BookFinder` (`robot/services/books.py`) looks the ISBN up in `data/catalog.csv`, then, if enabled, in Open Library (title and author only). A valid ISBN nobody knows still counts as a successful scan, with `found_in_catalog` false. For a catalogue book the scanner also asks the book graph where it lives (section, floor, zone, map pose), and that goes on `BookIdentified`.
 4. The reader publishes `BookIdentified`, or `ScanFailed` with a reason (no barcode in time, camera error, pyzbar missing). The dialogue goes on with what the visitor chose (STORE, ANSWER, RECOMMEND), offers the choices when they have not chosen yet, or asks the visitor to try again.
-5. The visitor's words (or a screen button) pick the action: *return* (STORE) reserves a free storage slot, turns the ring to it, lights it and pulses the pad, then waits for `BookDropped` and says where the book belongs (level, section and shelf); *explain* and *recommend* ask the LLM (`robot/services/book_llm.py`) to word the catalogue record, or up to three books the graph recommends together with its reasons, as speech. After a return or a recommendation the robot offers to guide the visitor: "guide me" publishes `NavigationRequested` with the shelf's map pose, and `app.py` hands it to the navigation actuator (`go_to_pose`, which sends the ESP32 a `navigate` command; the fake driver just logs it). "Where is Dune?" answers the same way for any catalogue book. Every message goes out through the current style's channels, so it is printed in a quiet zone and spoken in a common area. Saying what they like ("something about space") recommends without a book (`BookGraph.recommend_for_interest`).
+5. The visitor's words (or a screen button) pick the action: *return* (STORE) reserves a free storage slot, turns the ring to it, lights it and pulses the pad, then waits for `BookDropped` and says the slot (it does not read out the shelf); *explain* and *recommend* ask the LLM (`robot/services/book_llm.py`) to word the catalogue record, or up to three books the graph recommends together with its reasons, as speech. After a recommendation the robot offers to guide the visitor to the top pick (not after a return: they just handed that book in): "guide me" publishes `NavigationRequested` with the shelf's map pose, and `app.py` hands it to the navigation actuator (`go_to_pose`, which sends the ESP32 a `navigate` command; the fake driver just logs it). "Where is Dune?" answers the same way for any catalogue book. Every message goes out through the current style's channels, so it is printed in a quiet zone and spoken in a common area. Saying what they like ("something about space") recommends without a book (`BookGraph.recommend_for_interest`).
 
 The LLM only ever sees real catalogue records (and the graph's reasons for each candidate) and is told to use nothing else; a recommendation that names none of the supplied candidates is discarded, returns never go through it, and books that are not in the catalogue are never sent to it. If the server is down, too slow or unusable, the dialogue says the catalogue text instead, so the flow never depends on the model.
 
@@ -72,6 +72,44 @@ RETURNING: PLAN → NAVIGATING → AT_SHELF → (next shelf | HOMING) → IDLE; 
 - **Operator controls.** `robot/operator.py` is the one implementation behind the sim's terminal commands and the display server's `/operator` page (`display/ui/operator.html`; button taps and operator commands reach the robot through the server's inbox, polled by `display_link.py`). `goto <state>` fills in what a state needs: a sample book for SCAN, STORE, ANSWER and RECOMMEND, two stored books on different shelves for RETURNING.
 - **Config** (`config/robot.yaml`): `timeouts` (offer_s, await_book_s, scan_s, store_s, answer_s, anything_else_s, farewell_s), `returning` (auto_start, auto_start_delay_s, sim_drive_s, sim_unload_s, announce_s, home pose), `storage` (slots, path, sim_drop_s: the simulated `BookDropped` after the slot lights, 0 to wait for the operator or the real pad), `engagement` (min_face_px, dwell_s, left_after_s), `display` (host, port, bind_host, poll_s), `books.reader`.
 - **Real hardware.** The ESP32 commands the machine uses (`stop`, `slot_light`, `pad_vibrate`, `light_pattern`) are in `firmware/esp32/README.md`. Driving to a shelf is `NavigationRequested` → `Navigation.go_to_pose`; the simulated drive and unload are timers (`returning.sim_drive_s`, `sim_unload_s`) until a real base reports arrival.
+
+## The screen composer and views
+
+```
+ StateEntered (path, zone, text, options) ─┐
+ BookIdentified, BookFocused ──────────────┤
+ RecommendationsReady ─────────────────────┤──> ScreenComposer ──> ScreenUpdate (view, payload, layout, ttl_s) ──> app.py
+ LocationResolved, ChoicesOffered ─────────┤    (core/screen.py)        ──> display server /screen ──> views.js
+ StoringBook, ReturningProgress ───────────┤
+ UserUtterance / UserChoice / BookPlaced ──┘ (keep the content up)            buttons ──> /input ──> UserChoice
+```
+
+- **Who decides.** The dialogue never picks a view. It publishes `StateEntered` on every state entry and content
+  events when it has content (a book it is talking about, recommendations, a place it found, choices to make, a book
+  going into a slot, returning progress). `ScreenComposer` maps state + latest content to one of six views: face,
+  book_card, book_list, directions, options, status. The rules are in `ScreenComposer.compose()`: face states (IDLE,
+  GREET, FAREWELL, PLAN, SCAN) show the face; RETURNING's driving states show status; STORE shows the book's card with
+  its slot (and keeps it up afterwards); otherwise the latest content, else the state's choices as an options view
+  (any zone), else the face. A new question (AWAIT_BOOK) or a new book (SCAN) clears the old content.
+- **Payloads** are dataclasses in `core/screen.py` (`BookCardPayload`, `BookListPayload`, `DirectionsPayload`,
+  `OptionsPayload`, `StatusPayload`, `FacePayload`) with `to_json()`; `ScreenUpdate.payload` carries the dict, so it
+  goes straight to the page and into the session log.
+- **Timing and zones.** Content stays until the next content or visit, or `screen.content_ttl_s` (quiet 30, common 15)
+  after the last interaction; `App.run_ticker()` calls `ScreenComposer.tick()`, which brings the face back. Content
+  views use the `split` layout: small eyes in a corner, never no face. A quiet zone gets longer summaries and larger
+  text; a common area shorter ones (`screen.summary_chars`).
+- **Places.** `services/places.py` resolves what place a visitor means: a floor ("what's on level 2"), a full title,
+  a section name (the longest), a topic or alias from topics.yaml (the section holding most of its books), then a
+  loosely typed title. Equally good candidates give `ChoicesOffered` and an options view. `services/floorplan.py`
+  loads `data/floorplan.yaml`; the directions payload draws the target's floor, the robot (the station pose, or during
+  RETURNING the last navigation target), an approximate straight or L-shaped path, the distance, and "Take the lift to
+  Level N" when the target is on another floor. There is no real path planning.
+- **Covers.** `services/covers.py`: downloaded covers in `data/covers/` (tools/import_books.py --covers), else an SVG
+  placeholder (the title on a colour from the ISBN); the display server serves both at `/covers/<isbn>`.
+- **The page.** `display/ui/views.js` has one function per view and builds plain DOM (text always as text). It needs
+  nothing from the internet. Buttons POST their id to `/input` (`book:`, `where:`, `guide:`, `similar:` + ISBN,
+  `section:<name>`, `floor:<n>`); `Dialogue.choice_info` turns them into choices for the same table, so "Show me the
+  way" and "Guide me" reuse the guide flow and "Something similar" the RECOMMEND state.
 
 ## The book graph
 
@@ -105,4 +143,7 @@ RETURNING: PLAN → NAVIGATING → AT_SHELF → (next shelf | HOMING) → IDLE; 
 | The books the robot knows, where they live, how they relate | `data/catalog.csv`, `topics.yaml`, `shelves.csv`, `curated_links.csv` (sample data until the real library is loaded; see [catalog.md](catalog.md)) |
 | How recommendations are scored | `books.similarity` in `config/robot.yaml`, `robot/services/book_graph.py` |
 | How emotions are blended | `robot/core/expression.py` (weights documented at the top) |
-| The face's look, and the text area and buttons | `display/ui/index.html` |
+| The face's look | `display/ui/index.html` |
+| Which view a state shows, timing per zone | `robot/core/screen.py`, `screen:` in `config/robot.yaml` |
+| How a view looks | `display/ui/views.js` (and the styles in `index.html`) |
+| The floor plan for directions | `data/floorplan.yaml` (docs/catalog.md) |

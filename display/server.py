@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import re
 import json
 import queue
 import sys
@@ -49,12 +50,14 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
 
 
 INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another")
-OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset")
+CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|section:[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
+OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset",
+                     "screen")
 INBOX_KEEP = 200
 REPLAYED = ("screen", "state")          # what a page that connects late is shown straight away
 
 
-REMOTE_GET = ("/operator", "/operator.html", "/events", "/", "/index.html", "/camera.jpg", "/camera.mjpg")     # what another computer may read
+REMOTE_GET = ("/operator", "/operator.html", "/events", "/", "/index.html", "/camera.jpg", "/camera.mjpg", "/covers/")     # what another computer may read
 REMOTE_POST = ("/operator",)                                                    # and the only thing it may send
 
 
@@ -74,6 +77,8 @@ def allowed(method: str, path: str, local: bool) -> bool:
     posts (/screen, /state), the inbox the robot collects from, button taps (/input), or driving the face
     (/emotion, /talk)."""
     if local:
+        return True
+    if method == "GET" and path.startswith("/covers/"):
         return True
     return path in (REMOTE_GET if method == "GET" else REMOTE_POST)
 
@@ -102,10 +107,11 @@ class Inbox:
 class Hub:
     """Fans each event out to every connected page, and remembers the last screen and state for pages that connect late."""
 
-    def __init__(self):
+    def __init__(self, covers_dir=None):
         self._lock = threading.Lock()
         self._clients: set[queue.Queue] = set()
         self._latest: dict[str, dict] = {}
+        self.covers_dir = covers_dir                # data/covers (books.covers_dir); None: looked up in the config
         self.inbox = Inbox()
         self.frame_cond = threading.Condition()
         self.frame: bytes | None = None             # the robot's newest camera picture (JPEG)
@@ -224,6 +230,8 @@ def make_handler(hub: Hub):
                 self._json(200, hub.inbox.after(cursor))
             elif url.path == "/operator":
                 self._static("/operator.html")
+            elif url.path.startswith("/covers/"):
+                self._cover(url.path[len("/covers/"):], first("title") or "", first("author") or "")
             else:
                 self._static(url.path)
 
@@ -279,7 +287,7 @@ def make_handler(hub: Hub):
                 self._json(200, {"clients": hub.publish({"state": data})})
             elif path == "/input":
                 choice = data.get("choice")
-                if choice not in INPUT_CHOICES:
+                if choice not in INPUT_CHOICES and not (isinstance(choice, str) and CONTENT_CHOICE.match(choice)):
                     self._json(400, {"error": f"choice must be one of {', '.join(INPUT_CHOICES)}"})
                     return
                 self._json(200, {"queued": hub.inbox.add({"type": "choice", "choice": choice})["id"]})
@@ -289,6 +297,24 @@ def make_handler(hub: Hub):
                     self._json(400, {"error": f"command must be one of {', '.join(OPERATOR_COMMANDS)}"})
                     return
                 self._json(200, {"queued": hub.inbox.add({"type": "operator", "command": command, "arg": arg})["id"]})
+
+        def _cover(self, isbn: str, title: str, author: str) -> None:
+            """data/covers/<isbn>.jpg if it was downloaded, else a placeholder made from the title."""
+            from robot.services.covers import cover_file, placeholder_svg
+            isbn = isbn.removesuffix(".jpg")
+            if not isbn.isdigit() or len(isbn) > 13:
+                self._json(404, {"error": "not found"})
+                return
+            covers = hub.covers_dir
+            if covers is None:
+                from robot.config import load_config
+                cfg = load_config()
+                covers = hub.covers_dir = cfg.path(cfg.books.get("covers_dir") or "data/covers")
+            path = cover_file(covers, isbn)
+            if path is not None:
+                self._send(200, path.read_bytes(), "image/jpeg")
+            else:
+                self._send(200, placeholder_svg(isbn, title[:120], author[:80]).encode(), "image/svg+xml")
 
         def _static(self, path: str) -> None:
             rel = path.lstrip("/") or "index.html"

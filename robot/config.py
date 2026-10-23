@@ -38,7 +38,9 @@ BOOKS_DEFAULTS = {
     "scan_timeout_s": 5.0,
     "scanner_camera_index": 0,
     "use_llm": True,
-    "reader": "camera",             # how the book on the pad is read: camera (barcode) or rfid (not implemented yet)
+    "reader": "camera",                      # how the book on the pad is read: camera (barcode) or rfid (not implemented yet)
+    "floorplan_path": "data/floorplan.yaml",  # floors, sections and landmarks for the directions view
+    "covers_dir": "data/covers",              # downloaded covers (tools/import_books.py --covers), gitignored
 }
 
 
@@ -69,6 +71,12 @@ ENGAGEMENT_DEFAULTS = {
     "dwell_s": 0.5,                 # ...and must stay that way this long to count as engaging
     "leave_grace_s": 60,            # the camera losing a visitor who spoke, typed or tapped within this long is not them leaving
     "left_after_s": 12.0,           # no face for this long: the person has left (long: looking down at a book loses the face)
+}
+
+SCREEN_DEFAULTS = {
+    "content_ttl_s": {"quiet": 30, "common": 15},   # a content view goes back to the face this long after the last
+                                                    # interaction (quiet zones read, common areas listen)
+    "summary_chars": {"quiet": 180, "common": 110},  # how much of a summary a book card shows
 }
 
 DISPLAY_DEFAULTS = {
@@ -117,6 +125,10 @@ class Config:
     @property
     def engagement(self) -> dict:
         return self.section("engagement", ENGAGEMENT_DEFAULTS)
+
+    @property
+    def screen(self) -> dict:
+        return self.section("screen", SCREEN_DEFAULTS)
 
     @property
     def display(self) -> dict:

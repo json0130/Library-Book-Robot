@@ -494,7 +494,7 @@ class BookGraph:
         total = sum(c.contribution for c in components) / sum(w.values())
         return Score(a, b, min(1.0, total), tuple(components), next_in_series=self._is_next(a, b))
 
-    def recommend(self, isbn: str, n: int = 3) -> list:
+    def recommend(self, isbn: str, n: int = 3, min_score: Optional[float] = None) -> list:
         """Up to n other books for someone who has this one, best first, each with its score, components and
         reasons. The next book in a series comes first; the rest are ranked by total, ties by title then ISBN.
         The book itself and anything below books.similarity.min_score are left out. [] for an unknown book."""
@@ -505,7 +505,7 @@ class BookGraph:
         for other in self.catalog.books:
             if other.isbn13 != book.isbn13:
                 score = self.score(book.isbn13, other.isbn13)
-                if score.total >= self.min_score:
+                if score.total >= (self.min_score if min_score is None else min_score):
                     found.append(Recommendation(other, score, self.spoken_reason(book.isbn13, other.isbn13, score)))
         found.sort(key=lambda r: (not r.score.next_in_series, -round(r.total, 9), r.book.title.lower(), r.book.isbn13))
         return found[:n]
@@ -578,9 +578,20 @@ class BookGraph:
             name = max(named)[1]
             shelves = sorted(sections[name], key=lambda s: s.id)
             return Area(name, shelves[0], tuple(s.id for s in shelves), "section")
+        wanted, count = self.topic_shelf_scores(text)
+        if not count:
+            return None
+        best = min(count, key=lambda s: (-count[s], s))
+        shelf = self.shelves[best]
+        same = sorted(s.id for s in self.shelves.values() if s.section == shelf.section)
+        return Area(wanted[0], shelf, tuple(same), "topic")
+
+    def topic_shelf_scores(self, text: str) -> tuple:
+        """(the topics the words name, {shelf id: how much of that topic it holds}): a book about the topic counts 1,
+        one about something under it 0.5, and a shelf whose description names the topic 10."""
         wanted = self._topics_named(text)
         if not wanted:
-            return None
+            return [], {}
         count: dict[str, float] = {}
         for book in self.catalog.books:
             mine = self._topics[book.isbn13]
@@ -593,12 +604,7 @@ class BookGraph:
             described = {stem(w) for w in words_of(f"{shelf.section} {shelf.description}")}
             if any(stem(w) in described for t in wanted for w in words_of(t)):
                 count[shelf_id] = count.get(shelf_id, 0) + 10
-        if not count:
-            return None
-        best = min(count, key=lambda s: (-count[s], s))
-        shelf = self.shelves[best]
-        same = sorted(s.id for s in self.shelves.values() if s.section == shelf.section)
-        return Area(wanted[0], shelf, tuple(same), "topic")
+        return wanted, count
 
     def recommend_for_interest(self, text: str, n: int = 3) -> list:
         """Recommendations for someone who says what they like instead of showing a book ("something about space",

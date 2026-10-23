@@ -30,6 +30,7 @@ from robot.bus import Bus
 from robot.config import Config
 from robot.core.context import Context, NoiseThresholds, derive_context, resolve_area
 from robot.core.dialogue import Dialogue, Settings
+from robot.core.screen import VIEWS, ScreenComposer
 from robot.core.expression import blend
 from robot.core.session_log import SessionLog
 from robot.core.storage import Storage
@@ -119,6 +120,8 @@ class App:
     scanner: Optional[BookReader] = None          # the BookReader (camera scanner or RFID)
     assistant: object = None                      # services.book_llm.BookAssistant, or None (catalogue text only)
     storage: Optional[Storage] = None             # which book is in which slot of the storage ring
+    plan: object = None                           # services.floorplan.FloorPlan for directions, or None
+    screen: Optional[ScreenComposer] = None       # decides what the screen shows (core/screen.py)
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
@@ -127,8 +130,11 @@ class App:
         cooldown = float((self.cfg.robot.get("dialogue") or {}).get("greet_cooldown_s", 120))
         self.dialogue = Dialogue(self.actuators, lambda: self.style, self.bus.publish, self.finder, self.assistant,
                                  greet_cooldown_s=cooldown, storage=self.storage,
-                                 settings=Settings.from_config(self.cfg), get_zone=lambda: self.context.zone)
+                                 settings=Settings.from_config(self.cfg), get_zone=lambda: self.context.zone,
+                                 plan=self.plan)
         self.storage = self.dialogue.storage
+        self.screen = ScreenComposer(self.bus.publish, self.finder, self.plan, self.cfg.screen, lambda: self.style,
+                                     lambda: self.dialogue.state)
         # order matters: log first, then update context/style, then the dialogue reacts
         self.bus.subscribe(object, self._log)
         self.bus.subscribe(ContextChanged, self._on_context)
@@ -138,6 +144,7 @@ class App:
         self.bus.subscribe(NavigationRequested, self._on_navigation)
         self.bus.subscribe(ScreenUpdate, self._on_screen)
         self.dialogue.attach(self.bus)
+        self.screen.attach(self.bus)
         if self.scanner_camera is not None and self.finder is not None:
             books = self.cfg.books
             # subscribed after the dialogue, so the dialogue is already "scanning" when the scan starts
@@ -166,18 +173,18 @@ class App:
                 "books": [{"slot": b.slot, "title": b.title, "shelf": b.shelf, "section": b.section}
                           for b in d.storage.stored()], "style": self.style.summary(),
                 "states": list(d.fsm.spec.leaves()), "tree": d.state_tree(), "leaf": d.leaf,
-                "next": d.next_actions()}
+                "next": d.next_actions(), "view": self.screen.current.view if self.screen and self.screen.current else "face",
+                "views": list(VIEWS)}
 
     def show_state(self) -> bool:
         return self.actuators.face.show_state(self.state_info())
 
     def _on_screen(self, event: ScreenUpdate) -> None:
-        """A state was entered: show its screen, and tell the operator page where the machine is now."""
+        """The screen composer chose what to show: send it to the page, and tell the operator page where the machine is."""
         update = asdict(event)
         update["options"] = list(event.options)
-        buttons = f" buttons: {' | '.join(o['label'] for o in event.options)}" if event.options else ""
-        log.info("[screen] %s (%s, %s) %s%s", event.state_path, event.layout, event.zone,
-                 f"{event.title!r}: {event.text!r}" if event.text else repr(event.title), buttons)
+        log.info("[screen] %s view=%s (%s, %s) %s", event.state_path, event.view, event.layout, event.zone,
+                 describe_view(event.view, event.payload) or (repr(event.text) if event.text else ""))
         self.actuators.face.show_screen(update)
         self.show_state()
 
@@ -186,6 +193,7 @@ class App:
         while True:
             try:
                 await self.dialogue.tick()
+                await self.screen.tick()
             except Exception:                        # a failing action must not stop the clock
                 log.exception("state machine tick failed")
             await asyncio.sleep(interval_s)
@@ -233,6 +241,38 @@ def build_assistant(cfg: Config) -> BookAssistant:
     return BookAssistant(LLMClient(cfg.ai_host, cfg.ai_port, float(server.get("llm_timeout_s", 20))))
 
 
+def describe_view(view: str, p: dict) -> str:
+    """One line about a view's content, for the terminal and the log."""
+    if view == "book_card":
+        return f"{p.get('title')!r}" + (f" [{p['badge']}]" if p.get("badge") else "") + \
+            (f" level {p.get('level')} {p.get('section')} {p.get('shelf')}" if p.get("section") else "")
+    if view == "book_list":
+        return f"{p.get('heading')!r}: " + " | ".join(i["title"] for i in p.get("items", []))
+    if view == "directions":
+        return (f"{p.get('title')!r} level {p.get('level')}, about {p.get('distance_m')} m: "
+                + " / ".join(p.get("steps", [])))
+    if view == "options":
+        return f"{p.get('prompt')!r}: " + " | ".join(o["label"] for o in p.get("options", []))
+    if view == "status":
+        return f"{p.get('heading')} to {p.get('destination')}, {p.get('books_left')} left"
+    return repr(p.get("caption")) if p.get("caption") else ""
+
+
+def build_plan(cfg: Config):
+    """The floor plan from books.floorplan_path, or None (with a warning) if it is missing or wrong: the robot
+    still works, only the directions view has no map."""
+    from robot.services.floorplan import FloorPlan, FloorPlanError
+    path = cfg.path(cfg.books.get("floorplan_path") or "data/floorplan.yaml")
+    if not path.is_file():
+        log.warning("no floor plan at %s: directions are shown without a map", path)
+        return None
+    try:
+        return FloorPlan.load(path)
+    except FloorPlanError as exc:
+        log.warning("the floor plan is not usable (%s): directions are shown without a map", exc)
+        return None
+
+
 def build_storage(cfg: Config, persist: bool = True) -> Storage:
     """The storage ring's data: the slot count from config (else the ring's own) and, if `persist`, the file it is
     saved to (data/state/storage.json)."""
@@ -263,4 +303,4 @@ def build_app(cfg: Config, drivers: Drivers, face: Optional[FaceDisplay] = None,
     return App(cfg=cfg, bus=Bus(), actuators=actuators, policy=StylePolicy(cfg.styles),
                thresholds=NoiseThresholds.from_zones(cfg.zones), session_log=session_log, fixed=fixed,
                finder=finder or build_finder(cfg), scanner_camera=drivers.scanner_camera or drivers.camera,
-               assistant=assistant, storage=build_storage(cfg, persist_storage))
+               assistant=assistant, storage=build_storage(cfg, persist_storage), plan=build_plan(cfg))

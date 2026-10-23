@@ -25,6 +25,9 @@
     engage | busy                a person engages / is near but busy (PersonEngaged / PersonNearbyBusy)
     dropped                      the pad dropped the book into its slot (BookDropped)
     pick return|ask|recommend|more|guide|done   press that screen button
+    pick book:<isbn> | similar:<isbn> | guide:<isbn> | section:<name>   tap a book, a card button or a choice
+    screen <view> [isbn | section]  show a screen view with sample data: face book_card book_list directions
+                                 options status (`screen face` goes back to the face)
     reset | reset all            back to IDLE (`all` also empties the storage)
     wait <seconds> | wait idle   let the timers run (for scripted runs)
     help, quit
@@ -204,6 +207,8 @@ class Sim:
                 graph = self.app.finder.graph
                 self.say(f"  reloaded: {len(graph.catalog)} books, {len(graph.shelves)} shelves, {len(graph.links)} links")
             return True
+        elif cmd == "where" and rest and rest.split()[0].lower() in ("is", "are", "was", "can", "do", "does", "would"):
+            await bus.publish(UserUtterance(line.strip()))     # a sentence ("where is it?"), not `where <title>`
         elif cmd == "where" and rest:
             book = self.app.finder.catalog.find_title(rest)
             if book is None:

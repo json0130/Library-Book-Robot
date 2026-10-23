@@ -100,6 +100,15 @@
       <ul id="next"></ul>
     </section>
     <section>
+      <h2>Screen view <span id="curview"></span></h2>
+      <form class="row" id="viewform">
+        <select id="views"><option>face</option><option>book_card</option><option>book_list</option>
+          <option>directions</option><option>options</option><option>status</option></select>
+        <input type="text" id="viewarg" placeholder="ISBN or section (optional)" autocomplete="off">
+        <button>Show</button>
+      </form>
+    </section>
+    <section>
       <h2>Go to a state</h2>
       <div class="row"><select id="states"></select><button id="goto">Go</button></div>
       <div class="row" style="margin-top:8px"><button id="reset" class="danger">Reset to IDLE</button>
@@ -209,12 +218,14 @@ function showState(s) {
 }
 function showScreen(u) {
   const buttons = (u.options || []).map(o => `[${o.label}]`).join(" ");
-  $("screen").textContent = `${u.layout} · ${u.title || "(no title)"} — ${u.text || "(no text)"} ${buttons}`;
+  $("curview").textContent = `(now: ${u.view || "face"})`;
+  $("screen").textContent = `${u.view || "face"} · ${u.layout} · ${u.title || "(no title)"} — ${u.text || "(no text)"} ${buttons}`;
 }
 document.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => send("zone", b.dataset.zone));
 $("goto").onclick = () => send("goto", $("states").value);
 $("reset").onclick = () => send("reset");
 $("resetall").onclick = () => send("reset", "all");
+$("viewform").onsubmit = e => { e.preventDefault(); send("screen", `${$("views").value} ${$("viewarg").value.trim()}`.trim()); };
 $("sayform").onsubmit = e => { e.preventDefault(); const t = $("say").value.trim(); if (t) { send("say", t); $("say").value = ""; } };
 
 // the robot's camera: a multipart stream; if it is not there yet, look again every few seconds

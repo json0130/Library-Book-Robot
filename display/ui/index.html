@@ -5,28 +5,109 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Robot face</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  /* Sizes are in units of a 1024x600 7-inch screen (--u = 1 px there): body text 28 px, buttons at least 64 px. */
+  :root { --u: min(calc(100vw / 1024), calc(100vh / 600)); --cyan: #2debeb; --ink: #dffcfc; --muted: #8fc9c9;
+          --panel: #071a1c; --line: #164a4d; --scale: 1; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; color: var(--ink);
+               font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; }
+  body.zone-quiet { --scale: 1.12; }                 /* a quiet zone reads instead of listening: larger text */
+  body.touch { cursor: auto; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: #000; }
-  body.split canvas { height: 56%; }
-  body.buttons { cursor: auto; }
-  /* The text area and option buttons for a ScreenUpdate: placeholder layouts, to be designed. */
-  #panel { position: fixed; left: 0; right: 0; bottom: 0; height: 44%; box-sizing: border-box; padding: 2vh 5vw;
-           display: none; flex-direction: column; justify-content: center; gap: 2vh; color: #bff; font-family: system-ui, sans-serif;
-           text-align: center; }
-  body.split #panel { display: flex; }
-  #title { font-size: 4vh; font-weight: 600; color: #2debeb; }
-  #text { font-size: 3.2vh; line-height: 1.35; max-height: 16vh; overflow: hidden; }
-  #options { display: flex; flex-wrap: wrap; justify-content: center; gap: 2vh 2vw; }
-  #options button { font: inherit; font-size: 3.4vh; padding: 1.6vh 3vw; min-width: 16vw; color: #021; background: #2debeb;
-                    border: 0; border-radius: 3vh; cursor: pointer; }
-  #options button:active { background: #fff; }
-  #state { position: fixed; top: 0.6vh; left: 1vw; font: 1.6vh monospace; color: #155; }
+  /* split: small animated eyes stay in the top-left corner while content is shown */
+  body.split canvas { inset: auto; top: calc(10 * var(--u)); left: calc(10 * var(--u)); width: calc(170 * var(--u));
+                      height: calc(108 * var(--u)); border-radius: calc(16 * var(--u)); }
+  body.full.captioned canvas { height: 76%; }
+  #view { position: fixed; inset: 0; box-sizing: border-box; display: none; }
+  body.split #view { display: block; padding: calc(16 * var(--u)) calc(20 * var(--u)) calc(16 * var(--u)) calc(196 * var(--u)); }
+  body.full #view { display: block; pointer-events: none; }
+  #view * { box-sizing: border-box; }
+  #view h1 { margin: 0; font-weight: 700; color: #fff; font-size: calc(38 * var(--u) * var(--scale)); line-height: 1.2; }
+  .clamp1, .clamp2 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+  .clamp1 { -webkit-line-clamp: 1; } .clamp2 { -webkit-line-clamp: 2; }
+  .btn { font: inherit; font-size: calc(28 * var(--u) * var(--scale)); min-height: calc(64 * var(--u)); padding: 0 calc(26 * var(--u));
+         color: var(--cyan); background: transparent; border: calc(3 * var(--u)) solid var(--cyan); border-radius: calc(32 * var(--u));
+         cursor: pointer; }
+  .btn.primary { color: #001314; background: var(--cyan); }
+  .btn:active { background: #fff; color: #000; }
+  .buttons { display: flex; flex-wrap: wrap; gap: calc(14 * var(--u)); }
+  .badges { display: flex; flex-wrap: wrap; gap: calc(10 * var(--u)); }
+  .badge { font-size: calc(26 * var(--u) * var(--scale)); padding: calc(4 * var(--u)) calc(14 * var(--u)); border-radius: calc(10 * var(--u));
+           background: var(--panel); border: calc(2 * var(--u)) solid var(--line); color: var(--cyan); }
+  .cover { display: block; object-fit: cover; background: #0b2426; border-radius: calc(10 * var(--u)); }
+
+  /* face: a caption under the face (quiet zone) */
+  .view-face .caption { position: absolute; left: calc(40 * var(--u)); right: calc(40 * var(--u)); bottom: calc(24 * var(--u));
+                        text-align: center; font-size: calc(30 * var(--u) * var(--scale)); line-height: 1.3; color: var(--ink);
+                        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+  /* book_card */
+  .view-card { height: 100%; display: grid; grid-template-columns: calc(240 * var(--u)) 1fr; gap: calc(26 * var(--u)); align-items: center; }
+  .view-card .cover { width: calc(240 * var(--u)); height: calc(360 * var(--u)); }
+  .card-info { display: flex; flex-direction: column; gap: calc(12 * var(--u)); min-width: 0; }
+  .card-info .author { font-size: calc(28 * var(--u) * var(--scale)); color: var(--muted); }
+  .card-info .summary { margin: 0; font-size: calc(28 * var(--u) * var(--scale)); line-height: 1.3; }
+  .card-info .buttons { margin-top: calc(6 * var(--u)); }
+
+  /* book_list */
+  .view-list { height: 100%; display: flex; flex-direction: column; gap: calc(14 * var(--u)); }
+  .view-list .heading { font-size: calc(32 * var(--u) * var(--scale)); color: var(--cyan); }
+  .list-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: calc(16 * var(--u)); align-items: start; }
+  .list-item { font: inherit; color: inherit; background: var(--panel); border: calc(2 * var(--u)) solid var(--line);
+               border-radius: calc(14 * var(--u)); padding: calc(12 * var(--u)); display: flex; flex-direction: column;
+               align-items: center; justify-content: flex-start; gap: calc(8 * var(--u)); cursor: pointer; text-align: center;
+               min-width: 0; min-height: calc(470 * var(--u)); }
+  .list-item:active { border-color: var(--cyan); }
+  .list-item .cover { width: calc(150 * var(--u)); height: calc(225 * var(--u)); flex: none; }
+  .item-title { font-size: calc(28 * var(--u)); font-weight: 700; color: #fff; line-height: 1.2; }
+  .item-reason { font-size: calc(24 * var(--u) * var(--scale)); color: var(--muted); line-height: 1.25;
+                 -webkit-line-clamp: 4 !important; }
+
+  /* directions */
+  .view-directions { height: 100%; display: grid; grid-template-columns: 1.35fr 1fr; gap: calc(18 * var(--u)); }
+  .map { min-width: 0; min-height: 0; display: flex; align-items: center; }
+  .plan { width: 100%; height: 100%; }
+  .plan .floor { fill: #031012; stroke: var(--line); stroke-width: 0.08; }
+  .plan .section { fill: #0b2b2e; stroke: #1d6468; stroke-width: 0.06; }
+  .plan .section.hi { fill: rgba(45, 235, 235, .28); stroke: var(--cyan); stroke-width: 0.12; }
+  .plan .section-label { fill: var(--muted); font-weight: 700; }
+  .plan .section-label.hi { fill: #fff; }
+  .plan .landmark { fill: #1b1b1b; stroke: #ffb469; stroke-width: 0.06; }
+  .plan .landmark.lift { fill: #3a2a10; }
+  .plan .landmark-icon { fill: #ffb469; font-weight: 700; }
+  .plan .path { fill: none; stroke: var(--cyan); stroke-width: 0.14; stroke-dasharray: 0.35 0.25; stroke-linecap: round;
+                stroke-linejoin: round; }
+  .plan .target { fill: #fff; } .plan .target-ring { fill: none; stroke: #fff; stroke-width: 0.08; }
+  .plan .robot { fill: var(--cyan); stroke: #fff; stroke-width: 0.06; }
+  .plan .robot-label { fill: #fff; font-weight: 700; }
+  .view-directions .side { display: flex; flex-direction: column; justify-content: center; gap: calc(12 * var(--u)); min-width: 0; }
+  .view-directions .badge { font-size: calc(24 * var(--u) * var(--scale)); }
+  .steps { margin: 0; padding-left: calc(36 * var(--u)); font-size: calc(28 * var(--u) * var(--scale)); line-height: 1.3; }
+  .steps li + li { margin-top: calc(6 * var(--u)); }
+  .distance { font-size: calc(28 * var(--u) * var(--scale)); color: var(--cyan); font-weight: 700; }
+
+  /* options */
+  .view-options { height: 100%; display: flex; flex-direction: column; justify-content: center; gap: calc(20 * var(--u)); }
+  .option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: calc(16 * var(--u)); }
+  .option-grid .btn { min-height: calc(92 * var(--u)); font-size: calc(30 * var(--u) * var(--scale)); border-radius: calc(20 * var(--u));
+                      padding: calc(8 * var(--u)) calc(16 * var(--u)); }
+  .option-grid.many .btn { min-height: calc(72 * var(--u)); }
+
+  /* status */
+  .view-status { height: 100%; display: flex; flex-direction: column; justify-content: center; gap: calc(16 * var(--u)); }
+  .view-status .heading { color: var(--cyan); }
+  .view-status .destination { font-size: calc(40 * var(--u) * var(--scale)); color: #fff; font-weight: 700; }
+  .books-left { font-size: calc(32 * var(--u) * var(--scale)); color: var(--muted); }
+  .books-left .count { font-size: calc(72 * var(--u)); color: var(--cyan); font-weight: 700; }
+  .view-status .detail { font-size: calc(28 * var(--u) * var(--scale)); color: var(--muted); }
+
+  #state { position: fixed; bottom: calc(4 * var(--u)); left: calc(8 * var(--u)); font: calc(14 * var(--u)) monospace; color: #155; }
 </style>
 </head>
 <body>
 <canvas id="face"></canvas>
-<div id="panel"><div id="title"></div><div id="text"></div><div id="options"></div></div>
+<div id="view"></div>
 <div id="state"></div>
+<script src="views.js"></script>
 <script>
 "use strict";
 // Robot face: glowing cyan eyes and a thin mouth on pure black.
@@ -35,8 +116,9 @@
 //   {"emotion": "happy", "hold_s": 3.0}      ("idle" returns to the resting face)
 //   {"talk": {"levels": [0..1, ...], "fps": 30, "delay_s": 0}}   mouth follows a speech loudness envelope
 //   {"talk": {"seconds": 3}}                                       generic talking (0 stops)
-//   {"screen": {"state_path", "zone", "layout": "full_face"|"split", "title", "text", "options": [{"id","label"}]}}
-//                                         what the state machine wants shown; a tapped option POSTs /input {"choice": id}
+//   {"screen": {"state_path", "zone", "layout": "full_face"|"split", "view", "payload", "ttl_s", ...}}
+//         what the screen composer (robot/core/screen.py) wants shown; views.js draws it; a button POSTs /input {"choice": id}
+// Screenshots and checks without the robot: ?update=<ScreenUpdate as JSON> draws that screen straight away.
 // Debug: open the page with ?emotion=happy to freeze that face without a server (&talk=0.7 opens the mouth).
 
 // ---------- expressions ----------
@@ -361,27 +443,26 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// ---------- the screen: text area and option buttons ----------
+// ---------- the screen: the face, or a content view with small eyes in the corner ----------
 const el = id => document.getElementById(id);
+function send(choice) {
+  if (preview) return;
+  fetch("/input", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ choice }) }).catch(() => {});
+}
 function showScreen(u) {
-  const split = u.layout === "split";
-  const options = Array.isArray(u.options) ? u.options : [];
-  document.body.classList.toggle("split", split);
-  document.body.classList.toggle("buttons", split && options.length > 0);
-  el("title").textContent = u.title || "";
-  el("text").textContent = u.text || "";
-  el("state").textContent = new URLSearchParams(location.search).has("debug") ? `${u.state_path} · ${u.zone}` : "";
-  const box = el("options");
-  box.replaceChildren(...options.map(o => {
-    const b = document.createElement("button");
-    b.textContent = o.label || o.id;
-    b.addEventListener("click", () => {
-      fetch("/input", { method: "POST", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ choice: o.id }) }).catch(() => {});
-    });
-    return b;
-  }));
+  const split = u.layout === "split" && u.view && u.view !== "face";
+  document.body.classList.toggle("split", !!split);
+  document.body.classList.toggle("full", !split);
+  document.body.classList.toggle("zone-quiet", u.zone === "quiet");
+  document.body.dataset.zone = u.zone || "common";
+  Views.render(u, el("view"), send, showScreen);
+  document.body.classList.toggle("touch", !!el("view").querySelector("button"));
+  el("state").textContent = params.has("debug") ? `${u.state_path || ""} · ${u.zone || ""} · ${u.view || "face"}` : "";
   resize();
+}
+if (params.has("update")) {
+  try { showScreen(JSON.parse(params.get("update"))); } catch (_) { /* a bad debug parameter: just the face */ }
 }
 
 // ---------- events ----------

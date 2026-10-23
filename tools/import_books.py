@@ -14,6 +14,14 @@ with a suggestion when one looks like an existing topic: add them as aliases (or
 run the import again. Answers are cached in data/cache/<isbn>.details.json (gitignored), so a re-run only asks
 Open Library about ISBNs it hasn't seen, and waits --delay seconds (default 1) between those requests.
 ISBNs already in catalog.csv are skipped unless you pass --include-existing.
+
+    python tools/import_books.py isbns.txt --covers          # also download each book's cover
+    python tools/import_books.py --covers-only               # just the covers, for every book in catalog.csv
+
+--covers saves Open Library covers (covers.openlibrary.org/b/isbn/<isbn>-L.jpg?default=false, which answers 404
+when there is no cover instead of a blank image) to data/covers/<isbn>.jpg (gitignored), skipping covers already
+there. Open Library allows 100 cover look-ups by ISBN per 5 minutes, so it waits at least 3 s between them. Books
+without a cover get a generated placeholder on the screen.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python
 
 from robot.config import load_config  # noqa: E402
 from robot.services.books import Catalog, CatalogError  # noqa: E402
+from robot.services.covers import download_cover  # noqa: E402
 from robot.services.isbn import to_isbn13  # noqa: E402
 from robot.services.topics import TopicVocabulary, norm_key  # noqa: E402
 
@@ -175,6 +184,37 @@ def import_books(isbns: list, vocab: TopicVocabulary, cache_dir: Optional[Path],
     return rows, unmatched, not_found, skipped
 
 
+COVER_DELAY_S = 3.0                       # 100 ISBN cover look-ups per 5 minutes is Open Library's limit
+
+
+def fetch_covers(isbns: list, covers_dir: Path, delay: float, opener=None, sleep=time.sleep) -> dict:
+    """Download the covers that are not there yet, waiting `delay` seconds between requests. Returns
+    {"saved": [...], "exists": [...], "missing": [...], "failed": [...]}."""
+    import urllib.request as request_module
+    opener = opener or request_module.urlopen
+    result = {"saved": [], "exists": [], "missing": [], "failed": []}
+    asked = False
+    for isbn in isbns:
+        if (covers_dir / f"{isbn}.jpg").is_file():
+            result["exists"].append(isbn)
+            continue
+        if asked:
+            sleep(delay)
+        asked = True
+        outcome = download_cover(isbn, covers_dir, TIMEOUT_S, opener)
+        key = outcome.split(":", 1)[0]
+        result[key].append(isbn if key != "failed" else f"{isbn} ({outcome[8:]})")
+        print(f"  cover {isbn}: {outcome}", flush=True)
+    return result
+
+
+def print_covers(result: dict, covers_dir: Path) -> None:
+    print(f"\nCovers in {covers_dir}: {len(result['saved'])} saved, {len(result['exists'])} already there, "
+          f"{len(result['missing'])} not on Open Library (a placeholder is shown)")
+    for failure in result["failed"]:
+        print(f"  failed: {failure}", file=sys.stderr)
+
+
 def write_draft(path: Path, rows: list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -189,14 +229,36 @@ def main(argv=None) -> int:
     cfg = load_config()
     books = cfg.books
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("isbns", type=Path, help="text file with one ISBN per line")
+    p.add_argument("isbns", type=Path, nargs="?", help="text file with one ISBN per line")
     p.add_argument("--out", type=Path, default=cfg.path("data/catalog_draft.csv"), help="the draft to write")
     p.add_argument("--delay", type=float, default=1.0, help="seconds between requests to Open Library (default 1)")
     p.add_argument("--no-cache", action="store_true", help="ask Open Library again even for cached ISBNs")
     p.add_argument("--include-existing", action="store_true", help="also draft ISBNs already in catalog.csv")
+    p.add_argument("--covers", action="store_true", help="also download each book's cover to data/covers/")
+    p.add_argument("--covers-only", action="store_true", help="only download covers, for every book in catalog.csv "
+                                                              "(or the ISBN file if given)")
+    p.add_argument("--covers-dir", type=Path, default=cfg.path(books.get("covers_dir", "data/covers")))
     args = p.parse_args(argv)
+    cover_delay = max(args.delay, COVER_DELAY_S)
 
     catalog_path = cfg.path(books["catalog_path"])
+    if args.covers_only:
+        if args.isbns is not None:
+            if not args.isbns.is_file():
+                print(f"ISBN file not found: {args.isbns}", file=sys.stderr)
+                return 2
+            isbns = read_isbns(args.isbns)[0]
+        else:
+            try:
+                isbns = [b.isbn13 for b in Catalog.load(catalog_path).books]
+            except CatalogError as exc:
+                print(f"Cannot read the catalogue: {exc}", file=sys.stderr)
+                return 2
+        print(f"Covers for {len(isbns)} book(s), waiting {cover_delay:g} s between requests")
+        print_covers(fetch_covers(isbns, args.covers_dir, cover_delay), args.covers_dir)
+        return 0
+    if args.isbns is None:
+        p.error("give an ISBN file (or --covers-only)")
     if args.out.resolve() == catalog_path.resolve():
         print(f"Refusing to write over the catalogue ({catalog_path}); the draft goes to another file.", file=sys.stderr)
         return 2
@@ -219,6 +281,8 @@ def main(argv=None) -> int:
                                                        set() if args.include_existing else existing)
     write_draft(args.out, rows)
     print(f"\nWrote {len(rows)} book(s) to {args.out}")
+    if args.covers:
+        print_covers(fetch_covers([r[0] for r in rows], args.covers_dir, cover_delay), args.covers_dir)
     if skipped:
         print(f"Skipped {len(skipped)} already in the catalogue (--include-existing to draft them anyway)")
     if not_found:

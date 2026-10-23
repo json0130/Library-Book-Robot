@@ -1,4 +1,4 @@
-"""Check the book data files: catalogue, topics, shelves and curated links.
+"""Check the book data files: catalogue, topics, shelves, curated links and the floor plan.
 
     python tools/catalog_check.py                  # the files named in config/robot.yaml (books:)
     python tools/catalog_check.py --strict         # warnings count as failures too
@@ -10,7 +10,10 @@ alias used twice, a loop), bad rows in shelves.csv or curated_links.csv, a link 
 the catalogue.
 WARNINGS: subjects the vocabulary doesn't know (add an alias in topics.yaml), books with fewer than 2
 topics, books with no neighbour scoring above the threshold (they never get recommended from or to),
-call numbers that can't be read, a shelf, section or floor that disagrees with shelves.csv, series gaps.
+call numbers that can't be read, a shelf, section or floor that disagrees with shelves.csv, series gaps,
+books without a downloaded cover (they get a placeholder; `python tools/import_books.py --covers-only`).
+FLOOR PLAN (data/floorplan.yaml) ERRORS: an unreadable or impossible plan, a shelf whose section is not a rectangle
+on its floor, a shelf whose map position is outside its section's rectangle.
 Then some statistics: how often each topic is used, books per section and floor.
 """
 
@@ -32,6 +35,8 @@ from robot.config import ROOT, load_config  # noqa: E402
 from robot.services.book_graph import BookGraph, SHELF_COLUMNS, LINK_COLUMNS, parse_links, parse_shelves  # noqa: E402
 from robot.services.books import COLUMNS, Book, Catalog, CatalogError, read_rows  # noqa: E402
 from robot.services.call_numbers import parse_call_number  # noqa: E402
+from robot.services.covers import cover_file  # noqa: E402
+from robot.services.floorplan import FloorPlan, FloorPlanError  # noqa: E402
 from robot.services.topics import TopicVocabulary, norm_key  # noqa: E402
 
 MIN_TOPICS = 2
@@ -69,7 +74,8 @@ def _read(report: Report, path, required, aliases=None):
 
 
 def check(catalog_path, topics_path=None, shelves_path=None, links_path=None, weights: Optional[dict] = None,
-          slots: int = DEFAULT_SLOTS, min_score: Optional[float] = None) -> Report:
+          slots: int = DEFAULT_SLOTS, min_score: Optional[float] = None, floorplan_path=None,
+          covers_dir=None) -> Report:
     """Check the files and return a Report. Never raises for a problem in the data."""
     report = Report()
     name = lambda p: Path(p).name
@@ -162,6 +168,18 @@ def check(catalog_path, topics_path=None, shelves_path=None, links_path=None, we
             report.warnings.append(f"{book.title}: no neighbour scores {threshold:g} or more (best {best:.2f}), "
                                    "so it is never recommended or used to recommend; check its topics")
 
+    # ---- the floor plan: every shelf's section is a rectangle on its floor, and the shelf stands inside it
+    if floorplan_path is not None:
+        check_floorplan(report, floorplan_path, shelves)
+
+    # ---- covers (warnings: the screen shows a placeholder)
+    if covers_dir is not None:
+        missing = [b for b in catalog.books if cover_file(covers_dir, b.isbn13) is None]
+        if missing:
+            titles = ", ".join(b.title for b in missing[:4]) + ("..." if len(missing) > 4 else "")
+            report.warnings.append(f"{len(missing)} book(s) have no cover in {short(covers_dir)} (a placeholder is "
+                                   f"shown): {titles}. Run: python tools/import_books.py --covers-only")
+
     # ---- statistics
     report.stats = {
         "books": len(catalog),
@@ -171,6 +189,35 @@ def check(catalog_path, topics_path=None, shelves_path=None, links_path=None, we
         "shelves": _count(b.shelf or "(none)" for b in catalog.books),
     }
     return report
+
+
+def check_floorplan(report: Report, path, shelves: dict) -> Optional[FloorPlan]:
+    """Errors for a plan that does not load, a shelf whose section is not on its floor, a shelf outside its section."""
+    if not Path(path).is_file():
+        report.warnings.append(f"{path}: floor plan not found, so the screen shows directions without a map")
+        return None
+    try:
+        plan = FloorPlan.load(path)
+    except FloorPlanError as exc:
+        report.errors.extend(f"{Path(path).name}: {problem}" for problem in exc.problems)
+        return None
+    report.summary.append(f"{short(path)} ({len(plan.floors)} floors)")
+    for shelf in shelves.values():
+        if not shelf.section:
+            continue
+        floor = plan.floor(shelf.floor) if shelf.floor is not None else None
+        section = floor.section(shelf.section) if floor is not None else None
+        if section is None:
+            where = plan.where_section(shelf.section)
+            report.errors.append(f"floor plan: shelf {shelf.id} is in section {shelf.section!r} on level {shelf.floor}, "
+                                 "but " + (f"the plan has that section on level {where[0].level}" if where else
+                                           "the plan has no such section") + "; add its rectangle to floorplan.yaml")
+            continue
+        if shelf.has_pose and not section.contains(shelf.map_x, shelf.map_y):
+            report.errors.append(f"floor plan: shelf {shelf.id} at ({shelf.map_x:g}, {shelf.map_y:g}) is outside its "
+                                 f"section {shelf.section!r} ({section.x:g}, {section.y:g}, {section.w:g} x "
+                                 f"{section.h:g} m) on level {shelf.floor}")
+    return plan
 
 
 def _count(items) -> dict:
@@ -228,13 +275,16 @@ def main(argv=None) -> int:
     p.add_argument("--topics", type=Path, default=cfg.path(books["topics_path"]))
     p.add_argument("--shelves", type=Path, default=cfg.path(books["shelves_path"]))
     p.add_argument("--links", type=Path, default=cfg.path(books["links_path"]))
+    p.add_argument("--floorplan", type=Path, default=cfg.path(books.get("floorplan_path") or "data/floorplan.yaml"))
+    p.add_argument("--covers", type=Path, default=cfg.path(books.get("covers_dir") or "data/covers"))
     p.add_argument("--slots", type=int, default=DEFAULT_SLOTS, help="storage ring slots (default %(default)s)")
     p.add_argument("--min-score", type=float, default=None,
                    help="a book with no neighbour above this is reported (default: books.similarity.min_score)")
     p.add_argument("--strict", action="store_true", help="warnings make the exit code 1 as well")
     args = p.parse_args(argv)
     weights = {**books["similarity"], **({"min_score": args.min_score} if args.min_score is not None else {})}
-    report = check(args.catalog, args.topics, args.shelves, args.links, weights, args.slots)
+    report = check(args.catalog, args.topics, args.shelves, args.links, weights, args.slots,
+                   floorplan_path=args.floorplan, covers_dir=args.covers)
     print(format_report(report))
     return 0 if report.ok and not (args.strict and report.warnings) else 1
 

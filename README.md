@@ -35,22 +35,23 @@ robot/             the robot program: python -m robot check | sim | run
   display_link.py  collects button taps and /operator commands from the display server
   config.py        loads config/*.yaml
   perception/      book_reader (the BookReader interface: camera scanner, RFID stub), book_scanner (barcode -> ISBN -> BookIdentified), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged; EngagementDetector -> PersonEngaged / PersonNearbyBusy / PersonLeft); noise level (stub)
-  core/            context, style, fsm (the generic state machine), dialogue (the table: IDLE / ENGAGED / RETURNING), storage (which book is in which slot), state_doc, expression blending, session log
+  core/            context, style, fsm (the generic state machine), dialogue (the table: IDLE / ENGAGED / RETURNING), screen (the screen composer: which view to show), storage (which book is in which slot), state_doc, expression blending, session log
   services/        AI server wrappers: llm (client + sentence splitter), speech, vision;
                    isbn (validation), books (catalogue, Open Library fallback), book_graph (the book knowledge graph:
-                   recommendations and shelf locations), topics, call_numbers, text_similarity
+                   recommendations and shelf locations), places (what place a visitor means), floorplan, covers,
+                   topics, call_numbers, text_similarity
   actuation/       voice, face display, lights, neck, storage ring, printer, navigation
   drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), fake (logs only)
   sim/             keyboard simulator
-display/           face display: server.py (SSE, /screen, /input, /operator) + ui/index.html (face, text, option buttons), ui/operator.html, start_display.sh (kiosk)
+display/           face display: server.py (SSE, /screen, /input, /operator, /covers) + ui/index.html (face) + ui/views.js (content views), ui/operator.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
 tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes;
                    book data tools: catalog_check, import_books, similarity_report, graph_view
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
 docs/              architecture notes, state_machine.md (generated), reference images
-data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv (SAMPLE book data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
-                   cache/, logs/, graph.html and catalog_draft.csv (generated, gitignored)
+data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv, floorplan.yaml (SAMPLE data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
+                   cache/, covers/, logs/, screens/, state/, graph.html and catalog_draft.csv (generated, gitignored)
 ```
 
 `vendor/ai_server/` holds the AI server team's files. Keep face.py, emotion.py, stt.py and tts.py unmodified so updates can be dropped in.
@@ -98,6 +99,8 @@ zone quiet | zone common     change the zone only (a style setting, not a state)
 engage | busy                a person engages / is near but busy (PersonEngaged / PersonNearbyBusy)
 dropped                      the pad dropped the book into its slot (BookDropped)
 pick return|ask|recommend|more|guide|done   press that screen button for the visitor
+pick book:<isbn> | similar:<isbn> | section:<name>   tap a book, a card button or a choice on the screen
+screen <view> [isbn | section]   show a screen view with sample data (face book_card book_list directions options status)
 reset | reset all            back to IDLE (`all` also empties the storage)
 wait <seconds> | wait idle   let the timers run, for scripted runs
 help, quit
@@ -152,7 +155,7 @@ The book data is **sample data** (a dozen well-known books, seven shelves, with 
 At startup the data files become a small knowledge graph (plain dicts and dataclasses, no extra packages; `robot/services/book_graph.py`): books, authors, topics (with the broader topics above them), call-number classes, shelves, sections and series, joined by typed edges. It holds books and the library's layout only, never visitors or people. It answers two questions:
 
 - **What else would they like?** Two books are compared on seven things, each with a short reason: shared topics weighted by rarity (IDF; general topics like "science" count for less), topics that meet under a broader one, the same author, the same series (the next book in a series comes first), how close the Dewey / Library of Congress call numbers are (same class and numerically near: `QB981` and `QB982` yes, `QB44.2` and `QB981` no), a librarian's curated link, and TF-IDF text similarity of the summaries. The weights are `books.similarity` in `config/robot.yaml`. The full reason list goes to the LLM and the log; what is *spoken* is one natural reason, the most specific one (series, author, curated link, most specific shared topic, shelf area), phrased like "because, like Cosmos, it's about astronomy": never a list of topics and never a call number. The LLM must name one of the candidates or its reply is discarded for the catalogue wording. In a quiet zone only the top pick is named; in a common area up to three (`recommendations` in `config/styles.yaml`).
-- **Where does it live?** The shelf's section, floor, zone and map pose. Returning a book says the storage slot and where it belongs; the robot then offers to guide the visitor, and "guide me" publishes a `NavigationRequested` event with the shelf's pose (the fake base just logs it). "Where is Dune?" works too.
+- **Where does it live?** The shelf's section, floor, zone and map pose. Returning a book says the storage slot only. After a recommendation, or "where is Dune?", the robot offers to guide the visitor, and "guide me" publishes a `NavigationRequested` event with the shelf's pose (the fake base just logs it). "Where is Dune?" works too.
 
 ```bash
 python tools/catalog_check.py                            # validate the data files: errors, warnings, statistics
@@ -188,7 +191,20 @@ display/start_display.sh          # server + Chromium kiosk on http://localhost:
 python -m display.server          # server only; open http://localhost:8765 (--port 9000 to change)
 ```
 
-The page also shows what the state machine sends it (`POST /screen`): a text area and, in a quiet zone, option buttons whose taps go to `POST /input`. Layouts are placeholders (`full_face` or `split`) to be designed. `GET /operator` is the operator page (see The state machine). `display.bind_host` (`0.0.0.0` in `config/robot.yaml`, `127.0.0.1` if unset) is the address the server listens on.
+The page also shows content next to the face: the **screen composer** (`robot/core/screen.py`) turns what the robot does into one of six views, drawn by `display/ui/views.js` (plain JS, no internet needed):
+
+| View | When | What it shows |
+|---|---|---|
+| `face` | idle, hello, goodbye, scanning | the face full screen (in a quiet zone with a caption of what was said) |
+| `book_card` | a book was scanned, explained, picked from a list, or is being stored | cover, title, author, a two-line summary, level / section / shelf, "Show me the way" and "Something similar" (a returned book shows its storage slot instead, with no buttons) |
+| `book_list` | a recommendation | up to three covers with one short reason each; tap one (or say "the second one") to open its card |
+| `directions` | "where is Dune", "take me to history", "where are the science books", "what's on level 2" | the floor plan with the section highlighted, "You are here", an approximate path, the distance; "Take the lift to Level N" for another floor; "Guide me" |
+| `options` | OFFER, AWAIT_BOOK, ANYTHING_ELSE (when nothing else is on show), and "did you mean A or B?" | the choices as big buttons, in every zone |
+| `status` | returning books | where it is going and how many books are left |
+
+The state machine gets no new states: one state can show different views (ANSWER shows a book card for "tell me about it" and directions for "where is it"). Content views keep small animated eyes in the top-left corner. While a visitor is being helped the map, the list or the card stays up (it is what the robot is talking about); it clears with the next content, a new question or the end of the visit. `screen.content_ttl_s` (quiet 30 s, common 15 s) only limits content shown outside a visit, such as a view forced from the operator page. In a common area the buttons carry a short heading ("How can I help?"), not the sentence being spoken; a quiet zone shows the text. A quiet zone gets larger text and longer content; a common area shorter summaries, because the speech carries it. Buttons POST their id to `/input` (`book:<isbn>`, `guide:<isbn>`, `similar:<isbn>`, `section:<name>`, `floor:<n>`), which becomes a `UserChoice`. Covers come from `data/covers/` (`python tools/import_books.py --covers-only`) with a generated placeholder for the rest; the map from `data/floorplan.yaml` (docs/catalog.md). Open `/?update=<ScreenUpdate JSON>` to draw one screen without the robot (that is how the screenshots in `data/screens/` are made).
+
+Nobody picks the view during a visit: it follows what the visitor asks and where the state machine is. The `screen` command and the view dropdown on `/operator` are only for testing a view: `screen book_card 9780345539434`, `screen directions History`, `screen face` in the simulator, or the view dropdown on `/operator`. `GET /operator` is the operator page (see The state machine). `display.bind_host` (`0.0.0.0` in `config/robot.yaml`, `127.0.0.1` if unset) is the address the server listens on.
 
 Type in the server's terminal: an emotion with optional hold seconds (`happy`, `sad 5`), `idle`, `talk [seconds]`, `list`, `quit`. Or over HTTP:
 

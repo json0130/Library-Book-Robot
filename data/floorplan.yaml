@@ -1,0 +1,43 @@
+# SAMPLE floor plan for development and testing (docs/catalog.md explains the format).
+# Coordinates are metres in the same map frame as data/shelves.csv (map_x, map_y), one frame per floor; x grows
+# to the right of the plan and y downwards. Every rectangle and landmark below is a PLACEHOLDER laid out around the
+# sample shelves until the real building is surveyed. The sample shelves are on levels 1, 2 and 3, so the plan has
+# three floors (every shelf's section must be a rectangle on its floor; tools/catalog_check.py checks that).
+
+floors:
+  - level: 1
+    name: Ground floor
+    width: 12
+    height: 8
+    sections:
+      - {name: Fiction, x: 0.5, y: 0.5, w: 4.0, h: 3.0}
+    landmarks:
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+      - {kind: help_desk, name: Help desk, x: 7.5, y: 6.0}
+      - {kind: entrance, name: Entrance, x: 6.0, y: 7.8}
+
+  - level: 2
+    name: Level 2
+    width: 12
+    height: 8
+    sections:
+      - {name: Science Fiction, x: 0.3, y: 1.0, w: 2.7, h: 6.0}
+    landmarks:
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+
+  - level: 3
+    name: Level 3
+    width: 12
+    height: 8
+    sections:
+      - {name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7}
+      - {name: History, x: 5.1, y: 0.3, w: 1.9, h: 2.7}
+      - {name: Computing, x: 7.1, y: 0.3, w: 1.9, h: 2.7}
+    landmarks:
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+
+station:                  # where the robot waits for visitors (its "you are here" when it is not driving)
+  level: 1
+  x: 9.0
+  y: 5.5
+  yaw: 3.14

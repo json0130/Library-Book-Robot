@@ -258,11 +258,11 @@ class BookFinder:
             book = self.online.lookup(code)
         return book
 
-    def recommend(self, isbn: str, n: int = 3) -> list:
+    def recommend(self, isbn: str, n: int = 3, min_score: Optional[float] = None) -> list:
         """book_graph.Recommendation objects (book, score, reasons) for an ISBN, best first; empty if the
-        book is not in the catalogue."""
+        book is not in the catalogue. min_score overrides books.similarity.min_score (lower = looser)."""
         book = self.catalog.lookup(isbn)
-        return self.graph.recommend(book.isbn13, n) if book else []
+        return self.graph.recommend(book.isbn13, n, min_score) if book else []
 
     def recommend_interest(self, text: str, n: int = 3) -> list:
         """Recommendations for what a visitor says they like (see BookGraph.recommend_for_interest)."""

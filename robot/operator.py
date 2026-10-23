@@ -13,6 +13,8 @@ the robot picks up through robot/display_link.py), so there is one implementatio
     book [isbn|none]      place a book on the pad (scanned by the camera or, in the sim, a fake one)
     say <text>            the visitor says this
     reset [all]           back to IDLE with nothing in progress; `all` also empties the storage
+    screen <view> [isbn | section]   force a screen view with sample data (face book_card book_list directions
+                          options status); `screen face` goes back to the face
 
 Events made here carry source="operator", which the session log shows with every state transition.
 """
@@ -27,7 +29,7 @@ from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged
                           UserChoice, UserUtterance)
 from robot.services.isbn import to_isbn13
 
-COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset")
+COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen")
 PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another")
 ZONES = ("quiet", "common")
 GROUP_SIZES = {"alone": 1, "group": 3}
@@ -124,10 +126,12 @@ class Operator:
         elif command == "dropped":
             await bus.publish(BookDropped(source="operator"))
         elif command == "pick":
-            if arg.lower() not in PICKS:
-                self.say("  usage: pick " + "|".join(PICKS))
+            content = arg.split(":", 1)[0].lower() in ("book", "where", "guide", "similar", "section", "floor")
+            if arg.lower() not in PICKS and not (content and ":" in arg):
+                self.say("  usage: pick " + "|".join(PICKS) + " | book:<isbn> | where:<isbn> | similar:<isbn> | "
+                         "guide:<isbn> | section:<name> | floor:<n>")
                 return False
-            await bus.publish(UserChoice(arg.lower(), source="operator"))
+            await bus.publish(UserChoice(arg if content else arg.lower(), source="operator"))
         elif command == "book":
             return await self.place_book(arg.split())
         elif command == "say":
@@ -135,6 +139,17 @@ class Operator:
                 self.say("  usage: say <text>")
                 return False
             await bus.publish(UserUtterance(arg, source="operator"))
+        elif command == "screen":
+            view, _, rest = arg.partition(" ")
+            if not view or self.app.screen is None:
+                self.say("  usage: screen face|book_card|book_list|directions|options|status [isbn | section]")
+                return False
+            try:
+                update = await self.app.screen.force(view, rest)
+            except ValueError as exc:
+                self.say(f"  {exc}")
+                return False
+            self.say(f"  screen: {update.view}")
         elif command == "reset":
             await d.reset(everything=arg.lower() == "all")
             self.say("  reset: IDLE" + (", storage emptied" if arg.lower() == "all" else ""))

@@ -264,7 +264,9 @@ class BookChoicesTest(unittest.TestCase):
     def test_recommend_edge_cases(self):
         app = self.offer(isbn=CLEAN_CODE)                       # shares no tags with anything
         run(app, UserUtterance("recommend"))
-        self.assertIn("couldn't find books like Clean Code", app.said[-2])
+        self.assertIn("I don't have anything quite like Clean Code yet. What kind of books do you like?", app.said[-2])
+        run(app, UserUtterance("space"))                                    # the answer is used as an interest
+        self.assertIn("If you're interested in space", " ".join(app.said))
         app = self.offer(event=BookIdentified(isbn="9780140449136", title="Online Only"))
         run(app, UserUtterance("recommend"))
         self.assertIn("only recommend from books in our catalogue", app.said[-2])
@@ -328,14 +330,23 @@ class BookChoicesTest(unittest.TestCase):
         said = " ".join(app.said)
         self.assertIn("storage slot 4", said)
         self.assertNotIn("It belongs", said)
-        self.assertEqual(app.dialogue.guide_target.location.describe(), "")
-        self.assertIn("Is there anything else", app.said[-1])                      # nothing to guide to, so no offer
+        self.assertIsNone(app.dialogue.guide_target)
+        self.assertIn("Is there anything else", app.said[-1])
 
-    def test_after_a_return_the_robot_offers_to_guide_and_yes_sends_it_to_the_shelf(self):
+    def test_after_a_return_the_robot_does_not_offer_to_guide_to_the_book_they_handed_in(self):
         app = self.offer(isbn=MARTIAN)
         events = self.navigation(app)
         run(app, UserUtterance("return"), BookDropped())
-        self.assertIn("Would you like me to guide you to The Martian", app.said[-1])
+        self.assertEqual(app.said[-1], "Is there anything else I can help with?")
+        self.assertNotIn("guide", " ".join(app.said[-2:]))
+        run(app, UserUtterance("yes please"))                                       # "yes" means more help, not a guide
+        self.assertEqual(events, [])
+        self.assertEqual(app.dialogue.state, "ENGAGED.OFFER")
+
+    def test_a_guide_to_a_shelf_still_works_when_they_ask_where_a_book_is(self):
+        app = self.offer(isbn=MARTIAN)
+        events = self.navigation(app)
+        run(app, UserUtterance("where is the martian"))
         run(app, UserUtterance("yes please"))
         self.assertIn("Okay, follow me to The Martian. It's on shelf 2-SF-C, in the Science Fiction section on level 2.",
                       app.said[-1])
@@ -551,7 +562,7 @@ class BookChoicesTest(unittest.TestCase):
 
     def test_a_new_scan_or_everyone_leaving_forgets_the_target(self):
         app = self.offer(isbn=MARTIAN)
-        run(app, UserUtterance("return"), BookDropped())
+        run(app, UserUtterance("where is dune"))
         self.assertIsNotNone(app.dialogue.guide_target)
         run(app, BookPlaced(), scanned(HITCH))
         self.assertIsNone(app.dialogue.guide_target)

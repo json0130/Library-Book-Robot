@@ -171,15 +171,95 @@ class StateTransition:
 
 
 @dataclass
+class StateEntered:
+    """The state machine arrived in a state: what it said there (`text`) and the choices it offers (`options`, each
+    {"id", "label"}). The screen composer (core/screen.py) decides what the screen shows; the machine does not."""
+    state_path: str
+    zone: str = "common"
+    title: str = ""
+    text: str = ""
+    options: tuple = ()                   # touch buttons the style offers (quiet zones)
+    choices: tuple = ()                   # the choices in this state, whatever the zone (for the options view)
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
 class ScreenUpdate:
-    """What the touch screen should show for the state just entered (placeholder layouts for now): the state path,
-    the zone, a layout name, a title, some text and the option buttons (each {"id", "label"}) when there are any."""
+    """What the screen shows now, from the screen composer. `view` is face | book_card | book_list | directions |
+    options | status and `payload` its content (a dict from one of the payload dataclasses in core/screen.py).
+    `layout` is full_face (the face fills the screen) or split (content, with small eyes in a corner). `ttl_s`: how
+    long the content stays without an interaction before the face comes back (None for the face). title, text and
+    options are what the state machine said and offered, kept for the operator page and the log."""
     state_path: str
     zone: str = "common"
     layout: str = "full_face"
     title: str = ""
     text: str = ""
     options: tuple = ()
+    view: str = "face"
+    payload: dict = field(default_factory=dict)
+    ttl_s: Optional[float] = None
+    timestamp: float = field(default_factory=_now)
+
+
+# ---- content for the screen (published by the dialogue, turned into views by core/screen.py) ----
+@dataclass
+class BookFocused:
+    """The conversation is about this catalogue book now (explained, chosen from a list, named)."""
+    isbn: str
+    reason: str = ""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class RecommendationsReady:
+    """Recommendations were given: picks are ({"isbn", "because"}, ...) in order, from a book or an interest."""
+    picks: tuple
+    source_isbn: str = ""
+    interest: str = ""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class LocationResolved:
+    """A place was found for the visitor: kind is book | section | floor. take_me: they asked to be taken there."""
+    kind: str
+    title: str = ""
+    isbn: str = ""
+    section: Optional[str] = None
+    floor: Optional[int] = None
+    shelf: Optional[str] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    take_me: bool = False
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class ChoicesOffered:
+    """The visitor's words matched several things: they are asked to pick one. choices: ({"id", "label"}, ...)."""
+    prompt: str
+    choices: tuple
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class StoringBook:
+    """A returned book is going into this storage slot."""
+    isbn: str
+    title: str
+    slot: int
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class ReturningProgress:
+    """Putting books back: phase is driving | unloading | announcing | homing; books_left are still in storage."""
+    phase: str
+    books_left: int
+    section: Optional[str] = None
+    shelf: Optional[str] = None
+    floor: Optional[int] = None
     timestamp: float = field(default_factory=_now)
 
 
