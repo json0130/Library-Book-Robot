@@ -1,0 +1,29 @@
+name: returning_interrupted
+description: The robot is putting two stored books back when someone walks by (an announcement, no conversation), then someone engages (the trip pauses), asks something and finishes (it resumes at the same shelf). Sometimes the person just leaves mid-session.
+zones: [quiet, common]
+setup: {stored: 2}
+steps:
+  - start_returning
+  - wait: {until_state: NAVIGATING, timeout: 20}
+  - wait: 1
+  - busy
+  - wait: {until_state: NAVIGATING, timeout: 30}
+  - engage
+  - one_of:
+      - name: finishes
+        steps:
+          - say: ["where is the history section?", "what's on level 2?"]
+          - say: ["that's all, thanks", "I'm done"]
+      - name: leaves_mid_session
+        steps:
+          - say: ["where is the history section?", "what's on level 2?"]
+          - leave
+          - wait: {until_state: FAREWELL, timeout: 150}
+  - wait: {until_state: IDLE, timeout: 200}
+expect:
+  - {state_path: [RETURNING.NAVIGATING, RETURNING.ANNOUNCE, RETURNING.NAVIGATING, ENGAGED.GREET, ENGAGED.FAREWELL, RETURNING.NAVIGATING, IDLE]}
+  - {chime: true, zones: [common]}
+  - {chime: false, zones: [quiet]}
+  - {resume_same_shelf: true}
+  - {silent_farewell: true, zones: [quiet], when: leaves_mid_session}
+  - {silent_farewell: false, zones: [common], when: leaves_mid_session}

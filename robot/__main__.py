@@ -2,6 +2,7 @@
 
     python -m robot check     is the AI server reachable? (config/robot.yaml, AI_HOST/AI_PORT)
     python -m robot sim       keyboard simulator with fake hardware, no AI server needed
+    python -m robot scenarios scripted user scenarios run many times, with a report (docs/testing.md)
     python -m robot states    the state machine: --mermaid prints the diagram, --write regenerates docs/state_machine.md
     python -m robot run       the real robot (exits naming any driver that is not implemented yet)
 """
@@ -50,9 +51,14 @@ def main(argv=None) -> int:
     states.add_argument("--mermaid", action="store_true", help="print the Mermaid diagram")
     states.add_argument("--markdown", action="store_true", help="print the whole generated document")
     states.add_argument("--write", action="store_true", help="write docs/state_machine.md")
+    scen = sub.add_parser("scenarios", help="scenario tests: list, run, report, replay, compare, live", add_help=False)
+    scen.add_argument("rest", nargs=argparse.REMAINDER)
     sub.add_parser("run", help="run on the real hardware")
     args = p.parse_args(argv)
 
+    if args.command == "scenarios":
+        from robot.scenarios.cli import main as scenarios_main
+        return scenarios_main(args.rest)
     if args.command == "states":
         from robot.core.dialogue import SPEC
         from robot.core.state_doc import render_markdown, write_doc

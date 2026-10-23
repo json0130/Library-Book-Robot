@@ -174,7 +174,7 @@ class App:
                           for b in d.storage.stored()], "style": self.style.summary(),
                 "states": list(d.fsm.spec.leaves()), "tree": d.state_tree(), "leaf": d.leaf,
                 "next": d.next_actions(), "view": self.screen.current.view if self.screen and self.screen.current else "face",
-                "views": list(VIEWS)}
+                "views": list(VIEWS), "guide": getattr(self, "guide_card", None)}
 
     def show_state(self) -> bool:
         return self.actuators.face.show_state(self.state_info())

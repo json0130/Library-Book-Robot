@@ -94,6 +94,10 @@ class Operator:
     async def run(self, command: str, arg: str = "") -> bool:
         """Run one operator command; returns False if it was not one or the argument was bad (the reason is said)."""
         command, arg = command.lower(), arg.strip()
+        extra = getattr(self.app, "operator_extra", None)        # commands added by the guided scenario test (next, abort)
+        if extra and command in extra:
+            await extra[command](arg)
+            return True
         bus, d = self.app.bus, self.app.dialogue
         if command == "state":
             self.say("  " + self.describe())

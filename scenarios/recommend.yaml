@@ -1,0 +1,27 @@
+name: recommend
+description: A visitor gets a recommendation, with a book on the pad or just by saying what they like, picks one from the list and is shown the way.
+zones: [quiet, common]
+steps:
+  - engage
+  - one_of:
+      - name: with_book
+        steps:
+          - place_book: random
+          - say: ["recommend something similar", "can you recommend similar books?", "any books like this one?"]
+      - name: by_interest
+        steps:
+          - say: ["something about space", "a good sci-fi book", "can you recommend something about history?"]
+  - tap: {item: random}
+  - one_of:
+      - name: way_by_tap
+        steps:
+          - tap: "Show me the way"
+      - name: way_by_voice
+        steps:
+          - say: ["show me the way", "guide me there"]
+  - say: ["that's all, thanks", "I'm done"]
+  - wait: {until_state: IDLE, timeout: 60}
+expect:
+  - {views: [book_list, book_card, directions]}
+  - {book_list_valid: true}
+  - {events: [NavigationRequested]}

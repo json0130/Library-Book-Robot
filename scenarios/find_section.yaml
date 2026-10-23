@@ -1,0 +1,16 @@
+name: find_section
+description: A visitor asks where a section is, what is on a floor, an ambiguous thing ("history"), and a section on another floor.
+zones: [quiet, common]
+steps:
+  - engage
+  - say: ["where are the science books", "where is the science section?"]
+  - say: ["what's on level 2", "what is on level 2?", "what's on the second floor?"]
+  - say: ["where is the brief history", "history"]
+  - tap: "section"
+  - say: ["where are the computing books", "take me to the computing section"]
+  - say: ["that's all, thanks", "I'm done"]
+  - wait: {until_state: IDLE, timeout: 60}
+expect:
+  - {views: [directions, options]}
+  - {view_field: {view: directions, field: steps, matches: "lift"}, note: another floor starts with the lift}
+  - {view_field: {view: directions, field: title, matches: "Level 2"}}

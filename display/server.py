@@ -52,7 +52,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
 INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another")
 CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|section:[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
 OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset",
-                     "screen")
+                     "screen", "next", "abort")
 INBOX_KEEP = 200
 REPLAYED = ("screen", "state")          # what a page that connects late is shown straight away
 

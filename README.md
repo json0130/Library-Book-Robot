@@ -42,6 +42,7 @@ robot/             the robot program: python -m robot check | sim | run
                    topics, call_numbers, text_similarity
   actuation/       voice, face display, lights, neck, storage ring, printer, navigation
   drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), fake (logs only)
+  scenarios/       the scenario test harness (python -m robot scenarios ...; scenarios/*.yaml are the scenarios)
   sim/             keyboard simulator
 display/           face display: server.py (SSE, /screen, /input, /operator, /covers) + ui/index.html (face) + ui/views.js (content views), ui/operator.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
@@ -49,7 +50,7 @@ tools/             test tools: chat_test, camera_test, face_enroll, identity_tes
                    book data tools: catalog_check, import_books, similarity_report, graph_view
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
-docs/              architecture notes, state_machine.md (generated), reference images
+docs/              architecture notes, state_machine.md (generated), testing.md (scenario tests), reference images
 data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv, floorplan.yaml (SAMPLE data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
                    cache/, covers/, logs/, screens/, state/, graph.html and catalog_draft.csv (generated, gitignored)
 ```
@@ -116,6 +117,15 @@ After each command it prints the context, the style and the dialogue state, ever
 printf 'quiet alone\nbook\ncommon group\nquit\n' | python -m robot sim
 printf 'zone common\nengage\npick return\nbook\ndropped\ndone\n' | python -m robot sim   # a return, then the automatic trip to the shelf
 ```
+
+### Scenario tests
+
+`python -m robot scenarios run --scenario all --runs 10 --llm mock --speed 10` plays scripted visitor scenarios
+(`scenarios/*.yaml`: return a book, ask about a book, get a recommendation, find a section, an interrupted returning trip)
+against the real robot core in both zones, records every state, sentence, screen and command, checks them automatically and
+writes `data/eval_runs/<timestamp>/summary.md`, `review.csv` (rate runs 1-5 by hand) and one transcript per run. `replay`,
+`compare` and a guided `live` mode for a human tester are in the same command. How to write a scenario, run, replay, review
+and compare: [docs/testing.md](docs/testing.md). The harness only observes the robot; it never changes its behaviour.
 
 ### The state machine
 

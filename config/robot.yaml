@@ -7,6 +7,15 @@ ai_server:
   llm_timeout_s: 20       # book explanations/recommendations: if the LLM is slower, use the catalogue text
   tts_port: 8791          # text-to-speech (IndexTTS) is on its own port; the older orchestrator on `port` (Kokoro) fails. null = use `port`
 
+scenarios:                # the scenario test harness: python -m robot scenarios ... (docs/testing.md)
+  typo_probability: 0.2   # chance that a `say` step gets realistic typos
+  think_s: 0.8            # robot-seconds the pretend visitor waits after the robot has finished, before the next step
+  run_timeout_s: 240      # real seconds before a run is stopped and marked as stuck
+  latency: {first_screen_ms: 500, first_sentence_ms: 3000}   # thresholds for the latency checks (real time)
+  robot_overrides:        # robot settings used in the runs (above: auto-return and the timeouts are off for manual tests)
+    returning: {auto_start: true}
+    timeouts: {enabled: true}
+
 screen:                   # what the robot's screen shows next to its face (robot/core/screen.py)
   content_ttl_s: {quiet: 30, common: 15}    # a book card, list or map stays this long after the last interaction, then
                                             # the face comes back (a quiet zone reads; a common area mostly listens)

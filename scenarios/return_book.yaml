@@ -1,0 +1,31 @@
+name: return_book
+description: A visitor returns a book (saying so before or after placing it; sometimes an ISBN not in the catalogue), confirms the drop, says they are done, and the robot starts putting books back by itself.
+zones: [quiet, common]
+steps:
+  - engage
+  - one_of:
+      - name: say_first
+        steps:
+          - say: ["I'd like to return a book", "can I return a book?", "I want to return this book"]
+          - place_book: random
+      - name: place_first
+        steps:
+          - place_book: random
+          - say: ["return it", "I'd like to return it", "I want to return this one"]
+      - name: say_first_unknown_isbn
+        steps:
+          - say: ["I'd like to return a book", "can I return a book?"]
+          - place_book: unknown
+      - name: place_first_unknown_isbn
+        steps:
+          - place_book: unknown
+          - say: ["return it", "I want to return this one"]
+  - dropped
+  - say: ["that's all, thanks", "no thanks, that's everything", "I'm done", "nothing else"]
+  - wait: {until_state: IDLE, timeout: 150}
+expect:
+  - {state_path: [ENGAGED.SCAN, ENGAGED.STORE, ENGAGED.FAREWELL]}
+  - {state_path: [ENGAGED.FAREWELL, RETURNING.NAVIGATING, IDLE], unless: unknown_book}
+  - {forbid_phrases: ["guide you", "follow me"], note: no guide offer after a return}
+  - {view_field: {view: book_card, field: badge, matches: slot}, unless: unknown_book, note: the stored slot is shown on the screen}
+  - {events: [NavigationRequested], unless: unknown_book}

@@ -79,6 +79,15 @@ SCREEN_DEFAULTS = {
     "summary_chars": {"quiet": 180, "common": 110},  # how much of a summary a book card shows
 }
 
+SCENARIO_DEFAULTS = {               # the scenario test harness (robot/scenarios): it only observes, it does not change behaviour
+    "typo_probability": 0.2,        # chance that a `say` step gets realistic typos
+    "think_s": 0.8,                 # robot-seconds the pretend visitor waits after the robot has finished, before the next step
+    "run_timeout_s": 240,           # real seconds before one run is stopped and marked as stuck
+    "latency": {"first_screen_ms": 500, "first_sentence_ms": 3000},
+    "robot_overrides": {            # applied to the robot's settings for the runs (config/robot.yaml has them off for manual tests)
+        "returning": {"auto_start": True}, "timeouts": {"enabled": True}},
+}
+
 DISPLAY_DEFAULTS = {
     "host": "127.0.0.1",            # where the robot reaches the display server
     "port": 8765,
@@ -125,6 +134,10 @@ class Config:
     @property
     def engagement(self) -> dict:
         return self.section("engagement", ENGAGEMENT_DEFAULTS)
+
+    @property
+    def scenarios(self) -> dict:
+        return self.section("scenarios", SCENARIO_DEFAULTS)
 
     @property
     def screen(self) -> dict:

@@ -89,6 +89,11 @@
   </div>
 
   <div class="col">
+    <section id="guide" hidden>
+      <h2>Test step <span id="guideno"></span></h2>
+      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
+      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
+    </section>
     <section>
       <h2>Zone (a style setting, not a state)</h2>
       <div class="row"><button id="zone-quiet" data-zone="quiet">Quiet</button><button id="zone-common" data-zone="common">Common</button></div>
@@ -214,6 +219,9 @@ function showState(s) {
   }
   showBooks(s);
   showMap(s);
+  const g = s.guide;                                    // a guided scenario test (python -m robot scenarios live)
+  $("guide").hidden = !g;
+  if (g) { $("guideno").textContent = `${g.n} of ${g.total} (${g.scenario})`; $("guidetext").textContent = g.text; }
   if (s.state && s.state !== lastPath) { note(`${lastPath || "(start)"} → ${s.state}`); lastPath = s.state; }
 }
 function showScreen(u) {
@@ -223,6 +231,8 @@ function showScreen(u) {
 }
 document.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => send("zone", b.dataset.zone));
 $("goto").onclick = () => send("goto", $("states").value);
+$("guidenext").onclick = () => send("next");
+$("guideabort").onclick = () => send("abort");
 $("reset").onclick = () => send("reset");
 $("resetall").onclick = () => send("reset", "all");
 $("viewform").onsubmit = e => { e.preventDefault(); send("screen", `${$("views").value} ${$("viewarg").value.trim()}`.trim()); };

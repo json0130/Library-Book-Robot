@@ -164,6 +164,9 @@ class Sim:
         bus = self.app.bus
         if cmd in ("quit", "exit"):
             return False
+        if cmd in ("next", "abort") and getattr(self, "guide", None) is not None:
+            await self.guide.command(cmd)                    # the guided scenario test: only the tester presses these
+            return True
         if cmd in ("help", "?"):
             self.say("\n\n".join(__doc__.split("\n\n")[1:3]))
             return True
@@ -273,7 +276,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                   log_sessions: bool = True, use_llm: bool = False, use_camera: bool = False,
                   speak: bool = False, use_faces: bool = False, preview: bool = False,
                   auto_scan: bool = False, settle_s: float = SETTLE_S, persist_storage: bool = True,
-                  local_faces: bool = False) -> int:
+                  local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
     for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan")):
         if wanted and not use_camera:
@@ -295,7 +298,10 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         app = build_app(cfg, drivers, speech=speech, log_sessions=log_sessions, assistant=assistant,
                         persist_storage=persist_storage)
         sim = Sim(app, out)
+        sim.guide = None                                     # the guided scenario test (robot/scenarios/live.py), if any
         sim.say("Robot simulator. Type help for commands, quit to exit.")
+        if initial_zone:
+            await sim.op.set_zone(initial_zone)
         sim.say(f"  camera: {'real webcam' if use_camera else 'fake'} | speaker: "
                 f"{'real (' + speaker + '), TTS from ' + cfg.ai_host if speak else 'none, replies are only printed'}"
                 f" | explain/recommend: {'LLM at ' + cfg.ai_host if use_llm else 'catalogue text'}"
@@ -361,6 +367,10 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                 window.start()
             else:
                 sim.say("  no display found: not showing the camera window")
+        guide_task = None
+        if scenario_guide is not None:
+            sim.guide = scenario_guide(app, sim, drivers)
+            guide_task = asyncio.create_task(sim.guide.run())
         loop = asyncio.get_running_loop()
         while True:
             if stdin.isatty():
@@ -372,11 +382,13 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                 sim.say(f"> {line.rstrip()}")
             if not await sim.handle(line):
                 break
+        if guide_task is not None and not stdin.isatty():
+            await asyncio.wait_for(sim.guide.done.wait(), 5)
         if not stdin.isatty() and settle_s > 0:
             await sim.settle(settle_s)
         return 0
     finally:
-        for task in (counter_task, watch_task, ticker, link_task, feed_task):
+        for task in (counter_task, watch_task, ticker, link_task, feed_task, locals().get("guide_task")):
             if task is not None:
                 task.cancel()
         if window is not None:
