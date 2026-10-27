@@ -156,12 +156,48 @@ const Views = (() => {
     return root;
   }
 
-  // ---- options: the current choices as big buttons
+  // ---- options: the main choices as cards (icon, name, one line of help), the rest as quiet buttons
+  const CARDS = {
+    return:    { hint: "Hand in a book to be shelved",
+                 icon: ["M12 3v11", "M8 10l4 4 4-4", "M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"] },
+    ask:       { hint: "Find out about a book or where it is", icon: ["M20 20l-4.2-4.2", "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z"] },
+    recommend: { hint: "Get suggestions you will enjoy", icon: ["M12 3l2.8 5.9 6.2.8-4.6 4.3 1.2 6.4L12 17.3 6.4 20.4l1.2-6.4L3 9.7l6.2-.8z"] },
+  };
+  function icon(paths) {
+    const s = svg("svg", { viewBox: "0 0 24 24", class: "card-icon", fill: "none", stroke: "currentColor", "stroke-width": "1.7",
+                           "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
+    paths.forEach(d => s.append(svg("path", { d })));
+    return s;
+  }
   function options(p, send) {
     const root = el("div", "view-options");
-    if (p.prompt) root.append(el("h1", "heading clamp2", p.prompt));
-    const grid = el("div", "option-grid" + ((p.options || []).length > 4 ? " many" : ""));
-    (p.options || []).forEach(o => grid.append(button(o, send, false)));
+    const all = p.options || [];
+    const cards = all.filter(o => CARDS[o.id]);
+    const rest = all.filter(o => !CARDS[o.id]);
+    if (p.prompt || cards.length) {
+      const head = el("div", "opt-head");
+      if (cards.length) head.append(el("div", "eyebrow", "Stuart \u00b7 Library Book Robot"));
+      if (p.prompt) head.append(el("h1", "heading clamp2", p.prompt));
+      root.append(head);
+    }
+    if (cards.length) {
+      const row = el("div", "opt-cards n" + cards.length);
+      cards.forEach(o => {
+        const c = el("button", "opt-card");
+        c.append(icon(CARDS[o.id].icon), el("span", "card-name", o.label), el("span", "card-hint", CARDS[o.id].hint));
+        c.addEventListener("click", () => send(o.id));
+        row.append(c);
+      });
+      root.append(row);
+      if (rest.length) {
+        const extra = el("div", "opt-extra");
+        rest.forEach(o => extra.append(button(o, send, false)));
+        root.append(extra);
+      }
+      return root;
+    }
+    const grid = el("div", "option-grid" + (all.length > 4 ? " many" : ""));
+    all.forEach(o => grid.append(button(o, send, false)));
     root.append(grid);
     return root;
   }

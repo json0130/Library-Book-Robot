@@ -13,7 +13,7 @@ steps:
       - name: finishes
         steps:
           - say: ["where is the history section?", "what's on level 2?"]
-          - say: ["that's all, thanks", "I'm done"]
+          - say: ["that's all, thanks", "I'm done", "that's all thanks"]
       - name: leaves_mid_session
         steps:
           - say: ["where is the history section?", "what's on level 2?"]

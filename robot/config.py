@@ -77,15 +77,29 @@ SCREEN_DEFAULTS = {
     "content_ttl_s": {"quiet": 30, "common": 15},   # a content view goes back to the face this long after the last
                                                     # interaction (quiet zones read, common areas listen)
     "summary_chars": {"quiet": 180, "common": 110},  # how much of a summary a book card shows
+    "greeting_hold_s": 2.5,         # the hello stays on the full face at least this long (spoken or not) before the options appear
+}
+
+INTENT_DEFAULTS = {                 # the intent router (core/intents.py) and what the robot does when it does not understand
+    "word_similarity": 0.8,         # how alike two words must be to count as the same (typos, speech errors)
+    "short_word_similarity": 0.85,  # ...stricter for words of up to four letters (one or two letters must be exact)
+    "min_confidence": 0.7,          # below this a match is not acted on: the LLM is asked instead
+    "ambiguity_margin": 0.15,       # two places closer than this: ask which one
+    "repair_after": 2,              # this many utterances in a row not understood in a state: show the choices as buttons
+    "thinking_ack_s": 1.5,          # common zone only: a short spoken "Let me check." if no sentence has arrived after this
 }
 
 SCENARIO_DEFAULTS = {               # the scenario test harness (robot/scenarios): it only observes, it does not change behaviour
-    "typo_probability": 0.2,        # chance that a `say` step gets realistic typos
+    "typo_probability": 0.05,       # chance that a `say` step gets realistic typos
+    "speech_probability": 0.3,      # chance that a `say` step gets speech-recognition style changes (config/speech_errors.yaml)
     "think_s": 0.8,                 # robot-seconds the pretend visitor waits after the robot has finished, before the next step
     "run_timeout_s": 240,           # real seconds before one run is stopped and marked as stuck
-    "latency": {"first_screen_ms": 500, "first_sentence_ms": 3000},
+    "latency": {"first_feedback_ms": 500,        # a screen update or the thinking indication
+                "first_sentence_ms": 1000,       # the first content sentence of a deterministic / catalogue answer
+                "first_sentence_llm_ms": 6000},  # ...of an answer that waited for the LLM
     "robot_overrides": {            # applied to the robot's settings for the runs (config/robot.yaml has them off for manual tests)
-        "returning": {"auto_start": True}, "timeouts": {"enabled": True}},
+        "returning": {"auto_start": True}, "timeouts": {"enabled": True},
+        "screen": {"greeting_hold_s": 0}},
 }
 
 DISPLAY_DEFAULTS = {
@@ -134,6 +148,10 @@ class Config:
     @property
     def engagement(self) -> dict:
         return self.section("engagement", ENGAGEMENT_DEFAULTS)
+
+    @property
+    def intents(self) -> dict:
+        return self.section("intents", INTENT_DEFAULTS)
 
     @property
     def scenarios(self) -> dict:

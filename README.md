@@ -127,6 +127,15 @@ writes `data/eval_runs/<timestamp>/summary.md`, `review.csv` (rate runs 1-5 by h
 `compare` and a guided `live` mode for a human tester are in the same command. How to write a scenario, run, replay, review
 and compare: [docs/testing.md](docs/testing.md). The harness only observes the robot; it never changes its behaviour.
 
+### Understanding what the visitor says
+
+Before the LLM sees a sentence, an intent router (`robot/core/intents.py`) tries to understand it with fuzzy matching on
+the catalogue, the floorplan and the topics: "the computing section", "a good sci-fi book", "wear is the science
+section" and "I'm done" are all handled without the LLM. Close calls ("history") are shown as a question. After two
+misses in a row the robot shows buttons (with "I'm done") instead of asking again, it shows it is thinking within a third
+of a second, and in a common area says "Let me check." if the LLM is slow. Details in
+[docs/architecture.md](docs/architecture.md#understanding-and-feedback).
+
 ### The state machine
 
 The robot's behaviour is a hierarchical, table-driven state machine (`robot/core/fsm.py` is the generic machine, `robot/core/dialogue.py` the table). The diagram and every transition are in [docs/state_machine.md](docs/state_machine.md), generated from the table (`python -m robot states --write`; a test fails if it is out of date).

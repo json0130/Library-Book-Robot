@@ -180,6 +180,7 @@ class StateEntered:
     text: str = ""
     options: tuple = ()                   # touch buttons the style offers (quiet zones)
     choices: tuple = ()                   # the choices in this state, whatever the zone (for the options view)
+    repair: bool = False                  # the robot did not understand twice: show the choices, always with "I'm done"
     timestamp: float = field(default_factory=_now)
 
 
@@ -199,6 +200,20 @@ class ScreenUpdate:
     view: str = "face"
     payload: dict = field(default_factory=dict)
     ttl_s: Optional[float] = None
+    thinking: bool = False                # the robot is waiting for the LLM: the page shows a progress indicator
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class ThinkingStarted:
+    """An utterance went to the LLM: the face looks like it is thinking and the screen shows a progress indicator."""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class ThinkingEnded:
+    """The LLM answered (or failed): `ms` is how long the robot waited."""
+    ms: int = 0
     timestamp: float = field(default_factory=_now)
 
 

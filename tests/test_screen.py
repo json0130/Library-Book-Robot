@@ -468,10 +468,9 @@ class DialogueViewsTest(unittest.TestCase):
 
     def test_ambiguous_words_ask_which_and_a_tap_or_an_ordinal_answers(self):
         app = self.app("quiet")
-        run(app, UserUtterance("where is the brief history"))       # the where-flow finds the book first
+        run(app, UserUtterance("where is the brief history"))       # naming more of the title than the section: the book
         self.assertEqual(app.shown[-1].payload.get("title"), "A Brief History of Time")
-        app.dialogue.find_book = lambda q: None                      # force the resolver's ambiguous answer
-        run(app, UserUtterance("where is the brief history"))
+        run(app, UserUtterance("history"))                           # the section and the book fit equally well: ask
         self.assertEqual(app.shown[-1].view, "options")
         self.assertIn("Did you mean", app.said[-1])
         ids = [o["id"] for o in app.shown[-1].payload["options"]]

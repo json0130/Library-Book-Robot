@@ -73,6 +73,43 @@ RETURNING: PLAN → NAVIGATING → AT_SHELF → (next shelf | HOMING) → IDLE; 
 - **Config** (`config/robot.yaml`): `timeouts` (offer_s, await_book_s, scan_s, store_s, answer_s, anything_else_s, farewell_s), `returning` (auto_start, auto_start_delay_s, sim_drive_s, sim_unload_s, announce_s, home pose), `storage` (slots, path, sim_drop_s: the simulated `BookDropped` after the slot lights, 0 to wait for the operator or the real pad), `engagement` (min_face_px, dwell_s, left_after_s), `display` (host, port, bind_host, poll_s), `books.reader`.
 - **Real hardware.** The ESP32 commands the machine uses (`stop`, `slot_light`, `pad_vibrate`, `light_pattern`) are in `firmware/esp32/README.md`. Driving to a shelf is `NavigationRequested` → `Navigation.go_to_pose`; the simulated drive and unload are timers (`returning.sim_drive_s`, `sim_unload_s`) until a real base reports arrival.
 
+## Understanding and feedback
+
+What a visitor says goes to `Dialogue.handle_text` (`core/dialogue.py`):
+
+1. **The intent router** (`core/intents.py`) runs first, with no LLM. It lower-cases, strips punctuation, expands
+   contractions, then matches words fuzzily (stdlib `difflib` plus an edit distance where a swapped pair of letters costs
+   half; `intents.word_similarity` and a stricter `short_word_similarity` for words up to four letters, and a list of pairs
+   that must never match, so "anything else" is not "nothing else" and "dun" is not "Dune"). Its vocabulary is the
+   catalogue titles, the floorplan's sections and floors, the topics (`config/topics.yaml` aliases) and a small phrase list
+   per intent. Intents: done, yes/no, return, explain, recommend (with or without an interest: "a good sci-fi book",
+   "something about space"), where/guide, a section, topic or floor, a book title. It returns ranked candidates with
+   confidences. One clear winner above `intents.min_confidence` is acted on directly; two close places ("history": the
+   History section or "A Brief History of Time") become a question, shown as an options view; nothing confident goes to
+   the LLM. The older regex rules (`classify`) still run after the router.
+2. **Repair.** After `intents.repair_after` (2) utterances in a row that were not acted on in one state, the robot stops
+   asking again: it shows the current choices as buttons, always with "I'm done", and in a common area also says them in
+   a short sentence. A question it cannot answer ("how tall is the Eiffel tower?") is answered honestly ("I'm not sure")
+   and does not count as a failure.
+3. **Thinking feedback.** Whenever an utterance goes to the LLM, `Dialogue.thinking()` publishes `ThinkingStarted`
+   at once: the face shows a thinking expression and the screen adds a subtle progress bar (both zones). In the common
+   zone, if no sentence has been said after `intents.thinking_ack_s` (1.5 s) the robot says "Let me check." once per
+   answer. `ThinkingEnded` carries how long it waited.
+4. **Screen before speech.** `Dialogue.say` puts the text on the screen before it starts speaking, for replies that stay
+   in a state (the drop confirmation, small talk) as well as for state changes.
+5. **The hello is seen before the options.** The greeting stays on the full face (with its caption) at least
+   `screen.greeting_hold_s` (2.5 s) whether it was spoken, failed or the style is silent; only then do the "How can I
+   help?" cards replace it. The options view shows the main choices as cards (icon, name, one line of help) and the
+   rest ("Done", "Back") as quiet buttons. `python -m robot sim --speak` also checks the text-to-speech server at start-up
+   and warns when it cannot be reached, because then nothing is said.
+6. **Timeouts wait** while the robot speaks or waits for the LLM (`fsm.suspend_timeouts()` / `resume_timeouts()`), and
+   start again, in full, when it has finished.
+7. **The AI server does not stream.** The LLM protocol (`vendor/ai_server/llm.py`) sends the whole reply as one message after
+   the model has finished, so the time to the first byte and the total time are close; `services/llm.timed_ask()` measures
+   both (logged as `[llm] first byte after ... ms, total ... ms`, and recorded by the scenario harness). Nothing in the
+   robot pretends to stream: the first sentence is spoken when the reply arrives. Streaming would need a protocol change
+   on the AI server.
+
 ## The screen composer and views
 
 ```

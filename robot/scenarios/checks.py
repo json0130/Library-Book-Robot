@@ -15,6 +15,7 @@ USER_ACTIONS = ("engage", "busy", "leave", "dropped", "place_book", "say", "tap"
 SORRY = re.compile(r"sorry|not sure how to answer|can't answer|cannot answer|i couldn't find", re.I)
 NOT_SURE = re.compile(r"not sure|don't know|do not know|can't|cannot|couldn't|don't have|no information|isn't listed|"
                       r"not (?:in|listed)|sorry", re.I)
+DEFAULT_LIMITS = {"first_feedback_ms": 500, "first_sentence_ms": 1000, "first_sentence_llm_ms": 6000}
 INVENTED_PAGES = re.compile(r"\b\d{2,4}\s*(?:pages|p\b)", re.I)
 
 
@@ -118,28 +119,47 @@ def screen_before_speech(run: dict) -> CheckResult:
     return ok("screen_before_speech")
 
 
+FILLERS = ("let me check.",)                       # the spoken "still working" filler: feedback, not the answer
+
+
+def is_content(entry: dict) -> bool:
+    return entry["kind"] == "said" and entry.get("text", "").strip().lower() not in FILLERS
+
+
 def latency(run: dict) -> list:
+    """Two checks, in real milliseconds after what the visitor did: the first feedback (a screen update or the thinking
+    indication) and the first content sentence, which gets a longer limit when the answer waited for the LLM."""
     limits = run.get("thresholds") or {}
-    worst = {"screen": (0.0, None, None), "sentence": (0.0, None, None)}
+    worst = {"feedback": (0.0, None, None, False), "sentence": (0.0, None, None, False)}
     for step, window in windows(run["timeline"]):
         if step.get("action") in ("leave", "busy"):
             continue
-        screen = next((e for e in window if e["kind"] == "screen"), None)
-        said = next((e for e in window if e["kind"] == "said"), None)
-        for key, entry in (("screen", screen), ("sentence", said)):
+        feedback = next((e for e in window if e["kind"] == "screen" or (e["kind"] == "thinking" and e.get("phase") == "start")), None)
+        said = next((e for e in window if is_content(e)), None)
+        waited = said is not None and any(e["kind"] == "llm" and e.get("phase") == "request" and e["n"] < said["n"] for e in window)
+        for key, entry in (("feedback", feedback), ("sentence", said)):
             if entry is not None:
                 ms = (entry["rt"] - step["rt"]) * 1000
-                if ms > worst[key][0]:
-                    worst[key] = (ms, step, entry)
+                limit_key = "first_sentence_llm_ms" if key == "sentence" and waited else (
+                    "first_sentence_ms" if key == "sentence" else "first_feedback_ms")
+                over = ms - float(limits.get(limit_key, DEFAULT_LIMITS[limit_key]))
+                if worst[key][1] is None or over > worst[key][0]:
+                    worst[key] = (over, step, entry, waited, ms)
     results = []
-    for key, name, limit_key in (("screen", "latency_first_screen", "first_screen_ms"),
+    for key, name, limit_key in (("feedback", "latency_first_feedback", "first_feedback_ms"),
                                  ("sentence", "latency_first_sentence", "first_sentence_ms")):
-        ms, step, entry = worst[key]
-        limit = float(limits.get(limit_key, 500 if key == "screen" else 3000))
-        if entry is not None and ms > limit:
-            results.append(fail(name, f"{ms:.0f} ms after {step['detail']!r} (limit {limit:.0f} ms)", entry["n"]))
+        if worst[key][1] is None:
+            results.append(ok(name, "nothing to measure"))
+            continue
+        over, step, entry, waited, ms = worst[key]
+        if key == "sentence" and waited:
+            limit_key = "first_sentence_llm_ms"
+        limit = float(limits.get(limit_key, DEFAULT_LIMITS[limit_key]))
+        what = " (waited for the LLM)" if waited and key == "sentence" else ""
+        if over > 0:
+            results.append(fail(name, f"{ms:.0f} ms after {step['detail']!r}{what} (limit {limit:.0f} ms)", entry["n"]))
         else:
-            results.append(ok(name, f"worst {ms:.0f} ms"))
+            results.append(ok(name, f"worst {ms:.0f} ms{what}"))
     return results
 
 

@@ -15,10 +15,10 @@ import time
 from dataclasses import asdict
 from typing import Callable, Optional
 
-from robot.events import (NavigationRequested, ScreenUpdate, StateTransition)
+from robot.events import (NavigationRequested, ScreenUpdate, StateTransition, ThinkingEnded, ThinkingStarted)
 from robot.services.book_llm import BookAssistant
 
-SKIP_EVENTS = {"StateEntered", "ReplySentence", "ExpressionRequested", "StyleChanged", "ContextChanged"}
+SKIP_EVENTS = {"StateEntered", "ThinkingStarted", "ThinkingEnded", "ReplySentence", "ExpressionRequested", "StyleChanged", "ContextChanged"}
 TEXT_LIMIT = 400
 
 
@@ -71,9 +71,12 @@ class Recorder:
         elif isinstance(event, ScreenUpdate):
             fields = key_fields(event.view, event.payload)
             entry = self.add("screen", view=event.view, layout=event.layout, state_path=event.state_path,
-                             zone=event.zone, key=fields)
+                             zone=event.zone, key=fields, thinking=event.thinking)
             self.last_screen = {"view": event.view, "payload": event.payload, "options": list(event.options),
                                 "n": entry["n"]}
+        elif isinstance(event, (ThinkingStarted, ThinkingEnded)):
+            self.add("thinking", phase="start" if isinstance(event, ThinkingStarted) else "end",
+                     ms=getattr(event, "ms", None))
         elif isinstance(event, NavigationRequested):
             self.add("nav", title=event.title, isbn=event.isbn, shelf=event.shelf, section=event.section,
                      floor=event.floor, x=event.x, y=event.y)
@@ -132,7 +135,9 @@ class RecordingClient:
         except Exception as exc:                          # LLMError normally: the dialogue falls back to the catalogue
             self.recorder.add("llm", phase="error", error=str(exc)[:TEXT_LIMIT], ms=round((time.monotonic() - started) * 1000))
             raise
-        self.recorder.add("llm", phase="reply", reply=str(reply)[:TEXT_LIMIT], ms=round((time.monotonic() - started) * 1000))
+        timing = getattr(self.client, "last_timing", None) or {}
+        self.recorder.add("llm", phase="reply", reply=str(reply)[:TEXT_LIMIT], ms=round((time.monotonic() - started) * 1000),
+                          first_byte_ms=timing.get("first_byte_ms"), total_ms=timing.get("total_ms"))
         return reply
 
     def __getattr__(self, name):

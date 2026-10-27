@@ -97,7 +97,8 @@ class Context:
     choices: list = field(default_factory=list)
     last_book: Optional[object] = None
     step_no: int = 0
-    typo_probability: float = 0.2
+    typo_probability: float = 0.05
+    speech_probability: float = 0.3
     stuck: list = field(default_factory=list)
     started_real: float = field(default_factory=time.monotonic)
     run_timeout_s: float = 240.0
@@ -229,10 +230,10 @@ async def say(base: dict, value, ctx: Context) -> None:
     options = value.get("text") if isinstance(value, dict) else value
     names = {"title": ctx.last_book.title if ctx.last_book else "it",
              "author": ctx.last_book.author if ctx.last_book else "the author"}
-    text, chosen, typed = choose_words(options, ctx.rng, ctx.typo_probability, **names)
-    ctx.choices.append({"step": base["step"], "type": "paraphrase", "value": chosen, "typos": typed})
+    text, chosen, typed = choose_words(options, ctx.rng, ctx.typo_probability, ctx.speech_probability, **names)
+    ctx.choices.append({"step": base["step"], "type": "paraphrase", "value": chosen, "variation": typed})
     flags = {k: True for k in ("answerable", "unanswerable") if isinstance(value, dict) and value.get(k)}
-    ctx.recorder.add("step", **base, detail=f"says: {text}", text=text, paraphrase=chosen, typos=typed, **flags)
+    ctx.recorder.add("step", **base, detail=f"says: {text}", text=text, paraphrase=chosen, variation=typed, **flags)
     await ctx.app.bus.publish(UserUtterance(text, source="sensor"))
 
 
@@ -284,7 +285,8 @@ async def wait(base: dict, value, ctx: Context) -> None:
 
 
 async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Config, llm: tuple, speed: float,
-               typo_probability: Optional[float] = None, steps=None, guide=None) -> dict:
+               typo_probability: Optional[float] = None, steps=None, guide=None,
+               speech_probability: Optional[float] = None) -> dict:
     """Run one scenario once in one zone. llm: ("none", None) | (host, port, 'real'|'mock'). Returns the run record."""
     harness = cfg.scenarios
     clock = ScaledClock(speed)
@@ -304,6 +306,7 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
     recorder.wrap_actuators(app.actuators, drivers.esp32)
     ctx = Context(app, recorder, clock, rng, zone, harness, Operator(app), typo_probability=(
         harness["typo_probability"] if typo_probability is None else typo_probability),
+        speech_probability=harness["speech_probability"] if speech_probability is None else speech_probability,
         run_timeout_s=float(harness["run_timeout_s"]))
     error = None
 
@@ -345,7 +348,7 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
               "storage": len(app.dialogue.storage), "catalogue_titles": [b.title for b in app.finder.catalog.books],
               "timeline": recorder.entries, "events": recorder.event_names,
               "thresholds": harness["latency"], "timeouts": dict(app.dialogue.settings.timeouts),
-              "typo_probability": ctx.typo_probability}
+              "typo_probability": ctx.typo_probability, "speech_probability": ctx.speech_probability}
     record["checks"] = [c.to_json() for c in checks_module.run_checks(record, scenario)]
     record["passed"] = all(c["passed"] for c in record["checks"])
     return record
@@ -376,12 +379,13 @@ def plan_batch(names: list, scenarios: dict, runs: int, zones: list, seed: int) 
 
 
 async def run_batch(plan: list, cfg: Config, llm: tuple, speed: float, typo_probability: Optional[float], out_dir: Path,
-                    progress=print) -> list:
+                    progress=print, speech_probability: Optional[float] = None) -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     records = []
     with open(out_dir / "runs.jsonl", "w", encoding="utf-8") as f:
         for scenario, zone, seed, run_id in plan:
-            record = await play(scenario, zone, seed, run_id, cfg, llm, speed, typo_probability)
+            record = await play(scenario, zone, seed, run_id, cfg, llm, speed, typo_probability,
+                                  speech_probability=speech_probability)
             records.append(record)
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             f.flush()

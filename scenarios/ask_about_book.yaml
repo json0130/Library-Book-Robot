@@ -11,7 +11,7 @@ steps:
   - say:
       text: ["how many pages does it have?", "how many pages is it?"]
       unanswerable: true
-  - say: ["where is it?", "where is {title} located?", "where does it go?"]
+  - say: ["where is it?", "where is {title} located?", "where does it go?", "where does it go"]
   - one_of:
       - name: guide_by_tap
         steps:
@@ -19,7 +19,7 @@ steps:
       - name: guide_by_voice
         steps:
           - say: ["guide me", "take me there", "show me the way"]
-  - say: ["that's all, thanks", "I'm done"]
+  - say: ["that's all, thanks", "I'm done", "that's all thanks"]
   - wait: {until_state: IDLE, timeout: 60}
 expect:
   - {state_path: [ENGAGED.SCAN, ENGAGED.ANSWER, ENGAGED.ANYTHING_ELSE, ENGAGED.FAREWELL]}

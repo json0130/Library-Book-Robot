@@ -21,6 +21,7 @@ from typing import Optional
 
 EMOTIONS = ("happy", "sad", "angry", "surprise", "fear", "disgust", "neutral")
 IDLE = "idle"
+THINKING = "thinking"                       # not an emotion to blend: the face looks up while the LLM is working
 
 ALIASES = {
     "happy": "happy", "joy": "happy", "happiness": "happy", "smile": "happy",
@@ -30,7 +31,7 @@ ALIASES = {
     "fear": "fear", "scared": "fear", "afraid": "fear", "fearful": "fear",
     "disgust": "disgust", "disgusted": "disgust",
     "neutral": "neutral", "calm": "neutral", "normal": "neutral",
-    "idle": IDLE, "rest": IDLE,
+    "idle": IDLE, "rest": IDLE, "thinking": THINKING,
 }
 
 TAG_WEIGHT = 0.6
@@ -46,7 +47,7 @@ def normalize(name) -> Optional[str]:
 
 
 def valid_names() -> list[str]:
-    return list(EMOTIONS) + [IDLE]
+    return list(EMOTIONS) + [IDLE, THINKING]
 
 
 def blend(user_emotion: Optional[str] = None, user_confidence: float = 0.0,

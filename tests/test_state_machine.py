@@ -775,11 +775,18 @@ class WherePhrasingTest(unittest.TestCase):
         run(app, PersonEngaged(), UserUtterance("oh i see can you tell me where the Brief history book?"))
         self.assertIn("A Brief History of Time is on shelf 3-SCI-A", " ".join(app.said))
 
-    def test_a_bare_section_name_is_the_section(self):
-        for phrase in ("where is history?", "where is the history section"):
+    def test_a_section_name_with_the_word_section_is_the_section(self):
+        for phrase in ("where is the history section", "take me to the history section"):
             app = new_app()
             run(app, PersonEngaged(), UserUtterance(phrase))
-            self.assertIn("The History section is on level 3", " ".join(app.said), phrase)
+            self.assertTrue("The History section is on level 3" in " ".join(app.said) or app.nav, phrase)
+
+    def test_a_bare_history_is_ambiguous_between_the_section_and_the_book(self):
+        for phrase in ("history", "where is history?"):
+            app = new_app()
+            run(app, PersonEngaged(), UserUtterance(phrase))
+            self.assertIn("Did you mean The History section or A Brief History of Time?", " ".join(app.said), phrase)
+            self.assertEqual(app.screens[-1].view, "options")
 
     def test_hi_right_after_the_goodbye_gets_the_hello_and_the_offer_not_a_second_hi(self):
         app = new_app()

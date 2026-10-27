@@ -32,7 +32,8 @@ LIVE_ACTIONS = {PersonEngaged: ("engage", "a person engaged"), PersonNearbyBusy:
                 BookPlaced: ("place_book", "a book was placed on the pad")}
 
 
-def cards_for(scenario: Scenario, rng: random.Random, catalogue_books: list, typo_probability: float = 0.0) -> tuple:
+def cards_for(scenario: Scenario, rng: random.Random, catalogue_books: list, typo_probability: float = 0.0,
+              speech_probability: float = 0.0) -> tuple:
     """([card dicts], [choices]) for a scenario: what to tell the tester, with the random parts (branches, paraphrases,
     books) chosen from the seed. A card is {"n", "text", "kind", "wait_s"}."""
     cards, choices = [], []
@@ -75,8 +76,8 @@ def cards_for(scenario: Scenario, rng: random.Random, catalogue_books: list, typ
                     add(kind, f"Place the book {name!r} (barcode up) on the pad.")
             elif kind == "say":
                 options = value.get("text") if isinstance(value, dict) else value
-                text, base, typed = choose_words(options, rng, typo_probability, title="it", author="the author")
-                choices.append({"type": "paraphrase", "value": base, "typos": typed})
+                text, base, typed = choose_words(options, rng, typo_probability, speech_probability, title="it", author="the author")
+                choices.append({"type": "paraphrase", "value": base, "variation": typed})
                 add(kind, f"Ask the robot: \"{text}\"  (type: say {text})", say=text)
             elif kind == "tap":
                 label = "one of the books in the list" if isinstance(value, dict) else f"the \"{value}\" button"
@@ -99,7 +100,7 @@ class LiveGuide:
         self.out_dir, self.mode, self.record_audio, self.say = out_dir, mode, record_audio, say
         rng = random.Random(seed)
         self.cards, self.choices = cards_for(scenario, rng, app.finder.catalog.books,
-                                             app.cfg.scenarios["typo_probability"])
+                                             app.cfg.scenarios["typo_probability"], app.cfg.scenarios["speech_probability"])
         self.recorder = Recorder(time.monotonic)
         self.presses: asyncio.Queue = asyncio.Queue()          # "next" / "abort", pressed only by the tester
         self.aborted = False

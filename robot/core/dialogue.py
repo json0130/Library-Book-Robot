@@ -38,20 +38,23 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+from contextlib import asynccontextmanager
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
-from robot.config import ENGAGEMENT_DEFAULTS, RETURNING_DEFAULTS, STORAGE_DEFAULTS, TIMEOUTS_DEFAULTS
+from robot.config import (ENGAGEMENT_DEFAULTS, INTENT_DEFAULTS, RETURNING_DEFAULTS, SCREEN_DEFAULTS, STORAGE_DEFAULTS,
+                          TIMEOUTS_DEFAULTS)
 from robot.core.fsm import Event, History, Machine, MachineSpec, Previous, StateDef, Timer, Transition
 from robot.core.storage import ShelfStop, Storage, StoredBook
-from robot.events import (BookDropped, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, ExpressionRequested,
+from robot.events import (ThinkingEnded, ThinkingStarted, BookDropped, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, ExpressionRequested,
                           LocationResolved, NavigationRequested, PersonEngaged, PersonLeft, PersonNearbyBusy,
                           RecommendationsReady, ReplySentence, ReturningProgress, ScanFailed, StateEntered,
                           StateTransition, StoringBook, UserChoice, UserUtterance)
-from robot.services.places import PlaceResolver
+from robot.core.intents import IntentRouter
+from robot.services.places import Place, PlaceResolver
 from robot.persona import NAME
 from robot.services.book_graph import Location
 from robot.services.books import title_key
@@ -102,6 +105,7 @@ GENRE_WORDS = ("genre", "what kind of book", "what type of book", "what sort of 
 GREETINGS = ("hi", "hello", "hey", "hiya", "yo", "good morning", "good afternoon", "good evening")
 NAME_WORDS = ("your name", "who are you", "introduce yourself", "what are you", "what should i call you")
 
+REPAIR_STATES = ("OFFER", "AWAIT_BOOK", "ANYTHING_ELSE")
 HELLO = f"Hello! My name is {NAME}."
 LOOSE_MIN_SCORE = 0.03            # when nothing reaches books.similarity.min_score: the nearest books above this
 RETURNING_OPENING = "Hi! I'm returning some books, can I help you with anything?"
@@ -404,6 +408,8 @@ class ChoiceInfo:
     isbn: str = ""                       # a catalogue book they named ("tell me about Dune"): no book on the pad is needed
     explicit: bool = False               # they picked that book on the screen: it becomes the topic even over the pad's
     general: bool = False                # a recommendation not about the book in hand ("any other books?")
+    place: Optional[object] = None       # services.places.Place the router found (a section, a floor, a book, or several to choose from)
+    take_me: bool = False                # they asked to be taken there, not only told where
     area: bool = False                   # they asked about a section or topic area ("where are the history books")
 
 
@@ -423,6 +429,10 @@ class Session:
     last_action: Optional[str] = None
     repeated_offer: bool = False
     recommend_failed: bool = False       # nothing was found like the book: "any other?" means something else
+    place: Optional[object] = None       # the place to tell them about, found by the router
+    take_me: bool = False
+    misses: int = 0                      # utterances in a row the robot could not act on in this state
+    repair: bool = False                 # the choices are shown as buttons because it did not understand
     awaiting_interest: bool = False      # it asked "what kind of books do you like?" outside AWAIT_BOOK
 
 
@@ -432,10 +442,12 @@ class Settings:
     returning: dict = field(default_factory=lambda: {**RETURNING_DEFAULTS, "home": dict(RETURNING_DEFAULTS["home"])})
     storage: dict = field(default_factory=lambda: dict(STORAGE_DEFAULTS))
     engagement: dict = field(default_factory=lambda: dict(ENGAGEMENT_DEFAULTS))
+    intents: dict = field(default_factory=lambda: dict(INTENT_DEFAULTS))
+    screen: dict = field(default_factory=lambda: {**SCREEN_DEFAULTS, "greeting_hold_s": 0})     # no hold unless configured
 
     @classmethod
     def from_config(cls, cfg) -> "Settings":
-        return cls(cfg.timeouts, cfg.returning, cfg.storage, cfg.engagement)
+        return cls(cfg.timeouts, cfg.returning, cfg.storage, cfg.engagement, cfg.intents, cfg.screen)
 
 
 class Dialogue:
@@ -451,6 +463,9 @@ class Dialogue:
         self.finder = finder                # services.books.BookFinder: catalogue, graph, locations
         self.plan = plan                    # services.floorplan.FloorPlan, or None
         self.places = PlaceResolver(finder, plan)
+        self.router = IntentRouter(finder, plan, (settings.intents if settings else None))
+        self._thinking = 0                  # nested "waiting for the LLM" sections
+        self.thinking_text = "Let me check."
         self.last_choices: list = []        # the ids of the last list or options shown ("the second one")
         self.assistant = assistant          # services.book_llm.BookAssistant, or None for catalogue text only
         self.greet_cooldown_s = greet_cooldown_s
@@ -606,11 +621,115 @@ class Dialogue:
         was_awaiting, self.awaiting_guide = self.awaiting_guide, False
         if self.leaf in ("IDLE", "FAREWELL") and is_done(low, "closing"):
             return                                       # "thanks" after the goodbye is not a new visit
-        info = None if self.leaf in ("IDLE", "FAREWELL", "GREET") else self.classify(low, text, was_awaiting)
+        info = None
+        if self.leaf not in ("IDLE", "FAREWELL", "GREET"):
+            info = self.route_info(text, was_awaiting)                # the router first: rules, fuzzy, no LLM
+            if info is None:
+                info = self.classify(low, text, was_awaiting)         # then the older rules
         if info is not None:
+            self.session.misses = 0
             await self.fsm.dispatch("Choice", info, source)
+            return
+        if self.leaf in REPAIR_STATES and not is_question(low):       # not understood, and not a question to answer
+            self.session.misses += 1
+            if self.session.misses >= int(self.settings.intents.get("repair_after", 2)):
+                await self.repair()
+                return
+        await self.fsm.dispatch("Utterance", ChoiceInfo("", text=text), source)
+
+    async def repair(self) -> None:
+        """The robot did not understand twice in a row: stop asking again. The choices are shown as buttons (always with
+        "I'm done"), and in a common area said briefly."""
+        s = self.session
+        s.misses, s.repair = 0, True
+        options = self.options_for(self.leaf, True)
+        log.info("[dialogue] not understood twice in %s: showing %s", self.leaf, [o["label"] for o in options])
+        labels = [o["label"].lower().rstrip(".") for o in options if o["id"] != "done"]
+        brief = "Sorry, I didn't catch that. " + (f"You can say: {join_names(labels + ['I am done'])}." if labels else
+                                                  "You can tap a button, or say I am done.")
+        if self.style_speaks():
+            await self.say(brief, "neutral")
         else:
-            await self.fsm.dispatch("Utterance", ChoiceInfo("", text=text), source)
+            self.show(brief)
+            await self.screen_now()
+
+    @asynccontextmanager
+    async def thinking(self):
+        """Around every call that waits for the LLM: the face looks like it is thinking and the screen shows a progress
+        indicator at once, the state's timeouts wait, and in a common area a short spoken "Let me check." follows if
+        no sentence has arrived after intents.thinking_ack_s (once per answer)."""
+        if self.assistant is None:
+            yield
+            return
+        started = time.monotonic()
+        self._thinking += 1
+        first = self._thinking == 1
+        ack = None
+        if first:
+            if self.publish is not None:
+                await self.publish(ThinkingStarted())
+                await self.publish(ExpressionRequested("thinking", 120.0))
+            ack = asyncio.create_task(self._acknowledge())
+        self.fsm.suspend_timeouts()
+        try:
+            yield
+        finally:
+            self.fsm.resume_timeouts()
+            self._thinking -= 1
+            if ack is not None:
+                ack.cancel()
+            if first and self.publish is not None:
+                await self.publish(ThinkingEnded(round((time.monotonic() - started) * 1000)))
+                await self.publish(ExpressionRequested("idle", 1.0))
+
+    async def _acknowledge(self) -> None:
+        await asyncio.sleep(float(self.settings.intents.get("thinking_ack_s", 1.5)))
+        if self.style_speaks():
+            await asyncio.get_running_loop().run_in_executor(None, self.out.deliver, self.thinking_text, self.get_style())
+
+    def route_info(self, text: str, was_awaiting: bool) -> Optional[ChoiceInfo]:
+        """A ChoiceInfo from the intent router's best candidate (None: nothing confident, or an intent that needs the
+        state to say what it means). Two close places become a question: the options view."""
+        s = self.session
+        prompted = ("recommend" if (self.leaf == "AWAIT_BOOK" and s.intent == "recommend") or s.awaiting_interest else
+                    "ask" if self.leaf == "AWAIT_BOOK" and s.intent == "ask" else None)
+        route = self.router.route(text, self.leaf, was_awaiting, s.book is not None, prompted)
+        best = route.best
+        if best is None:
+            return None
+        log.info("[intent] %r -> %s%s", text, route.candidates[:3], " (ambiguous)" if route.ambiguous else "")
+        if route.ambiguous:
+            places = [c.place for c in route.ambiguous]
+            return ChoiceInfo("ask", text, question=text, area=True, place=Place("ambiguous", "", choices=places))
+        intent = best.intent
+        if intent in ("done", "no"):
+            return ChoiceInfo("done", text)
+        if intent == "yes":
+            if was_awaiting:
+                return ChoiceInfo("guide", text)
+            return ChoiceInfo("more", text) if self.leaf == "ANYTHING_ELSE" else None
+        if intent == "another":
+            return ChoiceInfo("another", text)
+        if intent == "return":
+            return ChoiceInfo("return", text)
+        if intent == "guide":
+            return ChoiceInfo("guide", text)
+        if intent == "explain":
+            return ChoiceInfo("ask", text, question=text, isbn=best.isbn)
+        if prompted == "recommend" and (intent == "title" or (intent == "where" and best.isbn)):
+            return ChoiceInfo("recommend", text, isbn=best.isbn)     # "what do you like?" "Dune": books like it
+        if intent == "title":
+            book = self.finder.catalog.lookup(best.isbn) if self.finder is not None else None
+            return ChoiceInfo("ask", text, question=f"tell me about {book.title}" if book else text, isbn=best.isbn)
+        if intent == "recommend":
+            other = re.search(r"\b(?:other|different|else|new|any books|anything|something)\b", text.lower()) is not None
+            general = not best.isbn and not best.interest and s.recommend_failed and other
+            return ChoiceInfo("recommend", text, interest=best.interest, isbn=best.isbn, general=bool(general))
+        if intent == "where":
+            if best.place is None:                                    # "where is it": the book in hand
+                return ChoiceInfo("ask", text, question=text, take_me=best.take_me)
+            return ChoiceInfo("ask", text, question=text, area=True, place=best.place, take_me=best.take_me)
+        return None
 
     def classify(self, low: str, text: str, was_awaiting: bool) -> Optional[ChoiceInfo]:
         """A ChoiceInfo for words that choose something, None for free text."""
@@ -786,6 +905,7 @@ class Dialogue:
         s.question = info.question or None
         s.interest = info.interest or None
         s.awaiting_interest = False
+        s.place, s.take_me = info.place, info.take_me
         if info.isbn and (s.book is None or s.virtual or info.explicit):   # a book they named: no pad needed
             book = self.finder.catalog.lookup(info.isbn) if self.finder is not None else None
             if book is not None:
@@ -919,6 +1039,7 @@ class Dialogue:
 
     async def enter_greet(self, event) -> None:
         s = self.session
+        began = time.monotonic()
         if self.interrupted_returning:                   # someone engaged while the robot was putting books back
             self.interrupted_returning = False
             s.offer_said = True
@@ -926,6 +1047,11 @@ class Dialogue:
         else:                                            # every visit starts with an introduction, even for the same
             self.greeted = True                          # person as before; once per visit (the camera engages once)
             await self.speak_or_show(HELLO, "happy")
+        # the hello stays on the face until it has been heard or read: if the speech was quick, failed or the style is
+        # silent, wait out the rest of the hold before the options replace it
+        hold = float(self.settings.screen.get("greeting_hold_s", 0)) - (time.monotonic() - began)
+        if hold > 0:
+            await asyncio.sleep(hold)
         self.fsm.post("greeted")
 
     def offer_text(self) -> str:
@@ -1022,6 +1148,11 @@ class Dialogue:
         s = self.session
         s.intent = None
         question, s.question = s.question, None
+        place, s.place = s.place, None
+        if place is not None:                           # the router found a place: a section, a floor, a book, or a choice
+            await self.tell_place(place, s.take_me)
+            self.fsm.post("answered")
+            return
         if question:
             await self.answer_text(question)
             self.fsm.post("answered")
@@ -1133,8 +1264,13 @@ class Dialogue:
         self.last_said = text
         await self.screen_now()                          # the screen follows the words, not the end of them
         # speaking (text-to-speech, playing it) takes seconds: do it in a thread so the camera, the display and the
-        # timers keep running, and a person leaving or a tap during it is queued and handled once it is said
-        await asyncio.get_running_loop().run_in_executor(None, self.out.deliver, text, self.get_style())
+        # timers keep running, and a person leaving or a tap during it is queued and handled once it is said. The state's
+        # timeouts wait while the robot talks and start again when it has finished.
+        self.fsm.suspend_timeouts()
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, self.out.deliver, text, self.get_style())
+        finally:
+            self.fsm.resume_timeouts()
         if self.assistant is not None:
             self.assistant.said(text)               # the LLM's memory is what was really said, canned lines too
         if self.publish is not None:
@@ -1147,19 +1283,22 @@ class Dialogue:
             await self.say(text, tag)
             return
         self.show(text)
+        await self.screen_now()                          # on the screen at once, not when the state's entry has finished
         self.out.neck.look_at("visitor")
         self.out.lights.pattern("pulse")
 
     # ---- the machine's own reports ----
     async def screen_now(self) -> None:
-        """Publish the state's screen now, before a long entry action (speaking, the LLM) has finished: the entry
-        actions run before the machine reports it has arrived, so without this the screen would change only after
-        the last word."""
-        if self._entering and self.publish is not None and self.fsm.leaf:
+        """Publish the screen now, before the sentence is spoken: for a state being entered (its entry actions run before
+        the machine reports it has arrived) and for a reply that does not change state (the drop confirmation, small
+        talk). Whatever should be on screen is there before the first word."""
+        if self.publish is not None and self.fsm.leaf:
             await self._on_entered(self.fsm.leaf, early=True)
 
     async def _on_transition(self, record: dict) -> None:
         self._entering = not record["internal"]
+        if not record["internal"]:
+            self.session.misses, self.session.repair = 0, False
         self.transitions.append((record["from"], record["event"], record["to"]))
         state_log.info("%s -> %s  (%s, %s)%s", record["from"] or "(start)", record["to"], record["event"],
                        record["source"], "  [internal]" if record["internal"] else "")
@@ -1178,11 +1317,21 @@ class Dialogue:
             self._entering = False
         if self.publish is not None:                     # the screen composer (core/screen.py) picks the view
             await self.publish(StateEntered(self.fsm.spec.path(state), self.get_zone(), title, text,
-                                            tuple(self.options_for(state)), tuple(self.options_for(state, True))))
+                                            tuple(self.options_for(state)), tuple(self.options_for(state, True)),
+                                            self.session.repair and state in REPAIR_STATES))
 
     def options_for(self, state: str, any_zone: bool = False) -> list:
         """The choices in a state: as touch buttons when the style has them (quiet zones), or for every zone with
-        any_zone (the screen composer shows them as an options view everywhere)."""
+        any_zone (the screen composer shows them as an options view everywhere). After the robot has not understood
+        twice (repair) they always include "I'm done"."""
+        options = self.state_options(state, any_zone)
+        if self.session.repair and state in REPAIR_STATES and any_zone:
+            options = options or self.state_options(state, True)
+            if not any(o["id"] == "done" for o in options):
+                options = options + [{"id": "done", "label": "I'm done"}]
+        return options
+
+    def state_options(self, state: str, any_zone: bool = False) -> list:
         if not (any_zone or self.get_style().touch_buttons):
             return []
         if state == "OFFER":
@@ -1227,7 +1376,12 @@ class Dialogue:
             intro = "" if self.greeted else f"I'm {NAME}. "
             await self.say(f"Hi! {intro}Place a book on the pad and I'll help with it.", "happy")
             return
-        answer = (await self.assistant.chat(text) if self.assistant is not None else None) or self.identity_fact(low)
+        if self.assistant is not None:
+            async with self.thinking():
+                answer = await self.assistant.chat(text)
+        else:
+            answer = None
+        answer = answer or self.identity_fact(low)
         await self.say(answer or "Place a book on the pad and I'll help with it.", "happy" if answer else "neutral")
 
     @staticmethod
@@ -1449,7 +1603,8 @@ class Dialogue:
         record = self.catalogue_record(self.session.book)
         if record is None or self.assistant is None:
             return None
-        return await self.assistant.answer(record, question)
+        async with self.thinking():
+            return await self.assistant.answer(record, question)
 
     def catalogue_fact(self, text: str) -> Optional[str]:
         """Who wrote it / what genre, straight from the catalogue, for when the LLM can't answer."""
@@ -1474,7 +1629,8 @@ class Dialogue:
         if record is not None and self.publish is not None:
             await self.publish(BookFocused(record.isbn13, "explain"))
         if record is not None and self.assistant is not None:
-            spoken = await self.assistant.explain(record)
+            async with self.thinking():
+                spoken = await self.assistant.explain(record)
             if spoken:
                 await self.say(spoken, "happy")
                 self.session.last_action = "explain"
@@ -1506,7 +1662,8 @@ class Dialogue:
             log.info("[dialogue] candidate %s (%.2f): %s", pick.book.title, pick.total, "; ".join(pick.reasons))
         await self.publish_recommendations(picks, source_isbn=book.isbn)
         if self.assistant is not None:
-            spoken = await self.assistant.recommend(self.finder.catalog.lookup(book.isbn), picks)
+            async with self.thinking():
+                spoken = await self.assistant.recommend(self.finder.catalog.lookup(book.isbn), picks)
             if spoken:
                 best = self.first_mentioned(spoken, picks)
                 self.guide_target = self.target_for(best.book.isbn13, best.book.title)

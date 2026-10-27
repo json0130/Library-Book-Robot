@@ -3,12 +3,18 @@ description: A visitor asks where a section is, what is on a floor, an ambiguous
 zones: [quiet, common]
 steps:
   - engage
-  - say: ["where are the science books", "where is the science section?"]
+  - say: ["where are the science books", "where is the science section?", "science books"]
   - say: ["what's on level 2", "what is on level 2?", "what's on the second floor?"]
-  - say: ["where is the brief history", "history"]
-  - tap: "section"
-  - say: ["where are the computing books", "take me to the computing section"]
-  - say: ["that's all, thanks", "I'm done"]
+  - one_of:
+      - name: ambiguous_history          # "history" is both a section and part of a title: the robot asks which
+        steps:
+          - say: ["history", "the history", "history books"]
+          - tap: "section"
+      - name: named_title                # the whole title: no question to ask
+        steps:
+          - say: ["where is the brief history", "where is a brief history of time"]
+  - say: ["where are the computing books", "take me to the computing section", "the computing section"]
+  - say: ["that's all, thanks", "I'm done", "that's all thanks"]
   - wait: {until_state: IDLE, timeout: 60}
 expect:
   - {views: [directions, options]}

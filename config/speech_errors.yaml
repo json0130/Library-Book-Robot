@@ -1,0 +1,40 @@
+# Speech-style variation for the scenario test harness (robot/scenarios/variants.py). Edit freely: a pretend visitor's
+# words are changed the way speech recognition tends to change them, chosen by the run's seed, so a seed still replays
+# the same wording.
+
+homophones:               # a word heard as another that sounds the same (each entry: word -> what it may become)
+  where: [wear, were]
+  to: [two, too]
+  two: [to, too]
+  for: [four]
+  no: [know]
+  know: [no]
+  right: [write]
+  by: [buy]
+  there: [their]
+  their: [there]
+  hear: [here]
+  here: [hear]
+  whole: [hole]
+  read: [red]
+  sea: [see]
+  one: [won]
+  not: [knot]
+  whats: [watts]
+  level: [devil]
+  floor: [for]
+  find: [fined]
+  guide: [guy]
+  history: [his story]
+  science: [signs]
+  section: [session]
+
+drop_words: [the, a, an, it, me, to, is, of, please, can, you, i, that, this]   # short words the recogniser often loses
+merge_pairs:              # two words heard as one
+  - [sci, fi]
+  - [any, thing]
+  - [no, thanks]
+  - [that, s]
+  - [what, s]
+  - [i, m]
+fillers: [um, uh, er, hmm, like, so, okay]

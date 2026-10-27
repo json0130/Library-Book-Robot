@@ -326,6 +326,8 @@ class Machine:
         self._previous: dict[str, _Snapshot] = {}           # composite -> the child active before the current one
         self._queue: deque = deque()
         self._running = False
+        self._suspended = 0                                 # >0: the "timeout" timers wait (the robot is speaking or thinking)
+        self._armed: dict[str, list] = {}                   # state -> [(seconds, event)] as armed, to start them again
         self._current: Optional[Event] = None               # the event being handled
 
     # ---- where we are ----
@@ -362,6 +364,21 @@ class Machine:
             if seconds is not None and float(seconds) > 0:
                 self._deadlines.setdefault(state, []).append((self.clock() + float(seconds), event_name))
 
+    def suspend_timeouts(self) -> None:
+        """Hold the "timeout" timers (not the drive, unload or announce ones) while the robot speaks or waits for the LLM."""
+        self._suspended += 1
+
+    def resume_timeouts(self) -> None:
+        """When the last hold is released the "timeout" timers of the active states start again from now."""
+        self._suspended = max(0, self._suspended - 1)
+        if self._suspended or self.leaf is None:
+            return
+        now = self.clock()
+        for name in self.spec.chain(self.leaf):
+            fresh = [(now + seconds, ev) for seconds, ev in self._armed.get(name, []) if ev == "timeout"]
+            if fresh:
+                self._deadlines[name] = [d for d in self._deadlines.get(name, []) if d[1] != "timeout"] + fresh
+
     def forget(self, composite: str) -> None:
         self._history.pop(composite, None)
         self._previous.pop(composite, None)
@@ -393,6 +410,8 @@ class Machine:
         fired = 0
         for state, timers in list(self._deadlines.items()):
             for due, ev in sorted(timers):
+                if ev == "timeout" and self._suspended:
+                    continue
                 if due <= now:
                     self._deadlines[state].remove((due, ev))
                     self._queue.append(Event(ev, source="timeout", state=state))
@@ -530,14 +549,17 @@ class Machine:
             state = self.spec.states[name]
             if name in restore:
                 self._deadlines[name] = [(self.clock() + sec, ev) for sec, ev in restore[name]]
+                self._armed[name] = [(sec, ev) for sec, ev in restore[name]]
             else:
-                due = []
+                due, armed = [], []
                 for timer in state.timers:
                     seconds = await self._call(timer.seconds, event) if isinstance(timer.seconds, str) else timer.seconds
                     if seconds is not None and float(seconds) > 0:
                         due.append((self.clock() + float(seconds), timer.event))
+                        armed.append((float(seconds), timer.event))
                 if due:
                     self._deadlines[name] = due
+                    self._armed[name] = armed
             for action in state.enter:
                 await self._call(action, event)
         if self.on_entered is not None and entering:

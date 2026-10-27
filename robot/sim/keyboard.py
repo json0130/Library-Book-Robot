@@ -314,10 +314,15 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             sim.say(f"  {len(app.dialogue.storage)} book(s) are still in storage from last time "
                     "(`reset all` empties it)")
         ticker = asyncio.create_task(app.run_ticker())
+        if speak and speech is not None:
+            problem = await asyncio.get_running_loop().run_in_executor(None, speech.check)
+            if problem:
+                sim.say(f"  WARNING: {problem}")
         if speak:                                           # make the fixed lines' speech now, so the hello is instant
             from robot.core import dialogue as lines
             threading.Thread(target=app.actuators.voice.prepare, name="tts-prepare", daemon=True, args=([
                 lines.HELLO, lines.OFFER_NO_BOOK, lines.GOODBYE_SPOKEN, lines.THANKS_SPOKEN, lines.RETURNING_OPENING,
+                app.dialogue.thinking_text, "One moment, please.", "Sorry, I didn't catch that.",
                 "Is there anything else I can help with?", "Place the book on my pad and I'll take it back.",
                 "Which book? Tell me its title, or place it on my pad.",
                 "Happy to! What kind of books do you like? Tell me a topic, a title or an author, "

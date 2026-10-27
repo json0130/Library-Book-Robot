@@ -27,6 +27,7 @@ class DisplayLinkTest(unittest.TestCase):
         self.addCleanup(lambda: (self.server.shutdown(), self.server.server_close()))
         cfg = load_config()
         cfg.robot.setdefault("books", {})["online_fallback"] = False
+        cfg.robot.setdefault("screen", {})["greeting_hold_s"] = 0
         self.app = build_app(cfg, fake_drivers(), face=FaceDisplay("127.0.0.1", self.port), log_sessions=False,
                              persist_storage=False)
         self.link = DisplayLink(self.app.bus, Operator(self.app), "127.0.0.1", self.port, 0.05)

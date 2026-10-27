@@ -70,10 +70,18 @@ class SpeechPortTest(unittest.TestCase):
         from robot.config import load_config
         from robot.services.speech import Speech
         cfg = load_config()
-        self.assertEqual(Speech.from_config(cfg).port, 8791)
+        self.assertEqual(Speech.from_config(cfg).port, cfg.ai_port)           # one port, the engine is chosen in the request
+        cfg.robot["ai_server"]["tts_port"] = 7899                      # a separate TTS server
+        self.assertEqual(Speech.from_config(cfg).port, 7899)
         self.assertEqual(cfg.ai_port, 7898)
-        cfg.robot["ai_server"]["tts_port"] = None                      # unset: back to the main port
-        self.assertEqual(Speech.from_config(cfg).port, cfg.ai_port)
+
+    def test_the_engine_is_sent_with_the_voice(self):
+        from robot.config import load_config
+        from robot.services.speech import Speech
+        speech = Speech.from_config(load_config())
+        self.assertEqual(speech.parameters(), {"voice": "af_heart", "engine": "kokoro"})
+        self.assertEqual(Speech("h", 1).parameters(), {"voice": "af_heart"})           # none chosen: the server's default
+        self.assertNotEqual(speech.cache_tag, Speech("h", 1, engine="indextts").cache_tag)
 
 
 if __name__ == "__main__":

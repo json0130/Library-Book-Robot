@@ -33,7 +33,10 @@ def format_entry(e: dict) -> str:
         return f"{head} ROBOT ({voice}): {e['text']}"
     if kind == "screen":
         key = {k: v for k, v in e["key"].items() if v not in (None, "", [], {})}
-        return f"{head} screen {e['view']} ({e['layout']}, {e['state_path']}) {_short(key)}"
+        mark = " [thinking]" if e.get("thinking") else ""
+        return f"{head} screen {e['view']} ({e['layout']}, {e['state_path']}){mark} {_short(key)}"
+    if kind == "thinking":
+        return f"{head} think  {'started: thinking face and progress bar' if e['phase'] == 'start' else 'ended, waited ' + str(e.get('ms')) + ' ms'}"
     if kind == "cmd":
         params = " ".join(f"{k}={v}" for k, v in e["params"].items())
         return f"{head} esp32  {e['cmd']} {params}".rstrip()
@@ -45,7 +48,8 @@ def format_entry(e: dict) -> str:
         if e["phase"] == "request":
             return f"{head} llm    request: {e['prompt'][:100]!r}"
         if e["phase"] == "reply":
-            return f"{head} llm    reply ({e['ms']} ms): {e['reply'][:100]!r}"
+            first = f", first byte {e['first_byte_ms']} ms (not streamed)" if e.get("first_byte_ms") is not None else ""
+            return f"{head} llm    reply ({e['ms']} ms{first}): {e['reply'][:100]!r}"
         if e["phase"] == "error":
             return f"{head} llm    ERROR ({e['ms']} ms): {e['error'][:100]}"
         return f"{head} llm    {e['method']}: reply {'USED' if e['phase'] == 'used' else 'DISCARDED, catalogue fallback'}"
@@ -72,7 +76,7 @@ def render_transcript(record: dict, scenario=None) -> str:
         lines.append(f"- tags: {', '.join(record['tags'])}")
     lines += ["", "## What the visitor chose (all from the seed)", ""]
     for c in record["choices"]:
-        extra = " (with typos)" if c.get("typos") else ""
+        extra = f" (with {c['variation'].replace('+', ' and ')})" if c.get("variation") else (" (with typos)" if c.get("typos") else "")
         lines.append(f"- step {c.get('step', '-')}: {c['type']}: {c['value']}{extra}")
     if not record["choices"]:
         lines.append("- nothing random in this run")

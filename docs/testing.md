@@ -32,7 +32,11 @@ python -m robot scenarios live --scenario return_book --zone quiet   # a human t
 - `--seed N` is the base seed. Every run gets its own seed (derived, recorded in `runs.jsonl` and at the top of its
   transcript). Everything random (which paraphrase, which book, typos, branches) comes from it, so
   `replay RUN_ID` repeats the same visitor exactly (with a real LLM the replies can still differ). `--typos P` sets the
-  chance of typos per `say` (default 0.2, `scenarios.typo_probability` in `config/robot.yaml`).
+  chance of typing mistakes per `say` (default 0.05, `scenarios.typo_probability` in `config/robot.yaml`); `--speech P`
+  the chance of speech-recognition style changes (default 0.3, `scenarios.speech_probability`): a homophone ("wear is
+  the science section"), a lost short word, two words run together ("sci" "fi" to "scifi"), a filler ("um", "uh"). The
+  list is `config/speech_errors.yaml`; edit it to add the mistakes your recogniser really makes. Both are chosen from the
+  run's seed, and the transcript says which variation a `say` got.
 - The runs use the robot settings in `scenarios.robot_overrides` (auto-return on, timeouts on), because `config/robot.yaml`
   has them off for manual tests.
 
@@ -82,10 +86,21 @@ make an expectation apply only to some runs. A wrong file is reported with the f
 
 Generic (every run): no exceptions or ERROR logs; no stuck state (every `wait until_state` resolved, the run ended in
 IDLE); in the quiet zone no chime and no normal-voice speech before the visitor spoke; the screen updates before or at
-the first spoken sentence of each reaction; first screen update and first sentence within the latency limits
-(`scenarios.latency`: 500 ms and 3 s, real time); no "Sorry, I can't answer" for `answerable` questions; an honest
+the first spoken sentence of each reaction; **first feedback** (a screen update or the thinking indication) within
+500 ms and the **first content sentence** within 1 s for a deterministic or catalogue answer, 6 s for one that waited for
+the LLM (`scenarios.latency`: `first_feedback_ms`, `first_sentence_ms`, `first_sentence_llm_ms`; real time; the spoken
+"Let me check." filler is feedback, not the first content sentence); no "Sorry, I can't answer" for `answerable` questions; an honest
 "I don't know" for `unanswerable` ones; every `tap` found its button. Then the scenario's own `expect:` items. Each
 result has a name, pass or fail and a reason pointing at the transcript line (`L042`).
+
+## What the harness found, and what was done about it
+
+The first batches (`mock-batch`, `real-batch`) found: questions asked in other words fell through to the LLM or to a
+"Sorry"; the same question was re-asked again and again; a slow LLM call left the screen and face unchanged; some replies
+were spoken before the screen changed; timeouts ran while the robot spoke or waited for the LLM. Each is now handled in
+the robot, not in the harness: an intent router with fuzzy matching in front of the LLM (`robot/core/intents.py`), a
+repair step after two misses in a row, thinking feedback, screen-before-speech everywhere, and timeouts that wait while
+the robot speaks or thinks. See [architecture.md](architecture.md#understanding-and-feedback).
 
 ## What a run records
 

@@ -208,6 +208,7 @@ class HelloOnArrivalTest(unittest.TestCase):
     def test_an_engaged_face_makes_the_robot_say_hello_and_leaving_ends_the_visit(self):
         cfg = load_config()
         cfg.robot.setdefault("books", {})["online_fallback"] = False
+        cfg.robot.setdefault("screen", {})["greeting_hold_s"] = 0
         app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
                         persist_storage=False)
         sim = Sim(app, io.StringIO())

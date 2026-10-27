@@ -14,9 +14,11 @@ from __future__ import annotations
 import base64
 import logging
 import shutil
+import socket
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from vendor.ai_server import stt, tts
 from vendor.ai_server.llm import request
@@ -48,9 +50,10 @@ def shape_voice(wav: bytes, deepen: float = 1.0, pace: float = 1.0) -> bytes:
 
 class Speech:
     def __init__(self, host: str, port: int = 7898, voice: str = "af_heart", timeout: float = 300,
-                 deepen: float = 1.0, pace: float = 1.0):
+                 deepen: float = 1.0, pace: float = 1.0, engine: Optional[str] = None):
         self.host, self.port, self.voice, self.timeout = host, port, voice, timeout
         self.deepen, self.pace = deepen, pace
+        self.engine = engine                # "kokoro" (fast) or "indextts" (slow); None: the server's default
 
     @classmethod
     def from_config(cls, cfg) -> "Speech":
@@ -58,11 +61,28 @@ class Speech:
         port = cfg.robot["ai_server"].get("tts_port") or cfg.ai_port         # TTS may be on its own port
         return cls(cfg.ai_host, int(port), voice.get("tts_voice", "af_heart"),
                    float(cfg.robot["ai_server"].get("timeout_s", 300)), float(voice.get("deepen", 1.0)),
-                   float(voice.get("pace", 1.0)))
+                   float(voice.get("pace", 1.0)), voice.get("tts_engine") or None)
+
+    @property
+    def cache_tag(self) -> str:
+        return f"{self.host}:{self.port}|{self.engine}|{self.voice}|{self.deepen}|{self.pace}"
+
+    def check(self, timeout: float = 2.0) -> Optional[str]:
+        """None if the text-to-speech server accepts a connection, else a sentence saying why not."""
+        try:
+            socket.create_connection((self.host, self.port), timeout=timeout).close()
+        except OSError as exc:
+            return (f"the text-to-speech server at {self.host}:{self.port} is not reachable ({exc.__class__.__name__}): "
+                    "the robot will only show what it says. Start the TTS server there, or fix `ai_server.tts_port` in config/robot.yaml")
+        return None
+
+    def parameters(self) -> dict:
+        """The TTS request's parameters: the voice, and the engine when one is chosen (the server offers both on one port)."""
+        return {"voice": self.voice, **({"engine": self.engine} if self.engine else {})}
 
     def synthesize(self, text: str) -> bytes:
         """Text -> WAV bytes. Raises OSError/EOFError (connection) or ValueError (bad response)."""
-        response = request(self.host, self.port, "TTS", {"voice": self.voice}, text, timeout=self.timeout)
+        response = request(self.host, self.port, "TTS", self.parameters(), text, timeout=self.timeout)
         raw, _ = tts.validate_wav(response.get("content"), response["parameters"])
         return shape_voice(raw, self.deepen, self.pace)
 

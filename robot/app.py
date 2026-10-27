@@ -27,7 +27,7 @@ from robot.actuation.printer import Printer
 from robot.actuation.storage_ring import DEFAULT_SLOTS, StorageRing
 from robot.actuation.voice import Voice
 from robot.bus import Bus
-from robot.config import Config
+from robot.config import ROOT, Config
 from robot.core.context import Context, NoiseThresholds, derive_context, resolve_area
 from robot.core.dialogue import Dialogue, Settings
 from robot.core.screen import VIEWS, ScreenComposer
@@ -293,7 +293,8 @@ def build_app(cfg: Config, drivers: Drivers, face: Optional[FaceDisplay] = None,
     voice_cfg = cfg.robot.get("voice", {})
     actuators = Actuators(
         voice=Voice(drivers.audio, speech.synthesize if speech else None, face,
-                    float(voice_cfg.get("whisper_volume", 0.35))),
+                    float(voice_cfg.get("whisper_volume", 0.35)),
+                    ROOT / "data" / "tts_cache" if speech else None, speech.cache_tag if speech else ""),
         face=face, lights=Lights(drivers.esp32), neck=Neck(drivers.esp32),
         ring=StorageRing(drivers.esp32, slots=int(cfg.storage.get("slots") or DEFAULT_SLOTS)), printer=Printer(drivers.esp32), nav=Navigation(drivers.esp32),
         pad=Pad(drivers.esp32))

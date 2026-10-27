@@ -114,8 +114,52 @@ class VariantsTest(unittest.TestCase):
         always = [choose_words(options, random.Random(s), 1.0)[2] for s in range(30)]
         self.assertFalse(any(never))
         self.assertTrue(all(always))
-        some = sum(choose_words(options, random.Random(s), 0.2)[2] for s in range(500))
+        some = sum(bool(choose_words(options, random.Random(s), 0.2)[2]) for s in range(500))
         self.assertTrue(60 < some < 140)
+
+    def test_speech_variation_is_seeded_and_changes_the_words(self):
+        options = ["where is the science section please"]
+        runs = [[choose_words(options, random.Random(seed), 0.0, 1.0) for _ in range(4)] for seed in (3, 3, 4)]
+        self.assertEqual(runs[0], runs[1])
+        self.assertNotEqual(runs[0], runs[2])
+        texts = {choose_words(options, random.Random(s), 0.0, 1.0)[0] for s in range(40)}
+        self.assertNotIn(options[0], texts)
+        self.assertGreater(len(texts), 5)
+        for _, base, kind in (choose_words(options, random.Random(s), 0.0, 1.0) for s in range(10)):
+            self.assertEqual(kind, "speech")
+            self.assertEqual(base, options[0])
+
+    def test_speech_variation_covers_homophones_dropped_words_merges_and_fillers(self):
+        from robot.scenarios.variants import load_speech_errors, speechify
+        errors = load_speech_errors()
+        self.assertTrue(errors["homophones"] and errors["drop_words"] and errors["merge_pairs"] and errors["fillers"])
+        seen = set()
+        for seed in range(300):
+            out = speechify("where is the sci fi section", random.Random(seed), errors)
+            words = out.split()
+            if "wear" in words or "were" in words:
+                seen.add("homophone")
+            if "the" not in words:
+                seen.add("drop")
+            if "scifi" in words:
+                seen.add("merge")
+            if words[0] in errors["fillers"] or any(w in errors["fillers"] for w in words):
+                seen.add("filler")
+        self.assertEqual(seen, {"homophone", "drop", "merge", "filler"})
+
+    def test_speech_errors_file_is_editable_and_missing_file_is_harmless(self):
+        from robot.scenarios.variants import load_speech_errors
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "e.yaml"
+            path.write_text("fillers: [uh]\nhomophones: {where: [ware]}\n")
+            errors = load_speech_errors(path)
+            self.assertEqual(errors["fillers"], ["uh"])
+            self.assertEqual(errors["homophones"], {"where": ["ware"]})
+            self.assertEqual(load_speech_errors(Path(d) / "missing.yaml")["fillers"], [])
+
+    def test_default_typo_probability_is_five_percent(self):
+        from robot.config import load_config
+        self.assertEqual(load_config().scenarios["typo_probability"], 0.05)
 
     def test_placeholders_are_filled_before_typos(self):
         text, base, _ = choose_words(["tell me about {title}"], random.Random(1), 0.0, title="Dune")
@@ -181,7 +225,8 @@ class ReplayTest(unittest.TestCase):
 
     def play(self, name, zone, seed, typos=0.5):
         s = load_all()[name]
-        return asyncio.run(runner.play(s, zone, seed, f"{name}-{zone}-001", load_config(), NONE_LLM, 40, typos))
+        return asyncio.run(runner.play(s, zone, seed, f"{name}-{zone}-001", load_config(), NONE_LLM, 40, typos,
+                                          speech_probability=0.0))
 
     def test_the_same_seed_replays_the_same_choices_and_state_path(self):
         a = self.play("return_book", "common", 4242)
@@ -228,7 +273,8 @@ def entry(n, kind, t=0.0, rt=None, **fields):
 def run_of(timeline, zone="common", **extra):
     base = {"run_id": "r-1", "scenario": "t", "zone": zone, "seed": 1, "speed": 1, "llm": "none", "tags": [], "choices": [],
             "final_state": "IDLE", "stuck": [], "error": None, "storage": 0, "timeline": timeline, "events": [],
-            "thresholds": {"first_screen_ms": 500, "first_sentence_ms": 3000}, "catalogue_titles": ["Dune"]}
+            "thresholds": {"first_feedback_ms": 500, "first_sentence_ms": 1000, "first_sentence_llm_ms": 6000},
+            "catalogue_titles": ["Dune"]}
     base.update(extra)
     return base
 
@@ -288,13 +334,34 @@ class GenericChecksTest(unittest.TestCase):
         self.assertTrue(all(r.passed for r in C.latency(fast)))
         slow_screen = run_of([step(1, rt=1.0), screen(2, rt=1.9), said(3, rt=2.0)])
         results = {r.name: r for r in C.latency(slow_screen)}
-        self.assertFalse(results["latency_first_screen"].passed)
-        self.assertIn("900 ms", results["latency_first_screen"].reason)
+        self.assertFalse(results["latency_first_feedback"].passed)
+        self.assertIn("900 ms", results["latency_first_feedback"].reason)
         self.assertTrue(results["latency_first_sentence"].passed)
-        slow_speech = run_of([step(1, rt=1.0), screen(2, rt=1.1), said(3, rt=5.0)])
+        slow_speech = run_of([step(1, rt=1.0), screen(2, rt=1.1), said(3, rt=2.5)])
         self.assertFalse({r.name: r for r in C.latency(slow_speech)}["latency_first_sentence"].passed)
-        loose = run_of([step(1, rt=1.0), screen(2, rt=1.9)], thresholds={"first_screen_ms": 2000, "first_sentence_ms": 3000})
+        loose = run_of([step(1, rt=1.0), screen(2, rt=1.9), said(3, rt=2.5)],
+                       thresholds={"first_feedback_ms": 2000, "first_sentence_ms": 3000})
         self.assertTrue(all(r.passed for r in C.latency(loose)))
+
+    def test_thinking_counts_as_first_feedback(self):
+        run = run_of([step(1, rt=1.0), entry(2, "thinking", rt=1.1, phase="start"), entry(3, "llm", rt=1.1, phase="request"),
+                      screen(4, rt=4.0), said(5, rt=4.2)])
+        self.assertTrue({r.name: r for r in C.latency(run)}["latency_first_feedback"].passed)
+
+    def test_an_answer_that_waited_for_the_llm_gets_the_longer_limit(self):
+        waited = run_of([step(1, rt=1.0), screen(2, rt=1.1), entry(3, "llm", rt=1.1, phase="request"), said(4, rt=5.0)])
+        results = {r.name: r for r in C.latency(waited)}
+        self.assertTrue(results["latency_first_sentence"].passed)
+        self.assertIn("waited for the LLM", results["latency_first_sentence"].reason)
+        too_slow = run_of([step(1, rt=1.0), screen(2, rt=1.1), entry(3, "llm", rt=1.1, phase="request"), said(4, rt=8.0)])
+        self.assertFalse({r.name: r for r in C.latency(too_slow)}["latency_first_sentence"].passed)
+
+    def test_the_spoken_filler_is_not_the_first_content_sentence(self):
+        run = run_of([step(1, rt=1.0), entry(2, "thinking", rt=1.1, phase="start"), entry(3, "llm", rt=1.1, phase="request"),
+                      said(4, "Let me check.", rt=2.6), said(5, "It is about whales.", rt=7.5)])
+        results = {r.name: r for r in C.latency(run)}
+        self.assertFalse(results["latency_first_sentence"].passed)
+        self.assertIn("6000", results["latency_first_sentence"].reason)
 
     def test_no_needless_sorry(self):
         self.assertIsNone(C.no_needless_sorry(run_of([step(1), said(2, "Sorry")])))     # not marked answerable
@@ -502,7 +569,8 @@ class RunnerBehaviourTest(unittest.TestCase):
 
     def play(self, steps, zone="common", setup=None, typos=0.0, seed=1):
         s = scenario(steps=steps, setup=setup or {}, expect=[])
-        return asyncio.run(runner.play(s, zone, seed, "t-1", load_config(), NONE_LLM, 40, typos))
+        return asyncio.run(runner.play(s, zone, seed, "t-1", load_config(), NONE_LLM, 40, typos,
+                                          speech_probability=0.0))
 
     def test_a_missing_button_is_reported_not_crashed(self):
         run = self.play(["engage", {"tap": "No Such Button"}, {"wait": 0.1}])
@@ -542,7 +610,7 @@ class RunnerBehaviourTest(unittest.TestCase):
     def test_paraphrases_are_recorded_with_typos(self):
         run = self.play(["engage", {"say": ["where is the history section please"]}], typos=1.0)
         said_step = next(e for e in run["timeline"] if e["kind"] == "step" and e.get("text"))
-        self.assertTrue(said_step["typos"])
+        self.assertEqual(said_step["variation"], "typos")
         self.assertNotEqual(said_step["text"], said_step["paraphrase"])
 
 

@@ -44,10 +44,65 @@ def add_typos(text: str, rng: random.Random, max_typos: int = 2) -> str:
     return " ".join(words)
 
 
-def choose_words(options, rng: random.Random, typo_probability: float, **names) -> tuple:
-    """(text the visitor types, the paraphrase it came from, whether typos were added). `{title}`-style placeholders in
-    the paraphrase are filled from `names` first."""
+def load_speech_errors(path=None) -> dict:
+    """config/speech_errors.yaml: homophones, drop_words, merge_pairs, fillers (empty lists if the file is missing)."""
+    import yaml
+    from robot.config import ROOT
+    path = path or ROOT / "config" / "speech_errors.yaml"
+    try:
+        data = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    except OSError:
+        data = {}
+    return {"homophones": data.get("homophones") or {}, "drop_words": data.get("drop_words") or [],
+            "merge_pairs": data.get("merge_pairs") or [], "fillers": data.get("fillers") or []}
+
+
+def speechify(text: str, rng: random.Random, errors: dict) -> str:
+    """The words the way speech recognition might hear them: a homophone, a lost short word, two words run together,
+    and a filler ("um") at the start or middle. One or two kinds of change, whatever there is to change."""
+    words = text.split(" ")
+
+    def homophones():
+        return [i for i, w in enumerate(words) if w.lower().strip("?.,!") in errors["homophones"]]
+
+    def droppable():
+        return [i for i, w in enumerate(words) if i > 0 and w.lower() in errors["drop_words"]] if len(words) > 3 else []
+
+    def merges():
+        return [i for i in range(len(words) - 1) if [words[i].lower(), words[i + 1].lower()] in errors["merge_pairs"]]
+
+    kinds = [k for k, found in (("homophone", homophones()), ("drop", droppable()), ("merge", merges()),
+                                ("filler", errors["fillers"])) if found]
+    for kind in rng.sample(kinds, min(len(kinds), rng.randint(1, 2))):
+        if kind == "homophone" and homophones():
+            i = rng.choice(homophones())
+            word = words[i].strip("?.,!")
+            words[i] = words[i].replace(word, pick(errors["homophones"][word.lower()], rng))
+        elif kind == "drop" and droppable():
+            words.pop(rng.choice(droppable()))
+        elif kind == "merge" and merges():
+            i = rng.choice(merges())
+            words[i:i + 2] = [words[i] + words[i + 1]]
+        elif kind == "filler":
+            words.insert(0 if rng.random() < 0.6 else rng.randrange(len(words)), pick(errors["fillers"], rng))
+    return " ".join(words)
+
+
+_ERRORS: dict = {}
+
+
+def choose_words(options, rng: random.Random, typo_probability: float, speech_probability: float = 0.0, **names) -> tuple:
+    """(text the visitor types or says, the paraphrase it came from, a description of the variation: "" / "typos" /
+    "speech" / "typos+speech"). `{title}`-style placeholders in the paraphrase are filled from `names` first."""
     base = pick(options, rng)
     text = base.format(**names) if names else base
-    typed = rng.random() < typo_probability
-    return (add_typos(text, rng) if typed else text), base, typed
+    kinds = []
+    if rng.random() < typo_probability:
+        text = add_typos(text, rng)
+        kinds.append("typos")
+    if speech_probability and rng.random() < speech_probability:
+        if not _ERRORS:
+            _ERRORS.update(load_speech_errors())
+        text = speechify(text, rng, _ERRORS)
+        kinds.append("speech")
+    return text, base, "+".join(kinds)

@@ -30,6 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--seed", type=int, default=1, help="base seed; every run's own seed is derived from it and recorded")
     run.add_argument("--speed", type=float, default=10.0, help="run the robot's own timers this many times faster (default 10)")
     run.add_argument("--typos", type=float, default=None, help="chance that a `say` step gets typos (default scenarios.typo_probability)")
+    run.add_argument("--speech", type=float, default=None,
+                     help="chance that a `say` step gets speech-recognition style changes (default scenarios.speech_probability)")
     run.add_argument("--out", type=Path, default=None, help="output directory (default data/eval_runs/<timestamp>)")
     rep = sub.add_parser("report", help="write summary.md and review.csv for a run directory")
     rep.add_argument("directory", type=Path)
@@ -123,7 +125,8 @@ def run_command(args, scenarios: dict, cfg) -> int:
     with ExitStack() as stack:
         llm = llm_target(args.llm, cfg, stack)
         started = time.time()
-        records = asyncio.run(runner.run_batch(plan, cfg, llm, args.speed, args.typos, out_dir))
+        records = asyncio.run(runner.run_batch(plan, cfg, llm, args.speed, args.typos, out_dir,
+                                                 speech_probability=args.speech))
     summary, review = report_module.write_report(out_dir)
     failed = [r for r in records if not r["passed"]]
     print(f"\n{len(records) - len(failed)}/{len(records)} runs passed in {time.time() - started:.0f} s.\n"
@@ -144,7 +147,7 @@ def replay_command(args, scenarios: dict, cfg) -> int:
     with ExitStack() as stack:
         llm = llm_target(mode, cfg, stack) if mode in ("real", "mock") else ("none", None, "none")
         new = asyncio.run(runner.play(scenario, old["zone"], old["seed"], args.run_id, cfg, llm, old["speed"],
-                                      old.get("typo_probability")))
+                                      old.get("typo_probability"), speech_probability=old.get("speech_probability", 0.0)))
     out_dir = runner.new_run_dir()
     out_dir.mkdir(parents=True)
     import json

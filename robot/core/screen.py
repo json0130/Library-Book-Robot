@@ -27,7 +27,7 @@ import urllib.parse
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional
 
-from robot.events import (BookFocused, BookIdentified, BookPlaced, ChoicesOffered, LocationResolved,
+from robot.events import (ThinkingEnded, ThinkingStarted, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, LocationResolved,
                           NavigationRequested, RecommendationsReady, ReturningProgress, ScreenUpdate, StateEntered,
                           StoringBook, UserChoice, UserUtterance)
 
@@ -211,6 +211,8 @@ class ScreenComposer:
         self.get_style, self.state_of, self.clock = get_style, state_of, clock
         self.path, self.zone, self.text, self.options, self.title = "IDLE", "common", "", (), ""
         self.choices: tuple = ()
+        self.repair = False
+        self.thinking = False
         self.content: Optional[tuple] = None          # (view, payload) for the current content
         self.until: Optional[float] = None            # when the content goes back to the face
         self.book: Optional[BookIdentified] = None    # the book on the pad this visit
@@ -229,6 +231,8 @@ class ScreenComposer:
         bus.subscribe(StoringBook, self.on_storing)
         bus.subscribe(ReturningProgress, self.on_progress)
         bus.subscribe(NavigationRequested, self.on_navigation)
+        bus.subscribe(ThinkingStarted, self.on_thinking)
+        bus.subscribe(ThinkingEnded, self.on_thinking)
         for kind in (UserUtterance, UserChoice, BookPlaced):
             bus.subscribe(kind, self.on_interaction)
 
@@ -256,7 +260,9 @@ class ScreenComposer:
         self.path, self.zone, self.text = event.state_path, event.zone, event.text
         self.options, self.title = tuple(event.options), event.title
         self.choices = tuple(event.choices or event.options)
+        self.repair = event.repair
         leaf = self.leaf
+        self.thinking = False
         if leaf in ("IDLE", "GREET") or (leaf == "FAREWELL"):
             self.content, self.until, self.book, self.storing = None, None, None, None
         if leaf in ("SCAN", "AWAIT_BOOK"):
@@ -302,6 +308,11 @@ class ScreenComposer:
 
     async def on_choices(self, event: ChoicesOffered) -> None:
         self.set_content("options", OptionsPayload(event.prompt, [dict(c) for c in event.choices]))
+        await self.show()
+
+    async def on_thinking(self, event) -> None:
+        """The LLM is being asked (or has answered): the screen shows a progress indicator in both zones."""
+        self.thinking = isinstance(event, ThinkingStarted)
         await self.show()
 
     async def on_storing(self, event: StoringBook) -> None:
@@ -394,6 +405,8 @@ class ScreenComposer:
             card = self.book_card(self.storing.isbn) or BookCardPayload(self.storing.isbn, self.storing.title)
             card.badge, card.buttons = f"Storage slot {self.storing.slot}", []
             return "book_card", card
+        if self.repair and self.choices and leaf in ("OFFER", "AWAIT_BOOK", "ANYTHING_ELSE"):
+            return "options", OptionsPayload(self.text if self.zone == "quiet" else "You can tap:", [dict(o) for o in self.choices])
         if self.content is not None:
             return self.content
         if self.choices and (leaf in ("OFFER", "ANYTHING_ELSE") or (leaf == "AWAIT_BOOK" and self.touch())):
@@ -409,7 +422,7 @@ class ScreenComposer:
         content = view != "face"
         update = ScreenUpdate(self.path, self.zone, "split" if content else "full_face", self.title,
                               self.text, tuple(self.options), view, payload.to_json(),
-                              self.ttl() if content else None)
+                              self.ttl() if content else None, self.thinking)
         self.current = update
         log.debug("[screen] %s %s", update.state_path, view)
         if self.publish is not None:

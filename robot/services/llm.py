@@ -6,10 +6,15 @@ only builds the prompt, wraps errors and cuts the reply into sentences for speec
 
 from __future__ import annotations
 
+import logging
 import socket
+import time
+import uuid
 
 from robot.persona import NAME
-from vendor.ai_server.llm import ask
+from vendor.ai_server.llm import ask, receive_json, send_json, validate_llm_request
+
+log = logging.getLogger("robot.llm")
 
 # Who the model is. Shared by the chat test tool and the book dialogue (robot/services/book_llm.py).
 LIBRARY_SYSTEM_PROMPT = (
@@ -83,11 +88,53 @@ class SentenceSplitter:
         return bool(words) and words[-1].lower() in ABBREVIATIONS
 
 
+class _FirstByte:
+    """A socket that notes when the first byte of the answer arrives (everything else is passed through)."""
+
+    def __init__(self, sock):
+        self._sock, self.first = sock, None
+
+    def recv(self, size):
+        data = self._sock.recv(size)
+        if data and self.first is None:
+            self.first = time.perf_counter()
+        return data
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+
+def timed_ask(host: str, port: int, prompt: str, timeout: float = 300.0) -> tuple:
+    """(reply text, {"first_byte_ms", "total_ms", "bytes"}): the AI server's `ask` with the time to the first byte of the
+    answer measured. The protocol sends the whole reply as one message after the model has finished (nothing arrives while
+    it generates), so first byte and total are close: this measures that rather than assuming it."""
+    message = dict(robot_id=socket.gethostname(), request_id=str(uuid.uuid4()), command=["LLM"], parameters={}, content=prompt)
+    validate_llm_request(message)
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        send_json(sock, message)
+        sent = time.perf_counter()
+        probe = _FirstByte(sock)
+        response = receive_json(probe)
+        done = time.perf_counter()
+    for key in ("robot_id", "request_id"):
+        if response.get(key) != message[key]:
+            raise ValueError(f"Response {key} does not match the request")
+    if response.get("command") == ["ERR"]:
+        raise ValueError(f"Server error: {response.get('content')}")
+    content = response.get("content")
+    if response.get("command") != [] or not isinstance(content, str):
+        raise ValueError("Server returned an incomplete LLM response")
+    first = probe.first if probe.first is not None else done
+    return content, {"first_byte_ms": round((first - sent) * 1000), "total_ms": round((done - sent) * 1000),
+                     "bytes": len(content.encode("utf-8"))}
+
+
 class LLMClient:
     def __init__(self, host: str, port: int = 7898, timeout: float = 300.0) -> None:
         self.host = host
         self.port = port
         self.timeout = timeout
+        self.last_timing: dict = {}                   # first_byte_ms / total_ms of the latest chat(), for the logs
 
     def check(self) -> None:
         """Open and close a connection to confirm the server is listening."""
@@ -99,7 +146,10 @@ class LLMClient:
     def chat(self, messages: list[dict]) -> str:
         """Send a conversation and return the reply text."""
         try:
-            return ask(self.host, self.port, to_prompt(messages), timeout=self.timeout)
+            reply, self.last_timing = timed_ask(self.host, self.port, to_prompt(messages), self.timeout)
+            log.info("[llm] first byte after %d ms, whole reply after %d ms (%d bytes, sent as one message: not streamed)",
+                     self.last_timing["first_byte_ms"], self.last_timing["total_ms"], self.last_timing["bytes"])
+            return reply
         except (OSError, EOFError) as exc:
             raise LLMError(self._unreachable_message(exc)) from exc
         except ValueError as exc:

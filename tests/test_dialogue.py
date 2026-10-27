@@ -51,7 +51,8 @@ class StubClient:
 
 def make_app(log_dir=None, llm=None, finder=None):
     cfg = load_config()
-    cfg.robot.setdefault("books", {})["online_fallback"] = False      # tests never touch the network
+    cfg.robot.setdefault("books", {})["online_fallback"] = False
+    cfg.robot.setdefault("screen", {})["greeting_hold_s"] = 0      # tests never touch the network
     assistant = BookAssistant(llm) if llm is not None else None
     app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
                     assistant=assistant, finder=finder, persist_storage=False)

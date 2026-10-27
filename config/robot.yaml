@@ -1,25 +1,39 @@
 # Robot settings. Environment variables AI_HOST / AI_PORT override the AI server address.
 
 ai_server:
-  host: 172.24.47.255
+  host: 172.24.30.251
   port: 7898
   timeout_s: 300          # LLM/TTS requests can be slow on a busy server
   llm_timeout_s: 20       # book explanations/recommendations: if the LLM is slower, use the catalogue text
-  tts_port: 8791          # text-to-speech (IndexTTS) is on its own port; the older orchestrator on `port` (Kokoro) fails. null = use `port`
+  tts_port: null          # null = the main port; the server offers both TTS engines there (set a number only for a separate TTS server)
+
+intents:                  # the intent router in front of the LLM (robot/core/intents.py)
+  word_similarity: 0.8    # how alike two words must be to count as the same word (typos, speech-recognition slips)
+  short_word_similarity: 0.85   # stricter for words of up to four letters (one- and two-letter words must be exact)
+  min_confidence: 0.7     # below this a match is not acted on and the LLM is asked instead
+  ambiguity_margin: 0.15  # two places closer than this (the History section vs "A Brief History of Time"): ask which
+  repair_after: 2         # utterances in a row not understood in one state, then show the choices as buttons ("I'm done" always)
+  thinking_ack_s: 1.5     # common zone: say "Let me check." if the LLM has not answered after this many seconds
 
 scenarios:                # the scenario test harness: python -m robot scenarios ... (docs/testing.md)
-  typo_probability: 0.2   # chance that a `say` step gets realistic typos
+  typo_probability: 0.05  # chance that a `say` step gets realistic typos
+  speech_probability: 0.3 # chance that a `say` step gets speech-recognition style changes (the list is config/speech_errors.yaml)
   think_s: 0.8            # robot-seconds the pretend visitor waits after the robot has finished, before the next step
   run_timeout_s: 240      # real seconds before a run is stopped and marked as stuck
-  latency: {first_screen_ms: 500, first_sentence_ms: 3000}   # thresholds for the latency checks (real time)
+  latency:                # thresholds for the latency checks (real milliseconds)
+    first_feedback_ms: 500      # a screen update or the thinking indication
+    first_sentence_ms: 1000     # first content sentence of a deterministic / catalogue answer
+    first_sentence_llm_ms: 6000 # ...of an answer that waited for the LLM
   robot_overrides:        # robot settings used in the runs (above: auto-return and the timeouts are off for manual tests)
     returning: {auto_start: true}
     timeouts: {enabled: true}
+    screen: {greeting_hold_s: 0}            # the runs do not wait for the hello to be read
 
 screen:                   # what the robot's screen shows next to its face (robot/core/screen.py)
   content_ttl_s: {quiet: 30, common: 15}    # a book card, list or map stays this long after the last interaction, then
                                             # the face comes back (a quiet zone reads; a common area mostly listens)
   summary_chars: {quiet: 180, common: 110}  # how much of a summary the book card shows
+  greeting_hold_s: 2.5                      # the hello stays on the full face at least this long (spoken or not), then the options appear
 
 display:                  # the face page served by `python -m display.server`
   host: 127.0.0.1         # where the robot reaches it
@@ -112,7 +126,8 @@ perception:               # face detection for `python -m robot sim --faces`
   leave_after_s: 8        # how long a face must stay missing before the person counts as gone (looking down at a book is not leaving)
 
 voice:
-  tts_voice: af_heart     # the AI server's only TTS voice today (a woman's)
+  tts_engine: kokoro      # kokoro = fast (under 2 s a sentence); indextts = slower (4-30 s a sentence) and a different voice
+  tts_voice: af_heart     # the voice name (a woman's)
   pace: 1.12              # speak this much faster (sox tempo, same pitch): Stuart is energetic. 1.0 = normal
   deepen: 1.0             # lower the pitch with sox: 0.8 is ~4 semitones down, 1.0 = off (it didn't sound right on af_heart)
   whisper_volume: 0.35    # playback volume multipliers per voice style

@@ -20,6 +20,7 @@ MARTIAN = "9780553418026"
 def make_sim(drivers=None):
     cfg = load_config()
     cfg.robot.setdefault("books", {})["online_fallback"] = False
+    cfg.robot.setdefault("screen", {})["greeting_hold_s"] = 0
     app = build_app(cfg, drivers or fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
                     persist_storage=False)
     out = io.StringIO()
@@ -232,6 +233,32 @@ class SentenceBySentenceTest(unittest.TestCase):
         self.assertEqual(made, ["Hello!", "My name is Stuart."])
         voice.say("Hello! My name is Stuart.", self.style)
         self.assertEqual(len(made), 2)                                   # spoken from the cache: no new request
+
+    def test_a_long_first_sentence_is_cut_at_its_first_comma_so_the_first_words_come_sooner(self):
+        made = []
+        voice = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None)
+        voice.say("I can take back a book, tell you about one, recommend something, or show you where a topic is. What would you like?",
+                  self.style)
+        self.assertEqual(made[0], "I can take back a book,")
+        self.assertEqual(made[1], "tell you about one, recommend something, or show you where a topic is.")
+        self.assertEqual(made[2], "What would you like?")
+        made.clear()
+        voice.say("Short one, with a comma. And another.", self.style)
+        self.assertEqual(made, ["Short one, with a comma.", "And another."])          # short sentences are left alone
+
+    def test_the_fixed_lines_are_kept_on_disk_and_survive_a_restart(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            made = []
+            first = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None, cache_dir=d, cache_tag="a")
+            first.prepare(["Hello! My name is Stuart."])
+            self.assertEqual(len(made), 2)
+            again = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None, cache_dir=d, cache_tag="a")
+            again.say("Hello! My name is Stuart.", self.style)
+            self.assertEqual(len(made), 2)                                # read from disk, not asked of the server
+            other = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None, cache_dir=d, cache_tag="b voice")
+            other.say("Hello!", self.style)
+            self.assertEqual(len(made), 3)                                # a different voice does not reuse it
 
     def test_a_failure_part_way_stops_the_reply_without_raising(self):
         def synth(text):

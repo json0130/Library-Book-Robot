@@ -19,7 +19,7 @@ steps:
       - name: way_by_voice
         steps:
           - say: ["show me the way", "guide me there"]
-  - say: ["that's all, thanks", "I'm done"]
+  - say: ["that's all, thanks", "I'm done", "that's all thanks"]
   - wait: {until_state: IDLE, timeout: 60}
 expect:
   - {views: [book_list, book_card, directions]}
