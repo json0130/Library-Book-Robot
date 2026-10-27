@@ -1,0 +1,8 @@
+# SAMPLE curated links for development and testing: hand-made connections between books that the subjects
+# and text alone wouldn't find. docs/catalog.md explains the columns.
+# relation: series_next (to_isbn comes right after from_isbn), librarian_pick (read this next) or related.
+from_isbn,to_isbn,relation,note
+9780553294385,9780553293357,series_next,"Asimov's robots lead into the Foundation story"
+9780345539434,9780553380163,librarian_pick,"After Cosmos, go deeper into the physics of the universe"
+9780451524935,9780141439471,related,"Both warn about power that nobody checks"
+9780553418026,9780345391803,related,"Funny, clever adventures in space"

@@ -1,0 +1,16 @@
+# Library zones. The map zone comes from where the robot is; a noise reading can override it.
+
+default_zone: common
+
+map:                     # named areas -> zone
+  reading_room: quiet
+  silent_study: quiet
+  foyer: common
+  group_study: common
+  help_desk: common
+
+noise:
+  # Hysteresis: at or above common_above_db the area counts as common, at or below
+  # quiet_below_db it counts as quiet, and in between the map zone stands.
+  quiet_below_db: 45
+  common_above_db: 60

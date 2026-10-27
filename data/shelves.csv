@@ -1,0 +1,12 @@
+# SAMPLE shelves for development and testing. One row per shelf; docs/catalog.md explains the columns.
+# map_x, map_y (metres) and map_yaw (radians) are the pose the robot drives to when it guides a visitor, in
+# the map of that shelf's floor. Every pose below is a PLACEHOLDER (see the description) until the real
+# map is surveyed; the shelf, section, floor and zone are the sample library's invented layout.
+shelf,section,floor,zone,map_x,map_y,map_yaw,description
+1-FIC-A,Fiction,1,common,2.0,1.5,0.00,"Fiction, authors A-Z. TODO: placeholder pose, survey the real one."
+2-SF-A,Science Fiction,2,common,1.0,2.0,1.57,"Science fiction, authors A-F. TODO: placeholder pose, survey the real one."
+2-SF-B,Science Fiction,2,common,1.0,4.0,1.57,"Science fiction, authors G-O. TODO: placeholder pose, survey the real one."
+2-SF-C,Science Fiction,2,common,1.0,6.0,1.57,"Science fiction, authors P-Z. TODO: placeholder pose, survey the real one."
+3-SCI-A,Science,3,quiet,4.0,1.0,3.14,"Astronomy and physics. TODO: placeholder pose, survey the real one."
+3-HIS-A,History,3,quiet,6.0,1.0,3.14,"World history. TODO: placeholder pose, survey the real one."
+3-COM-A,Computing,3,quiet,8.0,1.0,3.14,"Computing and programming. TODO: placeholder pose, survey the real one."

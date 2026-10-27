@@ -1,0 +1,96 @@
+# SAMPLE vocabulary for development and testing; extend it as you add books (docs/catalog.md explains it).
+#
+# Each topic is a canonical name with optional:
+#   aliases:     other words and spellings that mean the same thing; a subject in catalog.csv that matches
+#                an alias (ignoring case, hyphens and spaces) becomes this topic
+#   broader:     the more general topic it belongs under (one name, or a list); "astronomy" falls under "science"
+#   description: a note for you, never used by the robot
+# Subjects that match nothing here are kept as they are but listed by `python tools/catalog_check.py`.
+
+science:
+  aliases: [sciences, natural science]
+astronomy:
+  broader: science
+  aliases: [space, cosmos, universe, astrophysics, outer space]
+physics:
+  broader: science
+popular science:
+  broader: science
+  aliases: [pop science, science for general readers]
+
+technology:
+  aliases: [tech]
+computing:
+  broader: technology
+  aliases: [computer science, computers]
+software engineering:
+  broader: computing
+  aliases: [programming, software, coding, software development, craft, best practice]
+robots:
+  broader: technology
+  aliases: [robotics, robot]
+
+history:
+  aliases: [world history]
+social science:
+  aliases: [society, sociology, social sciences]
+anthropology:
+  broader: social science
+  aliases: [human evolution]
+politics:
+  broader: social science
+  aliases: [political science, power, government]
+surveillance:
+  broader: politics
+  aliases: [privacy, mass surveillance]
+american dream:
+  broader: social science
+jazz age:
+  broader: history
+  aliases: [1920s, roaring twenties]
+big ideas:
+  aliases: [grand ideas]
+
+philosophy:
+  aliases: []
+ethics:
+  broader: philosophy
+  aliases: [moral philosophy, morality]
+
+fiction:
+  aliases: [novel, novels, literature]
+science fiction:
+  broader: fiction
+  aliases: [sci-fi, scifi, sf]
+dystopia:
+  broader: science fiction
+  aliases: [dystopian, dystopian fiction]
+aliens:
+  broader: science fiction
+  aliases: [extraterrestrial, extraterrestrials]
+epic:
+  broader: fiction
+  aliases: [saga]
+classic:
+  broader: fiction
+  aliases: [classics, classic literature]
+romance:
+  broader: fiction
+horror:
+  broader: fiction
+  aliases: [gothic]
+short stories:
+  broader: fiction
+  aliases: [short story, anthology]
+
+humour:
+  aliases: [comedy, humor, funny, comic]
+satire:
+  broader: humour
+  aliases: [parody]
+survival:
+  aliases: [survival stories]
+desert:
+  aliases: [deserts, arid lands]
+future:
+  aliases: [the future, futurism]

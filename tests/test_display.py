@@ -8,8 +8,8 @@ import unittest
 import urllib.error
 import urllib.request
 
-from features.display import Hub, make_server, parse_command
-from modules.expression import (DEFAULT_HOLD_S, make_event, make_talk_event, mouth_levels, normalize,
+from display.server import Hub, make_server, parse_command
+from robot.actuation.face import (DEFAULT_HOLD_S, make_event, make_talk_event, mouth_levels, normalize,
                                 set_emotion, talk)
 
 

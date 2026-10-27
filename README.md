@@ -1,81 +1,165 @@
 # Library-Book-Robot
 
-A library robot that adapts how it interacts to where it is (quiet zone vs common area) and who it is with. It scans a book placed on its pad, then returns it, explains it, or recommends something similar.
+A library robot that adapts how it interacts to where it is (quiet zone or common area) and who it is with (one visitor or a group). It scans a book placed on its pad, then returns it, explains it, or recommends something similar.
 
-The robot software runs on a Jetson Orin Nano. The language model runs on a separate AI server and is reached over TCP with the protocol in `modules/llm.py`.
+The robot software runs on a Jetson Orin Nano (JetPack 6, Python 3.10+). The language model, speech and face models run on a separate AI server, reached over TCP. Motors, lights and the printer will hang off an ESP32. See [docs/architecture.md](docs/architecture.md) for how the parts fit together.
 
-## Current step: Jetson to AI server link
+## First prototype design
 
-`python main.py chat` sends a prompt to the AI server and prints the reply one sentence at a time. Later, the same sentences will feed text-to-speech and the on-screen face.
+![Robotic Library Assistant concept blueprint, design revision 02](Gemini_Generated_Image_cf59gbcf59gbcf59.jpeg)
 
-### 1. On the AI server
+*Concept blueprint, design revision 02, generated with Gemini. It is an AI-generated illustration of the idea, not an engineering drawing: the dimensions, the "patent" number and some details are made up.*
 
-```bash
-python llm.py receive --host 0.0.0.0              # default port 7898
+| Label | Part | Where it lives in this repo |
+|---|---|---|
+| A | Compartmentalised book storage (the ring of slots) | `robot/actuation/storage_ring.py`, `slot` in the catalogue |
+| B | Multi-directional omni-wheels | `robot/actuation/navigation.py` |
+| C | Lidar and sensor suite | not started |
+| D | Presentation / sorting platform (the scan pad) | `robot/perception/book_scanner.py` |
+| E | Neck and body structure | `robot/actuation/neck.py` |
+| F | HMI and face plate (the screen) | `display/` |
+| G | High-resolution camera | `robot/drivers/camera.py` |
+| H | Internal illumination array | `robot/actuation/lights.py` |
+
+The servo motors and circuit boards sit in the pylon behind the neck; the ESP32 plan is in `firmware/esp32/README.md`.
+
+## Layout
+
+```
+config/            robot.yaml (server, devices, thresholds), styles.yaml (behaviour per context), zones.yaml
+robot/             the robot program: python -m robot check | sim | run
+  app.py           wires drivers, core logic and the bus together
+  bus.py           in-process asyncio publish/subscribe
+  events.py        the events on the bus (ContextChanged, BookScanned, UserUtterance, ...)
+  config.py        loads config/*.yaml
+  perception/      book_scanner (barcode -> ISBN -> BookScanned), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged); noise level (stub)
+  core/            context, style, dialogue state machine, expression blending, session log
+  services/        AI server wrappers: llm (client + sentence splitter), speech, vision;
+                   isbn (validation), books (catalogue, Open Library fallback), book_graph (the book knowledge graph:
+                   recommendations and shelf locations), topics, call_numbers, text_similarity
+  actuation/       voice, face display, lights, neck, storage ring, printer, navigation
+  drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), fake (logs only)
+  sim/             keyboard simulator
+display/           face display: server.py (SSE) + ui/index.html, start_display.sh (kiosk)
+vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
+tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes;
+                   book data tools: catalog_check, import_books, similarity_report, graph_view
+firmware/esp32/    planned ESP32 serial protocol
+tests/             unittest suite
+docs/              architecture notes, reference images
+data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv (SAMPLE book data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
+                   cache/, logs/, graph.html and catalog_draft.csv (generated, gitignored)
 ```
 
-Allow inbound TCP 7898 through its firewall and give it a fixed IP (or a DHCP reservation).
+`vendor/ai_server/` holds the AI server team's files. Keep face.py, emotion.py, stt.py and tts.py unmodified so updates can be dropped in.
 
-### 2. On the Jetson
+## Setup
 
 ```bash
 git clone https://github.com/json0130/Library-Book-Robot.git
 cd Library-Book-Robot
-
-export AI_HOST=<server-ip>                        # default 10.42.0.118, AI_PORT default 7898
-
-python main.py chat --check        # is the server reachable?
-python main.py chat                # --llm: type, read the reply (default)
-python main.py chat --stt          # speak, read the transcript
-python main.py chat --tts          # type, hear it spoken
-python main.py chat --talk         # type, hear the reply: LLM -> TTS
-python main.py chat --chat         # speak, hear the reply: STT -> LLM -> TTS
-
-python main.py chat --prompt "Recommend a book about robots."   # one --llm or --tts turn
-python main.py chat --chat --wav question.wav                   # one voice turn from a file
+sudo apt install -y python3-yaml python3-opencv pulseaudio-utils libzbar0 sox
+pip install pyzbar                  # barcode reading (needs libzbar0); --user --break-system-packages on Ubuntu 24.04
 ```
 
-Voice modes: press Enter, speak, press Enter again. Recording and playback use PulseAudio (`parecord`/`paplay`). Use `--mic Webcam` (or `export MIC=Webcam`) to pick a microphone and `--speaker USB` (or `export SPEAKER=USB`) to pick a speaker, by part of the name in `pactl list short sources` / `sinks`. Recordings quieter than `--min-rms` (default 500) are skipped, because STT invents text like "Thank you." from silence and room noise; each recording prints its level so the threshold can be tuned.
+PyYAML is the only required package. OpenCV (the camera tools and driver) comes from apt on the Jetson. pyzbar and OpenCV are only imported when a barcode is actually decoded, so the simulator and most tests run without them. pyserial will be needed once the ESP32 driver exists (`pip install -e .[serial]`). Set the AI server address in `config/robot.yaml`, or per shell with `export AI_HOST=<server-ip>` (and `AI_PORT`, default 7898).
 
-The system prompt casts the model as the Library Book Robot (books, returns, recommendations, directions; spoken, at most three sentences; `--system` overrides it). Each prompt carries the last 10 exchanges of the session, so follow-up questions work; `--prompt` runs are single turns with no history. The server takes one prompt string, so the system prompt and history are flattened into it as `System:` / `User:` / `Assistant:` lines.
-
-### Testing without the server
+## Running the robot
 
 ```bash
-python -m modules.llm receive --mock &            # echo server on 127.0.0.1:7898
-python main.py chat --host 127.0.0.1 --prompt "hi"
-python -m unittest discover -s tests -t .         # sentence splitter tests
+python -m robot check     # is the AI server reachable?
+python -m robot sim       # try the logic from the keyboard: fake hardware, no AI server needed
+python -m robot sim --live   # webcam + camera window, face detection, auto-scan, speaker and LLM: step up (hello), show a book, ask, hear the answer
+python -m robot run       # on the hardware; for now exits naming the drivers that are missing (esp32)
 ```
 
-No packages to install: everything uses the standard library.
+`python main.py ...` forwards to `python -m robot ...`. `python -m robot sim --llm` also uses the AI server's LLM for explain and recommend (see Books).
 
-## Face: detection, recognition, emotion
+### Simulator
 
-`modules/face.py` and `modules/emotion.py` are the AI server team's single-image clients; keep them unmodified so updates can be dropped in. `features/camera.py` runs them on the webcam and needs OpenCV.
+```
+quiet alone | common group   set the zone (or an area from zones.yaml, e.g. reading_room) and alone/group
+noise 62 | noise off         a noise reading in dB, which can override the zone
+book                         place a book on the pad: scanned by the webcam with --camera, else a random sample book
+book <isbn>                  fake camera only: place the book with this ISBN (a catalogue book, or any valid ISBN)
+book none                    fake camera only: place a book whose barcode can't be read: the scan fails
+scan <image path>            fake camera only: the real barcode decoder reads a photo of a book
+return | explain | recommend say that to the robot once it has offered
+<anything else you type>     the visitor says it, e.g. "can you explain it?" (`say <text>` also works)
+feel <emotion> [confidence]  the camera sees this emotion on the visitor
+leave                        everyone walks away
+fixed on | fixed off         baseline condition: one style everywhere
+help, quit
+```
+
+Options: `--llm` (the AI server's LLM words explain and recommend), `--camera` (scan with the real webcam and show a live camera window), `--faces` (find the people the webcam sees with the AI server's face detection: a new face makes the robot say hello, and nobody in view for `perception.leave_after_s` seconds ends the visit; needs `--camera`), `--auto-scan` (start a scan as soon as a book's barcode is held up to the camera, so you don't type `book`; the camera stands in for the pad's weight sensor; needs `--camera`), `--no-preview` (no camera window, e.g. over SSH), `--speak` (speak replies through the speaker with TTS from the AI server, and the face display's mouth moves), `--live` (webcam, faces, auto-scan, speaker and LLM together). With `--live`: step in front of the camera and the robot says hello. Faces are told apart (`person 1`, `person 2`...), so each person is greeted once, even after leaving the view and coming back, and a new face is greeted (see Person IDs below); hold a book's barcode up to the camera (or type `book`); then type "can you explain it?" or "can you recommend something?" and the robot answers aloud. Replies are spoken only in styles with the speech channel (a common area, the default); in a quiet zone they are printed or go through other channels instead, and a quiet zone doesn't greet. With `--faces` the head count comes from the camera, so typing `common group` or `leave` is overridden at the next change. If the TTS server fails, the reply is only shown and the conversation carries on.
+
+After each command it prints the context, the style and the dialogue state, and the fake drivers print what the hardware would do (`[esp32] neck pose=lowered`, `[voice whisper, volume 0.12] ...`). If the face display is running, expressions and the talking mouth show on it; otherwise they are only printed. Each session is logged to `data/logs/session-<time>.jsonl` (`--no-log` turns that off).
 
 ```bash
-python main.py camera --host <server-ip>                  # live names (same as --recognition), q quits
-python main.py camera --host <server-ip> --detect         # live face boxes only
-python main.py camera --host <server-ip> --emotion        # live emotion per face
-python main.py camera --host <server-ip> --enroll jay     # enroll 5 webcam photos as "jay"
-
-python modules/face.py --host <server-ip> --image photo.jpg --enroll --name jay
-python modules/face.py --host <server-ip> --image photo.jpg --operation recognize
-python modules/emotion.py --host <server-ip> --image photo.jpg
+printf 'quiet alone\nbook\ncommon group\nquit\n' | python -m robot sim
 ```
 
-The server stores enrollment photos in its `models/face/known_faces/<name>/` and needs exactly one face per photo, so `--enroll` crops each webcam frame to the largest face before sending it. Recognition matches when similarity is at least 0.6. The emotion model finds faces with its own detector, which misses faces turned well away from the camera.
+### Books
 
-## Robot face display
-
-`python main.py display` serves a full-screen face (`ui/index.html`: glowing cyan eyes and mouth on black, standard library only) and pushes emotions to it over Server-Sent Events. The page starts in idle (blinking, wandering gaze) and returns to idle when an emotion's hold time ends.
+When a book is placed on the pad the robot reads its ISBN barcode, looks the book up, and offers to take it back, explain it or recommend something similar.
 
 ```bash
-scripts/start_display.sh          # server + Chromium kiosk on http://localhost:8765 (falls back to chromium-browser, firefox)
-python main.py display            # server only; then open http://localhost:8765 in any browser (--port 9000 to change)
+python tools/make_test_barcodes.py                       # regenerates the EAN-13 PNGs in data/test_barcodes/ (already committed) from the catalogue
+python tools/book_scan_test.py --list                    # the catalogue
+python tools/book_scan_test.py --image data/test_barcodes/9780345391803-the-hitchhiker-s-guide-to-the-galaxy.png
+python tools/book_scan_test.py --live                    # webcam with an overlay, q quits
+python tools/book_scan_test.py --live --size 1280x720    # sharper but about 8 fps; the default is 640x480 (smooth, 30 fps)
 ```
 
-Control it by typing in the terminal running the server: an emotion with optional hold seconds (`happy`, `sad 5`), `idle`, `talk [seconds]`, `list`, `quit`. Or over HTTP:
+Point the webcam at a barcode PNG on a screen, or print them. The scanner tries the grayscale image, a contrast-boosted copy, a 2x upscale and the 90, 180 and 270 degree rotations; library stickers and other non-ISBN codes are ignored. This webcam delivers 30 fps at 640x480 but only about 8 fps at 1280x720 (a limit of the camera, not the code), so there is a trade-off between a sharper barcode and a smoother picture. 640x480 is the default (it read barcodes fine in testing); try `--size 1280x720` for small or distant barcodes, and set `devices.camera_width`/`camera_height` in `config/robot.yaml` for the robot. The live view always shows the newest frame and decodes on a second thread, so the scanner never makes the picture lag.
+
+If no ISBN is read within `books.scan_timeout_s` (5 s) the robot asks the visitor to place the book flat with the barcode up.
+
+The book data is **sample data** (a dozen well-known books, seven shelves, with summaries written for this project). Replace it with the library's real data: [docs/catalog.md](docs/catalog.md) explains every column of `data/catalog.csv`, `topics.yaml`, `shelves.csv` and `curated_links.csv`, and how to add a book or a shelf. Loading names the file and line of any bad row. For an ISBN not in the catalogue the robot can ask Open Library for the title and author (`books.online_fallback` in `config/robot.yaml`, 3 s timeout, answers cached in `data/cache/`); shelf, slot and summary stay empty and the book can't be returned or recommended from.
+
+#### The book graph
+
+At startup the data files become a small knowledge graph (plain dicts and dataclasses, no extra packages; `robot/services/book_graph.py`): books, authors, topics (with the broader topics above them), call-number classes, shelves, sections and series, joined by typed edges. It holds books and the library's layout only, never visitors or people. It answers two questions:
+
+- **What else would they like?** Two books are compared on seven things, each with a short reason: shared topics weighted by rarity (IDF; general topics like "science" count for less), topics that meet under a broader one, the same author, the same series (the next book in a series comes first), how close the Dewey / Library of Congress call numbers are (same class and numerically near: `QB981` and `QB982` yes, `QB44.2` and `QB981` no), a librarian's curated link, and TF-IDF text similarity of the summaries. The weights are `books.similarity` in `config/robot.yaml`. The full reason list goes to the LLM and the log; what is *spoken* is one natural reason, the most specific one (series, author, curated link, most specific shared topic, shelf area), phrased like "because, like Cosmos, it's about astronomy": never a list of topics and never a call number. The LLM must name one of the candidates or its reply is discarded for the catalogue wording. In a quiet zone only the top pick is named; in a common area up to three (`recommendations` in `config/styles.yaml`).
+- **Where does it live?** The shelf's section, floor, zone and map pose. Returning a book says the storage slot and where it belongs; the robot then offers to guide the visitor, and "guide me" publishes a `NavigationRequested` event with the shelf's pose (the fake base just logs it). "Where is Dune?" works too.
+
+```bash
+python tools/catalog_check.py                            # validate the data files: errors, warnings, statistics
+python tools/book_scan_test.py --live --append isbns.txt # collect ISBNs by scanning a pile of books: each new one is appended (no duplicates), with a beep and its title
+python tools/import_books.py isbns.txt                   # draft catalogue rows from Open Library into data/catalog_draft.csv
+python tools/similarity_report.py                        # graph vs text similarity per book; --make-pairs / --eval to measure against your labels
+python tools/graph_view.py                               # writes data/graph.html: open it to explore the graph
+```
+
+In the simulator: `book <isbn>`, `recommend`, `guide`, `where <title or isbn>` (the title is matched loosely) and `reload` (read the data files again after editing them).
+
+**The LLM's part.** *Explain* and *recommend* are worded by the AI server's LLM, but only from catalogue records: it is shown the book's entry (explain) or the book plus up to three catalogue books the graph found similar, each with its reasons, to choose from (recommend), and told to use nothing else. A recommendation that names none of those candidates is discarded. **Before a book is scanned,** a plain hello gets a greeting and anything else ("what's your name?", "what can you do?") goes to the LLM as small talk with no catalogue, so it names no books and asks the visitor to place one on the pad; without the LLM, who-are-you is still answered. **Follow-ups:** the scanned book stays the topic until the visitor leaves or scans another, so after an answer they can ask for something else about it ("what's it about again?", "any related books?") or a free question ("who wrote it?", "does he get food somehow?"). Free questions go to the LLM with the book's catalogue entry and the conversation so far, and are told to use only that entry; if the LLM is down, who-wrote-it and genre questions are still answered from the catalogue, and anything else gets a short "I can't answer that right now". Saying "another book" (or just "yes") after an answer asks for the next book. *Return* (storage slot, section, floor and shelf) never goes through the model, and a book that is not in the catalogue is never sent to it. If the server is down, slower than `ai_server.llm_timeout_s` (20 s), or gives an unusable answer, the robot says the plain catalogue text instead. Set `books.use_llm: false` to turn it off; the simulator uses the LLM only with `--llm`, so it still needs no server by default. Each new book starts a fresh conversation, and the last 10 exchanges are kept for the model.
+
+### Person IDs
+
+With `--faces` the first face the camera sees becomes `person 1`, the next new face `person 2`, and a face that comes back after being out of view is recognised as the same person: the robot doesn't greet them again, and the camera window labels each box with the number. The AI server only finds the faces; each box is turned into a face embedding on the robot (OpenCV's SFace model) and compared with the people seen so far. **Privacy:** the embeddings stay in memory for the run only. Nothing is sent to the server or saved, so "person 1" means one person for one run, and nothing about them survives quitting the simulator. (The server's own enrollment, `tools/face_enroll.py`, keeps photos for good and is for named people.)
+
+```bash
+python tools/get_face_models.py     # once: downloads the 38.7 MB model into models/face/ (gitignored)
+python tools/identity_test.py       # live check: look at the camera, step out and back, let someone else step in
+```
+
+`identity_test.py` shows each face's similarity to every person it knows. Set `perception.identity_threshold` in `config/robot.yaml` from what it shows (0.40 by default): if one person keeps turning into a new number, lower it; if two people are merged, raise it. Without the model file the sim says so and falls back to counting faces, greeting once per visit with `dialogue.greet_cooldown_s`. A face that is too small (under 40 px) is not given a number.
+
+### Behaviour rules
+
+How the robot behaves in each context is data, not code: [config/styles.yaml](config/styles.yaml) has one entry per `quiet_alone`, `quiet_group`, `common_alone` and `common_group`, plus `fixed` (the study baseline) and `default` (the safe fallback, and the source of any field an entry leaves out). Each entry sets the voice (normal or whisper) and volume, the channels a message goes through (speech, screen, gaze, spotlight, print), light colour and brightness, the resting eye expression, neck pose, screen layout, whether the robot approaches people, the speed limit, and how many books a recommendation names (`recommendations`: the top pick only in a quiet zone, up to three in a common area). [config/zones.yaml](config/zones.yaml) maps named areas to zones and sets the noise thresholds.
+
+## Face display
+
+```bash
+display/start_display.sh          # server + Chromium kiosk on http://localhost:8765 (falls back to chromium-browser, firefox)
+python -m display.server          # server only; open http://localhost:8765 (--port 9000 to change)
+```
+
+Type in the server's terminal: an emotion with optional hold seconds (`happy`, `sad 5`), `idle`, `talk [seconds]`, `list`, `quit`. Or over HTTP:
 
 ```bash
 curl -X POST localhost:8765/emotion -H 'Content-Type: application/json' -d '{"emotion":"happy","hold_s":3}'
@@ -83,43 +167,57 @@ curl 'localhost:8765/emotion?name=surprised&hold=5'
 curl 'localhost:8765/talk?seconds=3'              # move the mouth for 3 s; seconds=0 stops
 ```
 
-### Talking mouth
+Emotions: happy, sad, angry, surprise, fear, disgust, neutral (aliases such as `scared`, `mad`, `joy` work). From Python: `robot.actuation.face.set_emotion("happy", hold_s=3.0)`. Open `display/ui/index.html?emotion=happy` to view one frozen face without a server (`&talk=0.7` opens the mouth); add `?glow=cheap` or `?glow=off` if the Jetson drops frames.
 
-With the display running, `chat` moves the mouth whenever the robot replies (start the display first, in another terminal):
+## Test tools
+
+These talk to the AI server and the hardware directly, without the robot program. Run them from the repo root.
+
+### AI server
+
+On the server: `python llm.py receive --host 0.0.0.0` (port 7898; allow it through the firewall). On the Jetson:
 
 ```bash
-python main.py chat --tts --prompt "Hello, I am the library robot."   # mouth follows the speech audio
-python main.py chat --talk --speaker USB                             # type, hear each reply on the USB speaker
-python main.py chat --chat                                           # every spoken reply
-python main.py chat                                                  # text only: mouth moves for the reply's reading time
+python tools/server_check.py       # is the server reachable?
+python tools/chat_test.py          # --llm: type, read the reply (default)
+python tools/chat_test.py --stt    # speak, read the transcript
+python tools/chat_test.py --tts    # type, hear it spoken
+python tools/chat_test.py --talk   # type, hear the reply: LLM -> TTS
+python tools/chat_test.py --chat   # speak, hear the reply: STT -> LLM -> TTS
+
+python tools/chat_test.py --prompt "Recommend a book about robots."   # one --llm/--tts/--talk turn
+python tools/chat_test.py --chat --wav question.wav                   # one voice turn from a file
 ```
 
-In `--tts`, `--talk` and `--chat` the mouth follows the loudness of the TTS audio: chat computes a 30 fps envelope from the WAV and sends it to the page (`POST /talk`) as `paplay` starts. If the mouth runs ahead of or behind the sound on the USB speaker, tune `--lip-delay` (seconds the mouth waits, default 0.1). `--face-port` picks the display's port, `--no-face` turns this off; chat runs normally when no display is running.
+Voice modes: press Enter, speak, press Enter again. Recording and playback use PulseAudio (`parecord`/`paplay`). `--mic Webcam` and `--speaker USB` (or `MIC` / `SPEAKER`) pick devices by part of the name in `pactl list short sources` / `sinks`. Recordings quieter than `--min-rms` (default 500) are skipped, because STT invents text like "Thank you." from silence.
 
-Emotions: happy, sad, angry, surprise, fear, disgust, neutral (aliases such as `scared`, `mad`, `joy`, `surprised` work, so the emotion model's labels can be passed straight in). From Python, `modules.expression.set_emotion("happy", hold_s=3.0)` does the same POST; emotions are not wired into `chat` yet. Add `&talk=0.7` to the frozen-face URL below to see the mouth open. Open `ui/index.html?emotion=happy` to view one frozen face without a server. If the Jetson drops frames, add `?glow=cheap` (no blur filter) or `?glow=off` to the URL.
+The system prompt casts the model as Stuart, the Library Book Robot (the name is in `robot/persona.py`): upbeat and energetic, free to chat about everyday things, told not to greet or introduce itself twice. Each prompt carries the conversation as it really went, the last 10 exchanges, including the robot's fixed lines (hello, "You have <title>...") and what the visitor said, so the model knows what was already said; another book starts a new conversation, but the chat before the first book of a visit carries on. The server takes one prompt string, so the system prompt and history are flattened into it as `System:` / `User:` / `Assistant:` lines. If the face display is running, the mouth moves with each reply (with the speech audio in `--tts`, `--talk` and `--chat`; tune `--lip-delay` if it is out of sync).
 
-## Layout
+### Camera and faces
 
-```
-main.py              starts the robot: python main.py <feature> [options]
-modules/             building blocks, each talks to one service
-  llm.py             server protocol + request(), LLM client, sentence splitter; also the server's LLM script
-  face.py            server team's face client (detect/recognize/enroll one image), kept unmodified
-  emotion.py         server team's emotion client (one image), kept unmodified
-  stt.py, tts.py     server team's speech clients (one WAV / one text), kept unmodified
-  expression.py      emotion names, aliases and set_emotion() for the display
-features/            what the robot does, built from modules
-  chat.py            text or voice chat: --llm, --stt, --tts, --chat
-  camera.py          live webcam detection, recognition, emotion, enrollment
-  display.py         robot face server: serves ui/, pushes emotions over SSE, terminal control
-ui/index.html        the face page (canvas, no libraries)
-scripts/             start_display.sh launches the server and a kiosk browser
-tests/               splitter and display server tests
+```bash
+python tools/camera_test.py                  # live names (same as --recognition), q quits
+python tools/camera_test.py --detect         # live face boxes only
+python tools/camera_test.py --emotion        # live emotion per face
+python tools/face_enroll.py jay              # enroll 5 webcam photos as "jay"
+
+python vendor/ai_server/face.py --host <server-ip> --image photo.jpg --operation recognize
+python vendor/ai_server/emotion.py --host <server-ip> --image photo.jpg
 ```
 
-New services go in `modules/`; new behaviours go in `features/` with a `main(argv)` and its name in `FEATURES` in `main.py`.
+The server stores enrollment photos in its `models/face/known_faces/<name>/` and needs exactly one face per photo, so enrolling crops each frame to the largest face. Recognition matches when similarity is at least 0.6.
+
+### Without the server
+
+```bash
+python -m vendor.ai_server.llm receive --mock &     # echo server on 127.0.0.1:7898
+python tools/chat_test.py --host 127.0.0.1 --prompt "hi"
+python -m unittest discover -s tests -t .           # the test suite
+```
 
 ## Next
 
-1. Drive the face's emotion from `chat` (LLM emotion tags blended with the detected user emotion).
-2. Text-to-speech, then the scan, context and style pipeline.
+1. ESP32 firmware and `robot/drivers/esp32.py`, then `python -m robot run` on the hardware.
+2. Perception: noise level feeding `ContextChanged` (people counting is done: `robot/perception/people.py`, used by `sim --faces`); the pad's weight sensor publishing `BookPlaced` from the ESP32.
+3. Replace the sample catalogue with the library's real one.
+4. Speak replies sentence by sentence to cut the TTS delay (about 5 s for a three-sentence reply today).

@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Start the library robot. For now each feature runs on its own:
+"""Forwards to `python -m robot` (check, sim, run). The old test features moved to tools/:
 
-    python main.py chat   [options]     talk to the LLM on the AI server
-    python main.py camera [options]     live webcam: --recognition, --detect, --emotion, --enroll NAME
-    python main.py display [options]    robot face on the Jetson display (browser page driven over SSE)
-
-Add -h after a feature name for its options.
+    python main.py chat    ->  python tools/chat_test.py
+    python main.py camera  ->  python tools/camera_test.py   (enrolling: tools/face_enroll.py)
+    python main.py display ->  python -m display.server
 """
-import importlib
 import sys
 
-FEATURES = ("chat", "camera", "display")  # each is features/<name>.py
+MOVED = {"chat": "python tools/chat_test.py", "camera": "python tools/camera_test.py",
+         "display": "python -m display.server"}
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if not argv or argv[0] not in FEATURES:
-        print(__doc__.strip(), file=sys.stderr)
+    if argv and argv[0] in MOVED:
+        print(f"'{argv[0]}' moved: run {MOVED[argv[0]]} {' '.join(argv[1:])}".rstrip(), file=sys.stderr)
         return 2
-    # Imported on demand so one feature's dependencies (e.g. OpenCV) don't block the others.
-    return importlib.import_module(f"features.{argv[0]}").main(argv[1:])
+    print("Note: test tools now live in tools/ (chat_test, camera_test, face_enroll, server_check).",
+          file=sys.stderr)
+    from robot.__main__ import main as robot_main
+    return robot_main(argv)
 
 
 if __name__ == "__main__":

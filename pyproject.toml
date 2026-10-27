@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "library-book-robot"
+version = "0.1.0"
+description = "Library robot that adapts its interaction style to the zone and the people around it"
+requires-python = ">=3.10"          # Jetson Orin Nano, JetPack 6 (Ubuntu 22.04, Python 3.10)
+dependencies = [
+    "pyyaml>=5.4",
+]
+
+[project.optional-dependencies]
+serial = ["pyserial>=3.5"]          # ESP32 link (robot/drivers/esp32.py)
+# On the Jetson install OpenCV from apt instead (sudo apt install python3-opencv): the pip
+# wheels are not built against the Jetson's CUDA/GStreamer. This extra is for other machines.
+opencv = ["opencv-python>=4.5"]
+
+[project.scripts]
+library-robot = "robot.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["robot*", "display*", "vendor*", "tools*"]
+
+[tool.setuptools.package-data]
+display = ["ui/*.html"]
