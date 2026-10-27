@@ -15,6 +15,8 @@ floors:
       - {kind: lift, name: Lift, x: 10.8, y: 6.8}
       - {kind: help_desk, name: Help desk, x: 7.5, y: 6.0}
       - {kind: entrance, name: Entrance, x: 6.0, y: 7.8}
+      - {kind: exit, name: Exit, x: 4.8, y: 7.8}
+      - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
 
   - level: 2
     name: Level 2
@@ -24,6 +26,7 @@ floors:
       - {name: Science Fiction, x: 0.3, y: 1.0, w: 2.7, h: 6.0}
     landmarks:
       - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+      - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
 
   - level: 3
     name: Level 3
@@ -35,6 +38,7 @@ floors:
       - {name: Computing, x: 7.1, y: 0.3, w: 1.9, h: 2.7}
     landmarks:
       - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+      - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
 
 station:                  # where the robot waits for visitors (its "you are here" when it is not driving)
   level: 1

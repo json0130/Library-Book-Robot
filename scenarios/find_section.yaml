@@ -1,5 +1,5 @@
 name: find_section
-description: A visitor asks where a section is, what is on a floor, an ambiguous thing ("history"), and a section on another floor.
+description: A visitor asks where a section is, what is on a floor, an ambiguous thing ("history"), a section on another floor, and where the toilets, the help desk or the exit are (also on another floor).
 zones: [quiet, common]
 steps:
   - engage
@@ -14,9 +14,27 @@ steps:
         steps:
           - say: ["where is the brief history", "where is a brief history of time"]
   - say: ["where are the computing books", "take me to the computing section", "the computing section"]
+  - one_of:                              # a facility from the floor plan (not a book or a section)
+      - name: toilets
+        steps:
+          - say: ["where is the toilet", "where are the restrooms", "where can I find the bathroom"]
+      - name: help_desk
+        steps:
+          - say: ["where is the help desk", "where is the information desk"]
+      - name: exit
+        steps:
+          - say: ["where is the exit", "how do I get out"]
+      - name: toilets_upstairs           # on a floor other than the robot's: the map starts with the lift
+        steps:
+          - say: ["where are the toilets on level 3", "is there a toilet on level 3"]
   - say: ["that's all, thanks", "I'm done", "that's all thanks"]
   - wait: {until_state: IDLE, timeout: 60}
 expect:
   - {views: [directions, options]}
   - {view_field: {view: directions, field: steps, matches: "lift"}, note: another floor starts with the lift}
   - {view_field: {view: directions, field: title, matches: "Level 2"}}
+  - {require_phrases_any: ["toilets are on the ground floor"], when: toilets, note: the answer comes from the floor plan}
+  - {require_phrases_any: ["help desk is on the ground floor"], when: help_desk}
+  - {require_phrases_any: ["exit is on the ground floor"], when: exit}
+  - {require_phrases_any: ["toilets are on"], when: toilets_upstairs, note: "a typo can turn level 3 into 'devil 3': then it still answers (the nearest); tests/test_followups.py checks level 3 exactly"}
+  - {view_field: {view: directions, field: title, matches: "toilets"}, when: toilets_upstairs}

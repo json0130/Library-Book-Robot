@@ -8,6 +8,7 @@ only, never anything about visitors.
     plan.floor(3).section("History")                  # Section(name, x, y, w, h)
     plan.where_section("History")                     # (Floor, Section) or None
     plan.lift(2)                                      # the lift Landmark on level 2, or None
+    plan.find("toilets")                              # [(Floor, Landmark)] wherever there are toilets
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-LANDMARK_KINDS = ("lift", "help_desk", "entrance", "stairs", "toilets", "other")
+LANDMARK_KINDS = ("lift", "help_desk", "entrance", "exit", "stairs", "toilets", "other")
 
 
 class FloorPlanError(ValueError):
@@ -100,6 +101,10 @@ class FloorPlan:
     def lift(self, level) -> Optional[Landmark]:
         floor = self.floor(level)
         return floor.landmark("lift") if floor else None
+
+    def find(self, kind: str) -> list:
+        """[(Floor, Landmark)] for every landmark of this kind (toilets, help_desk, exit...), in level order."""
+        return [(floor, m) for floor in self.floors.values() for m in floor.landmarks if m.kind == kind]
 
     def sections_on(self, level) -> list:
         floor = self.floor(level)

@@ -32,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--typos", type=float, default=None, help="chance that a `say` step gets typos (default scenarios.typo_probability)")
     run.add_argument("--speech", type=float, default=None,
                      help="chance that a `say` step gets speech-recognition style changes (default scenarios.speech_probability)")
+    run.add_argument("--variants", type=Path, default=None, metavar="FILE",
+                     help="held-out evaluation: say the phrasings in this YAML file (scenario -> step -> list) instead of the "
+                          "scenarios' own; only the scenarios filled in are run (see scenarios/heldout_template.yaml)")
     run.add_argument("--out", type=Path, default=None, help="output directory (default data/eval_runs/<timestamp>)")
     rep = sub.add_parser("report", help="write summary.md and review.csv for a run directory")
     rep.add_argument("directory", type=Path)
@@ -39,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("run_id")
     play.add_argument("--dir", type=Path, default=None, help="the run directory (default: the latest)")
     play.add_argument("--llm", choices=("real", "mock", "recorded"), default="recorded")
+    play.add_argument("--variants", type=Path, default=None, metavar="FILE",
+                      help="the phrasings file, for a run of a held-out batch")
     cmp_ = sub.add_parser("compare", help="compare two run directories")
     cmp_.add_argument("dir_a", type=Path)
     cmp_.add_argument("dir_b", type=Path)
@@ -111,7 +116,18 @@ def dispatch(args) -> int:
     return live_command(args, scenarios, cfg)
 
 
+def heldout_set(path: Path, scenarios: dict, wanted: str) -> dict:
+    """The scenarios rewritten with the phrasings in `path`: only the ones filled in (a named --scenario must be one)."""
+    from robot.scenarios.heldout import heldout_scenarios, load_variants
+    chosen = heldout_scenarios(scenarios, load_variants(path, scenarios), path.name)
+    if wanted != "all" and wanted not in chosen:
+        raise ScenarioError(f"{path.name} has no phrasings for {wanted!r}; it has: {', '.join(chosen)}")
+    return chosen if wanted == "all" else {wanted: chosen[wanted]}
+
+
 def run_command(args, scenarios: dict, cfg) -> int:
+    if args.variants is not None:
+        scenarios = heldout_set(args.variants, scenarios, args.scenario)
     names = pick_names(scenarios, args.scenario)
     zones = [z.strip() for z in args.zones.split(",") if z.strip()]
     if not zones or any(z not in ZONES for z in zones):
@@ -120,6 +136,8 @@ def run_command(args, scenarios: dict, cfg) -> int:
         raise ValueError("--runs must be at least 1")
     out_dir = args.out or runner.new_run_dir()
     plan = runner.plan_batch(names, scenarios, args.runs, zones, args.seed)
+    if args.variants is not None:
+        print(f"HELD-OUT batch: phrasings from {args.variants.name}, not the tuned paraphrases of the scenarios")
     print(f"{len(plan)} run(s): {', '.join(names)} | zones {','.join(zones)} | llm {args.llm} | seed {args.seed} | "
           f"speed x{args.speed:g}\nWriting to {out_dir}")
     with ExitStack() as stack:
@@ -143,6 +161,10 @@ def replay_command(args, scenarios: dict, cfg) -> int:
         raise ValueError(f"{args.run_id} is not in {directory}; runs: {', '.join(list(records)[:6])}...")
     old = records[args.run_id]
     scenario = scenarios[old["scenario"]]
+    if old.get("heldout"):
+        if args.variants is None:
+            raise ValueError(f"{args.run_id} is from a held-out batch ({old['heldout']}): pass --variants with that file")
+        scenario = heldout_set(args.variants, scenarios, old["scenario"])[old["scenario"]]
     mode = old["llm"] if args.llm == "recorded" else args.llm
     with ExitStack() as stack:
         llm = llm_target(mode, cfg, stack) if mode in ("real", "mock") else ("none", None, "none")

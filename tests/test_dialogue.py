@@ -512,7 +512,7 @@ class BookChoicesTest(unittest.TestCase):
         self.assertIn("Okay, follow me to The Martian", app.said[-1])
 
     def test_questions_that_name_no_book_are_left_alone(self):
-        for phrase in ("where is the bathroom?", "where do you live?"):
+        for phrase in ("where did I leave my umbrella?", "where do you live?"):
             app = self.fresh()
             events = self.navigation(app)
             run(app, UserUtterance(phrase))

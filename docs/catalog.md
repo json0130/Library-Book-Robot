@@ -175,7 +175,7 @@ floors:
     sections:                # one rectangle per section: x, y = top-left corner, w, h = size (metres)
       - {name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7}
       - {name: History, x: 5.1, y: 0.3, w: 1.9, h: 2.7}
-    landmarks:               # kind: lift, help_desk, entrance, stairs, toilets or other
+    landmarks:               # kind: lift, help_desk, entrance, exit, stairs, toilets or other
       - {kind: lift, name: Lift, x: 10.8, y: 6.8}
 station:                     # where the robot waits for visitors: its "you are here" (and where it drives home to)
   level: 1
@@ -187,6 +187,10 @@ station:                     # where the robot waits for visitors: its "you are 
 - A section's `name` must match `section` in `shelves.csv` exactly (case aside) and be unique across floors.
 - Give every floor a `lift` landmark: directions to another floor start with "Take the lift to Level N" and draw the
   path from the lift.
+- **Facilities.** Landmarks of kind `toilets`, `help_desk`, `exit` and `entrance` are what the robot tells visitors when they
+  ask "where is the toilet / help desk / exit / entrance": put one on every floor that has one (the robot names the nearest to
+  its station first and the other floors after it). The sample plan's positions are placeholders like the rest of it. A kind
+  with no landmark makes the robot say it has no such place on its map and send the visitor to the help desk.
 - The path is **approximate** (straight or L-shaped, first along x then y); it does not avoid shelves or walls.
 - `tools/catalog_check.py` loads the plan and reports, as errors, a rectangle outside its floor, a section name used
   twice, a landmark of an unknown kind, a shelf whose section is not on its floor, and a shelf whose `map_x`/`map_y`

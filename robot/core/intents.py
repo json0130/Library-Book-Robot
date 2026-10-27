@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from robot.services.books import title_key
+from robot.services.places import FACILITIES, NEEDS_CUE
 
 CONTRACTIONS = {"i'm": "i am", "im": "i am", "that's": "that is", "thats": "that is", "it's": "it is", "what's": "what is",
                 "whats": "what is", "where's": "where is", "wheres": "where is", "who's": "who is", "let's": "let us",
@@ -79,6 +80,7 @@ INTEREST_PATTERNS = (
 )
 INTENT_WORDS = frozenset(w for group in (PHRASES.values(), [WHERE_CUES, GUIDE_CUES]) for ph in group for p in ph
                          for w in p.split()) - {"about", "like", "similar", "related", "find", "show", "take", "back"}
+INTENT_WORDS |= frozenset(w for _, _, names in FACILITIES.values() for n in names for w in n.split())
 FILLER_WORDS = ("book", "books", "novel", "novels", "read", "reads", "story", "stories", "stuff", "please", "titles")
 
 DEFAULTS = {"word_similarity": 0.8, "short_word_similarity": 0.85, "min_confidence": 0.7, "ambiguity_margin": 0.15,
@@ -425,6 +427,20 @@ class IntentRouter:
                 add("where", conf, place=place, isbn=place.isbn if place.kind == "book" else "", take_me=take_me, label=label)
                 if cand and cand[-1].label == label:
                     placed[id(cand[-1])] = {words[i] for i in used}
+        named_floor = self.floor_candidate(words)
+        for kind, (_, _, names) in FACILITIES.items():                  # the toilets, the help desk, the exit
+            matches = [(m[0], set(m[1]), n) for n in names if (m := self.match_phrase(words, n.split()))]
+            if not matches:
+                continue
+            sim, used, said = max(matches, key=lambda m: m[0])
+            if kind in NEEDS_CUE and len(said.split()) == 1 and not (place_cue or "the" in words):
+                continue                                                # a bare "exit" may mean "I am leaving"
+            covered = used | explained_extra
+            coverage = len({words[i] for i in covered} & content) / len(content) if content else 1.0
+            add("where", sim * (0.55 + 0.45 * coverage) if coverage < 1.0 else sim, take_me=take_me, label=f"facility {kind}",
+                place=self.resolver.facility_place(kind, named_floor[0].floor if named_floor else None))
+        if any(c.label.startswith("facility") for c in cand):          # "the toilets on level 3" is not also "what is on level 3"
+            cand = [c for c in cand if not (c.intent == "where" and c.place is not None and c.place.kind == "floor")]
         if has_book and place_cue and any(w in ("it", "this", "that") for w in words) and not any(c.intent == "where" for c in cand):
             add("where", 0.9, label="where is it (the book on the pad)", take_me=take_me)
         if best_title and not cand:

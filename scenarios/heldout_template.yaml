@@ -1,0 +1,54 @@
+# Held-out phrasings: what a visitor might say, written by someone who has not seen the intent router.
+#
+#   python -m robot scenarios run --variants scenarios/heldout_template.yaml --llm real --runs 10
+#
+# Copy this file (e.g. scenarios/heldout_alex.yaml), then under each step write as many different ways of saying it
+# as you can, in your own words, the way you would say it to a robot: short or long, polite or blunt, with or
+# without the book's name. `{title}` and `{author}` stand for the book the visitor has put on the pad.
+# Leave a scenario's steps all empty to skip that scenario; fill in all of a scenario's steps or none.
+# The comment under each step says only what the visitor wants. The scenarios' own wording is deliberately not here.
+#
+# Step numbers go through the scenario's `say` steps in the order they are written in scenarios/<name>.yaml.
+# Not run as it stands: every list is empty (and `run` refuses a file with nothing in it).
+#
+# Example (do not copy it, make up your own):
+#   ask_about_book:
+#     2: ["who's the writer?", "who came up with {title}?"]
+
+ask_about_book:               # the visitor has placed a book on the pad
+  1: []                       # asks what the book is about
+  2: []                       # asks who wrote it
+  3: []                       # asks how many pages it has (the catalogue does not know: the robot must not guess)
+  4: []                       # asks where the book is on the shelves
+  5: []                       # asks the robot to take them there
+  6: []                       # says they are finished
+
+find_section:
+  1: []                       # asks where the science books are
+  2: []                       # asks what is on level 2
+  3: []                       # names just "history" (the robot should ask which kind of history)
+  4: []                       # asks for the book "A Brief History of Time" by name (in a different branch from step 3)
+  5: []                       # asks where the computing books are, a section on another floor
+  6: []                       # asks where the toilets are (one of four branches, 6 to 9)
+  7: []                       # asks where the help desk is
+  8: []                       # asks where the exit is, or how to get out
+  9: []                       # asks where the toilets are on level 3
+  10: []                      # says they are finished
+
+recommend:
+  1: []                       # with a book on the pad: asks for something similar to it
+  2: []                       # with no book: says what kind of book they like (a topic)
+  3: []                       # after picking a book from the list: asks to be shown the way
+  4: []                       # says they are finished
+
+return_book:                    # steps 1-4 are four different branches: one of them is used in each run
+  1: []                       # says they want to return a book, before putting it on the pad
+  2: []                       # after putting it on the pad: says to return that one
+  3: []                       # as step 1, for a book the library does not know
+  4: []                       # as step 2, for a book the library does not know
+  5: []                       # says they are finished
+
+returning_interrupted:          # the robot is busy putting books back; a person stops it
+  1: []                       # asks where the history section is, or what is on a floor (the visitor then finishes)
+  2: []                       # says they are finished
+  3: []                       # the same kind of question in the other branch (the visitor then walks away)

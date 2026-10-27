@@ -87,6 +87,9 @@ INTENT_DEFAULTS = {                 # the intent router (core/intents.py) and wh
     "ambiguity_margin": 0.15,       # two places closer than this: ask which one
     "repair_after": 2,              # this many utterances in a row not understood in a state: show the choices as buttons
     "thinking_ack_s": 1.5,          # common zone only: a short spoken "Let me check." if no sentence has arrived after this
+    "expected_word_similarity": 0.65,    # right after a question with few answers (guide offer, "anything else?", "did you mean"):
+    "expected_phrase_similarity": 0.68,  # looser matching of a short reply against only those answers (core/expectations.py)
+    "expected_max_words": 4,             # ...for replies of up to this many words (fillers like "er" and "please" not counted)
 }
 
 SCENARIO_DEFAULTS = {               # the scenario test harness (robot/scenarios): it only observes, it does not change behaviour

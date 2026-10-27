@@ -109,6 +109,11 @@ What a visitor says goes to `Dialogue.handle_text` (`core/dialogue.py`):
    both (logged as `[llm] first byte after ... ms, total ... ms`, and recorded by the scenario harness). Nothing in the
    robot pretends to stream: the first sentence is spoken when the reply arrives. Streaming would need a protocol change
    on the AI server.
+8. **The model is kept warm.** The first request after the model has been idle is the slow one (about 9 s cold, against 1-3 s).
+   With `--llm`, `services/warmup.py` sends one tiny request in the background as the robot starts (start-up does not
+   wait for it) and, while the dialogue is IDLE, another every `ai_server.keepalive_s` seconds (default 240; 0 turns the
+   keep-alives off, the warm-up stays). They use their own client, so they never touch a visitor's timing, and they
+   publish nothing, so nothing is spoken or shown; the only trace is `[llm] warm-up answered in ... ms` in the log.
 
 ## The screen composer and views
 
@@ -146,7 +151,27 @@ What a visitor says goes to `Dialogue.handle_text` (`core/dialogue.py`):
 - **The page.** `display/ui/views.js` has one function per view and builds plain DOM (text always as text). It needs
   nothing from the internet. Buttons POST their id to `/input` (`book:`, `where:`, `guide:`, `similar:` + ISBN,
   `section:<name>`, `floor:<n>`); `Dialogue.choice_info` turns them into choices for the same table, so "Show me the
-  way" and "Guide me" reuse the guide flow and "Something similar" the RECOMMEND state.
+  way" reuses the guide flow and "Something similar" the RECOMMEND state. There is no "Guide me" button on the
+  directions view and none at ANYTHING_ELSE: that state shows the face with its question (`options_for("ANYTHING_ELSE")` is
+  empty), the visitor answers aloud, and "I'm done" appears only in repair mode.
+- **Expectation-aware matching.** `core/expectations.py`: when the robot asks a question with a few answers (it sets
+  `session.expect` when it offers to guide, asks "anything else?" or "did you mean A or B?"), `Dialogue.handle_text` first
+  tries `match_answers` on a short reply (up to `intents.expected_max_words`, fillers not counted) against only those answers:
+  a loose per-word threshold (`expected_word_similarity`), and for a phrase of two or more words of the same length a loose
+  whole-text ratio (`expected_phrase_similarity`), with a few phrase variants per answer ("guide me", "take me there",
+  "show me", "lead the way"). Every word said must be explained by the answer ("show me Dune" is not "show me"), and the
+  `NEVER_MATCH` pairs still hold, typos of them included ("anyting else" is not "nothing else"). The expectation is used
+  up by the next utterance (or a button press, or the end of the visit); no match leaves the normal router untouched.
+- **Facilities.** `places.FACILITIES` maps a landmark kind of the floor plan (toilets, help_desk, exit, entrance) to the ways
+  people name it. The router adds a `where` candidate with a `Place("facility")` (a multi-word name needs no cue; a bare
+  "exit" or "entrance" needs "where" or "the"), `PlaceResolver.facility_in` does the same for the older rules, and
+  `Dialogue.tell_facility` answers from `FloorPlan.find(kind)`: the nearest to the station first (or the named floor),
+  what it is next to, the distance when on the robot's floor, and the other floors. It publishes
+  `LocationResolved("landmark", ...)` so the screen draws the directions view (lift first on another floor), and it
+  is information only (no guide offer, `last_action = "answer"`).
+- **Follow-ups after a recommendation.** `Dialogue.focus_on()` makes the top pick the topic (`session.focus`; with no pad
+  book it also becomes `session.book`, `virtual`), and `referent()` resolves "that book" / "that one" to it when a pad book
+  is the topic. Scanning, "another book" and a new session clear it.
 
 ## The book graph
 

@@ -25,19 +25,32 @@ FILLER = r"\b(?:where|is|are|the|a|an|can|could|i|you|me|us|find|show|take|guide
          r"please|book|books|novel|novels|located|in|this|library|on|of|what|whats|what's|which|shelf|section|" \
          r"area|it|there|do|does|keep|have|any|some|for|looking|no|yes|ok|okay|then|so|um|hmm|well|explain|about|" \
          r"summary|describe|recommend|similar|like|something|anything|more)\b"
+# What a visitor may ask for besides books: landmark kind -> (how to say it, its verb, the ways people name it). The kinds
+# are those of data/floorplan.yaml; the answer comes from the plan (the nearest one to the robot, and the others).
+FACILITIES = {
+    "toilets": ("the toilets", "are", ["toilet", "toilets", "restroom", "restrooms", "rest room", "bathroom", "bathrooms",
+                                       "washroom", "washrooms", "wash room", "loo", "lavatory", "lavatories", "wc"]),
+    "help_desk": ("the help desk", "is", ["help desk", "helpdesk", "information desk", "info desk", "service desk",
+                                          "enquiry desk", "enquiries", "front desk", "reception", "circulation desk"]),
+    "exit": ("the exit", "is", ["exit", "way out", "get out", "emergency exit", "fire exit"]),
+    "entrance": ("the entrance", "is", ["entrance", "main door", "way in"]),
+}
+NEEDS_CUE = ("exit", "entrance")       # a bare "exit" may mean "I am leaving": only with "where" or "the"
 FUZZY_MIN = 0.75           # how alike a loosely typed title must be
 TIE = 0.05                 # candidates closer than this are ambiguous
 
 
 @dataclass
 class Place:
-    kind: str                          # book | section | floor | ambiguous
+    kind: str                          # book | section | floor | facility | ambiguous
     title: str                         # what to call it ("Dune", "the History section", "Level 2")
     isbn: str = ""
     section: str = ""
     floor: Optional[int] = None
     shelf: str = ""
     topic: str = ""                    # the topic the section was found for ("astronomy")
+    landmark: str = ""                 # for a facility: the kind in the floor plan (toilets, help_desk, exit, entrance)
+    requested: bool = False            # for a facility: the visitor named the floor ("the toilets on level 3"): `floor` is it
     choices: list = field(default_factory=list)       # Places, for an ambiguous one
 
     @property
@@ -72,7 +85,7 @@ class PlaceResolver:
     # ---- the steps ----
     def resolve(self, text: str) -> Optional[Place]:
         text = text.lower()
-        for step in (self.floor_in, self.title_in, self.section_in, self.topic_in, self.fuzzy_title):
+        for step in (self.title_in, self.facility_in, self.floor_in, self.section_in, self.topic_in, self.fuzzy_title):
             place = step(text)
             if place is None:
                 continue
@@ -96,6 +109,32 @@ class PlaceResolver:
         if level is None or level not in self.floors():
             return None
         return Place("floor", f"Level {level}", floor=level)
+
+    def facility_in(self, text: str) -> Optional[Place]:
+        """The toilets, the help desk, the exit or the entrance, when the text names one (spelt as in FACILITIES)."""
+        for kind, (_, _, names) in FACILITIES.items():
+            said = next((n for n in names if re.search(rf"\b{re.escape(n)}\b", text)), None)
+            if said:
+                if kind in NEEDS_CUE and " " not in said and not re.search(r"\bwhere\b|\bthe\b|\bwhich\b|\bhow do i\b", text):
+                    continue
+                named = self.floor_in(text)                 # "the toilets on level 3"
+                return self.facility_place(kind, named.floor if named else None)
+        return None
+
+    def facility_place(self, kind: str, floor: Optional[int] = None) -> Place:
+        """The facility on the floor the visitor named, else the nearest one to the robot (its floor first), or a Place
+        with no floor when the plan has none."""
+        name = FACILITIES[kind][0]
+        found = self.plan.find(kind) if self.plan is not None else []
+        if floor is not None:
+            return Place("facility", name, floor=floor, landmark=kind, requested=True)
+        if not found:
+            return Place("facility", name, landmark=kind)
+        station = self.plan.station
+        here = station.level if station else None
+        found.sort(key=lambda fm: (fm[0].level != here, abs(fm[0].level - (here or fm[0].level)), fm[0].level))
+        floor, mark = found[0]
+        return Place("facility", name, floor=floor.level, landmark=kind)
 
     def book_place(self, book) -> Place:
         place = self.finder.locate(book.isbn13)

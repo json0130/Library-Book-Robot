@@ -4,6 +4,7 @@ ai_server:
   host: 172.24.30.251
   port: 7898
   timeout_s: 300          # LLM/TTS requests can be slow on a busy server
+  keepalive_s: 240        # while idle, a tiny request this often keeps the model loaded (the first answer is not slow); 0 = off
   llm_timeout_s: 20       # book explanations/recommendations: if the LLM is slower, use the catalogue text
   tts_port: null          # null = the main port; the server offers both TTS engines there (set a number only for a separate TTS server)
 
@@ -14,6 +15,9 @@ intents:                  # the intent router in front of the LLM (robot/core/in
   ambiguity_margin: 0.15  # two places closer than this (the History section vs "A Brief History of Time"): ask which
   repair_after: 2         # utterances in a row not understood in one state, then show the choices as buttons ("I'm done" always)
   thinking_ack_s: 1.5     # common zone: say "Let me check." if the LLM has not answered after this many seconds
+  expected_word_similarity: 0.65    # right after a question with a few answers (guide offer, "anything else?", "did you mean"),
+  expected_phrase_similarity: 0.68  # a short reply is matched against only those answers, this loosely ("guy me" = guide me)
+  expected_max_words: 4             # ...if it has up to this many words (fillers like "er" and "please" not counted)
 
 scenarios:                # the scenario test harness: python -m robot scenarios ... (docs/testing.md)
   typo_probability: 0.05  # chance that a `say` step gets realistic typos

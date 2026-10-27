@@ -53,8 +53,9 @@ from robot.events import (ThinkingEnded, ThinkingStarted, BookDropped, BookFocus
                           LocationResolved, NavigationRequested, PersonEngaged, PersonLeft, PersonNearbyBusy,
                           RecommendationsReady, ReplySentence, ReturningProgress, ScanFailed, StateEntered,
                           StateTransition, StoringBook, UserChoice, UserUtterance)
+from robot.core.expectations import expect_anything_else, expect_choice, expect_guide, match_answers
 from robot.core.intents import IntentRouter
-from robot.services.places import Place, PlaceResolver
+from robot.services.places import FACILITIES, Place, PlaceResolver
 from robot.persona import NAME
 from robot.services.book_graph import Location
 from robot.services.books import title_key
@@ -225,6 +226,11 @@ class GuideTarget:
     @property
     def can_drive(self) -> bool:
         return self.location is not None and self.location.has_pose
+
+
+def floor_phrase(floor) -> str:
+    """"on the ground floor", "on level 2": a floor's name in a sentence."""
+    return floor.name.lower() if floor.name.lower().startswith("level") else f"the {floor.name[0].lower()}{floor.name[1:]}"
 
 
 def location_of(book: BookIdentified) -> Location:
@@ -434,6 +440,8 @@ class Session:
     misses: int = 0                      # utterances in a row the robot could not act on in this state
     repair: bool = False                 # the choices are shown as buttons because it did not understand
     awaiting_interest: bool = False      # it asked "what kind of books do you like?" outside AWAIT_BOOK
+    focus: str = ""                      # ISBN of the book it just recommended: what "that book" means next
+    expect: Optional[object] = None      # core/expectations.Expectation: the answers to the question it just asked (next utterance only)
 
 
 @dataclass
@@ -479,7 +487,7 @@ class Dialogue:
         self.greeted = False                # said hello in this visit (reset when the session ends)
         self.session = Session()
         self.guide_target: Optional[GuideTarget] = None     # set by a return, a recommendation or "where is X"
-        self.awaiting_guide = False                         # the last thing said offered to guide them
+        self._awaiting_guide = False                        # the last thing said offered to guide them
         self.stops: list[ShelfStop] = []                    # the returning trip: the shelves still to visit
         self.current_shelf: Optional[str] = None            # the shelf it is heading for or at
         self.returning_paused = False                       # a trip was interrupted and is waiting to resume
@@ -575,12 +583,26 @@ class Dialogue:
             self.active()
         await self.fsm.dispatch(name, payload, source)
 
+    @property
+    def awaiting_guide(self) -> bool:
+        return self._awaiting_guide
+
+    @awaiting_guide.setter
+    def awaiting_guide(self, value: bool) -> None:
+        """Offering to guide also sets what a short reply to it can mean (core/expectations.py); taking it back clears it."""
+        self._awaiting_guide = bool(value)
+        if value:
+            self.session.expect = expect_guide()
+        elif self.session.expect is not None and self.session.expect.kind == "guide":
+            self.session.expect = None
+
     # ---- what the visitor chose or said ----
     async def on_choice(self, event: UserChoice) -> None:
         """A button on the screen, or the operator picking for the visitor."""
         await self.start()
         self.active()
         choice = event.choice.strip()
+        self.session.expect = None
         if self.leaf in ("OFFER", "ANYTHING_ELSE", "AWAIT_BOOK", "ANSWER") or choice == "done":
             self.awaiting_guide = False
         await self.fsm.dispatch("Choice", self.choice_info(choice), event.source)
@@ -618,12 +640,15 @@ class Dialogue:
         low = text.lower()
         if hear and self.assistant is not None:
             self.assistant.hear(text)
+        expect, self.session.expect = self.session.expect, None          # an expectation lasts for one utterance
         was_awaiting, self.awaiting_guide = self.awaiting_guide, False
         if self.leaf in ("IDLE", "FAREWELL") and is_done(low, "closing"):
             return                                       # "thanks" after the goodbye is not a new visit
         info = None
         if self.leaf not in ("IDLE", "FAREWELL", "GREET"):
-            info = self.route_info(text, was_awaiting)                # the router first: rules, fuzzy, no LLM
+            info = self.expected_info(text, expect)                   # a short answer to the question it just asked
+            if info is None:
+                info = self.route_info(text, was_awaiting)            # the router: rules, fuzzy, no LLM
             if info is None:
                 info = self.classify(low, text, was_awaiting)         # then the older rules
         if info is not None:
@@ -687,13 +712,29 @@ class Dialogue:
         if self.style_speaks():
             await asyncio.get_running_loop().run_in_executor(None, self.out.deliver, self.thinking_text, self.get_style())
 
+    def expected_info(self, text: str, expect) -> Optional[ChoiceInfo]:
+        """A ChoiceInfo when a short reply is one of the answers the robot expected (None: the router decides)."""
+        if expect is None:
+            return None
+        found = match_answers(text, expect, self.settings.intents)
+        if found is None:
+            return None
+        log.info("[expect] %r -> %s (%s %.2f, %s)", text, found.answer, found.phrase, found.score, expect.kind)
+        if expect.kind == "choose":
+            return self.choice_info(found.answer)
+        if found.answer == "guide":
+            return ChoiceInfo("guide", text)
+        if found.answer == "done":
+            return ChoiceInfo("done", text)
+        return ChoiceInfo(found.answer, text)                                 # more | another
+
     def route_info(self, text: str, was_awaiting: bool) -> Optional[ChoiceInfo]:
         """A ChoiceInfo from the intent router's best candidate (None: nothing confident, or an intent that needs the
         state to say what it means). Two close places become a question: the options view."""
         s = self.session
         prompted = ("recommend" if (self.leaf == "AWAIT_BOOK" and s.intent == "recommend") or s.awaiting_interest else
                     "ask" if self.leaf == "AWAIT_BOOK" and s.intent == "ask" else None)
-        route = self.router.route(text, self.leaf, was_awaiting, s.book is not None, prompted)
+        route = self.router.route(text, self.leaf, was_awaiting, s.book is not None or bool(s.focus), prompted)
         best = route.best
         if best is None:
             return None
@@ -715,7 +756,8 @@ class Dialogue:
         if intent == "guide":
             return ChoiceInfo("guide", text)
         if intent == "explain":
-            return ChoiceInfo("ask", text, question=text, isbn=best.isbn)
+            isbn, explicit = self.referent(text.lower(), best.isbn)
+            return ChoiceInfo("ask", text, question=text, isbn=isbn, explicit=explicit)
         if prompted == "recommend" and (intent == "title" or (intent == "where" and best.isbn)):
             return ChoiceInfo("recommend", text, isbn=best.isbn)     # "what do you like?" "Dune": books like it
         if intent == "title":
@@ -727,7 +769,8 @@ class Dialogue:
             return ChoiceInfo("recommend", text, interest=best.interest, isbn=best.isbn, general=bool(general))
         if intent == "where":
             if best.place is None:                                    # "where is it": the book in hand
-                return ChoiceInfo("ask", text, question=text, take_me=best.take_me)
+                isbn, explicit = self.referent(text.lower())
+                return ChoiceInfo("ask", text, question=text, take_me=best.take_me, isbn=isbn, explicit=explicit)
             return ChoiceInfo("ask", text, question=text, area=True, place=best.place, take_me=best.take_me)
         return None
 
@@ -916,6 +959,7 @@ class Dialogue:
     def another_book(self, event) -> None:
         self.session.book = None
         self.session.virtual = False
+        self.session.focus = ""
         self.session.intent = None
         self.session.question = self.session.interest = None
         self.guide_target = None
@@ -942,6 +986,7 @@ class Dialogue:
         book: BookIdentified = event.payload
         had_book = self.session.book is not None
         self.session.book, self.session.virtual = book, False
+        self.session.focus = ""
         self.session.scan_failures = 0
         self.guide_target = None
         if self.assistant is not None and had_book:
@@ -1184,7 +1229,10 @@ class Dialogue:
         if s.last_action in ("where", "choose"):         # "...guide you there?" / "Did you mean...?" already asked it
             self.show(self.last_said)
             return
-        await self.say(self.follow_up(s.last_action or "answer"), "neutral")
+        question = self.follow_up(s.last_action or "answer")              # may offer to guide (and then expects that)
+        if s.expect is None:
+            s.expect = expect_anything_else()
+        await self.say(question, "neutral")
 
     async def enter_farewell(self, event) -> None:
         s = self.session
@@ -1338,11 +1386,8 @@ class Dialogue:
             options = [{"id": "return", "label": "Return a book"}, {"id": "ask", "label": "Ask about a book"},
                        {"id": "recommend", "label": "Get a recommendation"}]
             return options + [{"id": "done", "label": "Done"}] if self.session.repeated_offer else options
-        if state == "ANYTHING_ELSE":
-            options = [{"id": "more", "label": "Yes, more help"}]
-            if self.guide_target is not None and self.guide_target.can_drive:
-                options.append({"id": "guide", "label": "Guide me there"})
-            return options + [{"id": "done", "label": "No, that's all"}]
+        if state == "ANYTHING_ELSE":                    # no buttons: the face asks "anything else?" and the visitor answers aloud
+            return []
         if state == "AWAIT_BOOK":
             return [{"id": "more", "label": "Back"}, {"id": "done", "label": "Done"}]
         return []
@@ -1492,6 +1537,7 @@ class Dialogue:
         if place.kind == "ambiguous":
             choices = [{"id": c.choice_id, "label": c.title[0].upper() + c.title[1:]} for c in place.choices]
             self.last_choices = [c["id"] for c in choices]
+            self.session.expect = expect_choice([(c["id"], c["label"]) for c in choices])
             names = join_names([c["label"] for c in choices]).replace(" and ", " or ")
             await self.say(f"Did you mean {names}?", "neutral")
             if self.publish is not None:
@@ -1505,6 +1551,9 @@ class Dialogue:
         if place.kind == "floor":
             await self.tell_floor(place.floor)
             return
+        if place.kind == "facility":
+            await self.tell_facility(place)
+            return
         shelves = [s for s in self.finder.graph.shelves.values() if s.section == place.section] \
             if self.finder is not None and self.finder.graph is not None else []
         if not shelves:
@@ -1516,6 +1565,43 @@ class Dialogue:
                     "topic" if place.topic else "section")
         self.guide_target = self.target_for_area(area)
         await (self.guide() if take_me else self.tell_area(area, self.guide_target))
+
+    async def tell_facility(self, place) -> None:
+        """Where the toilets, the help desk, the exit or the entrance are, from the floor plan: the one nearest the robot
+        (with how far, and what it is next to), and the others. Information only: it does not offer to guide."""
+        name, verb, _ = FACILITIES[place.landmark]
+        sentence = name[0].upper() + name[1:]
+        found = self.plan.find(place.landmark) if self.plan is not None else []
+        if not found:
+            ask = "Please ask a member of staff." if place.landmark == "help_desk" else "The help desk can tell you."
+            await self.say(f"I don't have {name} on my map yet. {ask}", "neutral")
+            return
+        here = self.plan.station
+        found.sort(key=lambda fm: (here is not None and fm[0].level != here.level,
+                                   abs(fm[0].level - (here.level if here else fm[0].level)), fm[0].level))
+        lead = ""
+        if place.requested:                                      # "the toilets on level 3"
+            on_floor = [fm for fm in found if fm[0].level == place.floor]
+            if on_floor:
+                found = on_floor + [fm for fm in found if fm[0].level != place.floor]
+            else:
+                bare = name.removeprefix("the ")
+                lead = f"There {'are' if verb == 'are' else 'is'} no {bare} on level {place.floor}. "
+        floor, mark = found[0]
+        words = [f"{sentence} {verb} on {floor_phrase(floor)}"]
+        near = sorted((abs(m.x - mark.x) + abs(m.y - mark.y), m.name) for m in floor.landmarks if m is not mark and m.kind != mark.kind)
+        if near and near[0][0] <= 4.0:
+            words.append(f"{'next to' if near[0][0] <= 2.0 else 'near'} the {near[0][1].lower()}")
+        if here is not None and here.level == floor.level:
+            words.append(f"about {max(1, round(abs(here.x - mark.x) + abs(here.y - mark.y)))} m from here")
+        text = lead + ", ".join(words) + "."
+        others = [floor_phrase(f) for f, _ in found[1:] if f.level != floor.level]
+        if others:
+            text += f" There {'are more' if verb == 'are' else 'is another'} {'on ' + join_names(others)}."
+        if self.publish is not None:
+            await self.publish(LocationResolved("landmark", name, floor=floor.level, x=mark.x, y=mark.y))
+        self.session.last_action = "answer"
+        await self.say(text, "happy")
 
     async def tell_floor(self, level: int) -> None:
         names = self.plan.sections_on(level) if self.plan is not None else []
@@ -1667,10 +1753,12 @@ class Dialogue:
             if spoken:
                 best = self.first_mentioned(spoken, picks)
                 self.guide_target = self.target_for(best.book.isbn13, best.book.title)
+                self.focus_on(best.book)
                 await self.say(spoken, "happy")
                 return
         best = picks[0]
         self.guide_target = self.target_for(best.book.isbn13, best.book.title)
+        self.focus_on(best.book)
         text = self.recommendation_text(title, picks)
         if loose:
             text = f"I don't have anything very close to {title}, but {text[0].lower()}{text[1:]}"
@@ -1688,7 +1776,26 @@ class Dialogue:
         await self.publish_recommendations(picks, interest=interest)
         best = picks[0]
         self.guide_target = self.target_for(best.book.isbn13, best.book.title)
+        self.focus_on(best.book)
         await self.say(self.recommendation_text(None, picks, interest), "happy")
+
+    def focus_on(self, book) -> None:
+        """The book just recommended is what "that book" means in the next question. With no book on the pad it becomes
+        the topic (like a title they named), so "explain that", "who wrote it?" and "where is it?" are about it."""
+        s = self.session
+        s.focus = book.isbn13
+        if s.book is None or s.virtual:
+            s.book, s.virtual = self.identified(book), True
+
+    def referent(self, low: str, isbn: str = "") -> tuple:
+        """(ISBN, explicit) of the book "that book" / "that one" means: the one named, else the one just recommended.
+        explicit: it replaces a book on the pad as the topic (they said "that", not "it")."""
+        s = self.session
+        if isbn or not s.focus:
+            return isbn, False
+        if s.book is not None and not s.virtual and s.book.isbn != s.focus and re.search(r"\bthat (?:one|book)\b", low):
+            return s.focus, True
+        return "", False
 
     async def publish_recommendations(self, picks: list, source_isbn: str = "", interest: str = "") -> None:
         """Tell the screen (a list of covers with one reason each); "the second one" then means the second pick."""

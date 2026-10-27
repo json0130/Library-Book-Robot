@@ -348,7 +348,8 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
               "storage": len(app.dialogue.storage), "catalogue_titles": [b.title for b in app.finder.catalog.books],
               "timeline": recorder.entries, "events": recorder.event_names,
               "thresholds": harness["latency"], "timeouts": dict(app.dialogue.settings.timeouts),
-              "typo_probability": ctx.typo_probability, "speech_probability": ctx.speech_probability}
+              "typo_probability": ctx.typo_probability, "speech_probability": ctx.speech_probability,
+              "heldout": scenario.heldout}
     record["checks"] = [c.to_json() for c in checks_module.run_checks(record, scenario)]
     record["passed"] = all(c["passed"] for c in record["checks"])
     return record
@@ -393,7 +394,8 @@ async def run_batch(plan: list, cfg: Config, llm: tuple, speed: float, typo_prob
             failed = [c["name"] for c in record["checks"] if not c["passed"]]
             progress(f"  {run_id:34} seed {seed:<11} {'PASS' if record['passed'] else 'FAIL ' + ', '.join(failed[:3])}")
     (out_dir / "meta.json").write_text(json.dumps({"llm": llm[2] if len(llm) > 2 else "none", "speed": speed,
-                                                   "runs": len(records), "created": time.time()}), encoding="utf-8")
+                                                   "runs": len(records), "created": time.time(),
+                                                   "heldout": next((r["heldout"] for r in records if r.get("heldout")), "")}), encoding="utf-8")
     return records
 
 

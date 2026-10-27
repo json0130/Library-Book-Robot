@@ -61,6 +61,7 @@ import threading
 from typing import Optional, TextIO
 
 from robot.app import App, build_app, build_assistant, sim_drivers
+from robot.services.warmup import Warmup
 from robot.config import Config
 from robot.core.expression import EMOTIONS, normalize
 from robot.events import EmotionDetected, UserUtterance
@@ -293,7 +294,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         speech = Speech.from_config(cfg)
     assistant = build_assistant(cfg) if use_llm else None
     speaker = cfg.robot.get("devices", {}).get("speaker") or "default"
-    counter = window = counter_task = watch_task = ticker = link_task = feed_task = None
+    counter = window = counter_task = watch_task = ticker = link_task = feed_task = warm_task = None
     try:
         app = build_app(cfg, drivers, speech=speech, log_sessions=log_sessions, assistant=assistant,
                         persist_storage=persist_storage)
@@ -314,6 +315,8 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             sim.say(f"  {len(app.dialogue.storage)} book(s) are still in storage from last time "
                     "(`reset all` empties it)")
         ticker = asyncio.create_task(app.run_ticker())
+        if use_llm:                                         # one silent request now, and keep-alives while idle (services/warmup.py)
+            warm_task = asyncio.create_task(Warmup.from_app(app).run())
         if speak and speech is not None:
             problem = await asyncio.get_running_loop().run_in_executor(None, speech.check)
             if problem:
@@ -393,7 +396,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             await sim.settle(settle_s)
         return 0
     finally:
-        for task in (counter_task, watch_task, ticker, link_task, feed_task, locals().get("guide_task")):
+        for task in (counter_task, watch_task, ticker, link_task, feed_task, warm_task, locals().get("guide_task")):
             if task is not None:
                 task.cancel()
         if window is not None:

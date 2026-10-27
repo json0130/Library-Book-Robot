@@ -198,7 +198,7 @@ def directions(plan, kind: str, title: str, level: int, robot: Optional[tuple], 
         robot={"x": robot[1], "y": robot[2]} if robot_here else None, start=start,
         target={"x": target[0], "y": target[1]} if target is not None else None, path=path,
         distance_m=round(distance) if path or distance else None, section=section, shelf=shelf, other_floor=other,
-        steps=steps, buttons=[{"id": "guide", "label": "Guide me"}] if kind != "floor" else [])
+        steps=steps, buttons=[])
 
 
 # ---------------------------------------------------------------------------------------------- the composer
@@ -413,6 +413,8 @@ class ScreenComposer:
             # the state's choices as buttons in every zone: the screen follows the conversation by itself
             prompt = self.text if self.zone == "quiet" else (self.title or "How can I help?")   # speech carries the words
             return "options", OptionsPayload(prompt, [dict(o) for o in self.choices])
+        if leaf == "ANYTHING_ELSE":                       # just the face, asking (in both zones, as a caption)
+            return "face", FacePayload(self.text if self.zone == "quiet" and self.text else self.title or "Anything else?")
         return "face", FacePayload(self.text if self.zone == "quiet" else "")
 
     async def show(self, view: Optional[str] = None, payload=None) -> ScreenUpdate:

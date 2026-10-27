@@ -20,6 +20,7 @@ python -m robot scenarios report data/eval_runs/<timestamp>          # (run alre
 python -m robot scenarios replay return_book-quiet-003               # the same seed and choices again
 python -m robot scenarios compare data/eval_runs/A data/eval_runs/B  # did a fix help?
 python -m robot scenarios live --scenario return_book --zone quiet   # a human tester on the real robot
+python -m robot scenarios run --variants scenarios/heldout_alex.yaml --llm real   # held-out phrasings (below)
 ```
 
 - `--runs N` is per scenario, split evenly over the zones (10 runs = 5 quiet + 5 common).
@@ -63,7 +64,7 @@ steps:
       text: ["who wrote it?", "who is the author of {title}?"]           # {title}, {author}: the last book placed
       answerable: true             # the catalogue can answer: "Sorry, I can't answer" fails the run
   - say: {text: ["how many pages does it have?"], unanswerable: true}    # it must not make something up
-  - tap: "Guide me"                # a button label (or part of one) on the screen now; {tap: {item: random}} picks a book in a list
+  - tap: "Show me the way"         # a button label (or part of one) on the screen now; {tap: {item: random}} picks a book in a list
   - wait: 2                        # robot-seconds; {wait: {until_state: IDLE, timeout: 60}} (a timeout = a stuck state)
 expect:                            # a list; each item has one kind, plus optional when / unless (tags) and zones
   - {state_path: [ENGAGED.SCAN, ENGAGED.STORE, ENGAGED.FAREWELL]}         # an ordered subsequence of the states entered
@@ -93,7 +94,32 @@ the LLM (`scenarios.latency`: `first_feedback_ms`, `first_sentence_ms`, `first_s
 "I don't know" for `unanswerable` ones; every `tap` found its button. Then the scenario's own `expect:` items. Each
 result has a name, pass or fail and a reason pointing at the transcript line (`L042`).
 
+## Held-out evaluation
+
+The scenarios' paraphrases were written while the intent router was being tuned, so a batch with them says how well the
+router fits those sentences, not how well it understands people. For the second question, ask people who have not seen the
+router to write how they would say each thing, and run those:
+
+1. Copy `scenarios/heldout_template.yaml` (every list is empty) and give it to the writers. Under each step number they
+   write phrasings in their own words; the comment says only what the visitor wants, never the scenarios' wording. A
+   step is a `say` step of the scenario, counted in the order written in `scenarios/<name>.yaml` (branches included);
+   `{title}` and `{author}` work as in the scenarios.
+2. `python -m robot scenarios run --variants scenarios/heldout_alex.yaml --llm real --runs 10`. Each `say` picks one of
+   the file's phrasings (by the seed, with the usual typos and speech changes; `--typos 0 --speech 0` for the phrasings as
+   written). Everything else, including the checks, is the scenario's own. Only scenarios that are filled in are run; a
+   scenario with some steps filled in and others empty is refused, so a batch never mixes tuned and held-out wording.
+3. `summary.md` of such a batch starts with **HELD-OUT batch** and names the file (a tuned batch says "Tuned batch"),
+   `runs.jsonl` records `heldout` on every run, `meta.json` has it too, and `compare` warns when it is given one of each.
+   `replay RUN_ID` of a held-out run needs the same `--variants FILE`.
+
+Do not tune the router on a held-out file: once its sentences are fitted it measures nothing. Read the failures, then
+collect a fresh file. (`heldout*.yaml` files in `scenarios/` are not loaded as scenarios.)
+
 ## What the harness found, and what was done about it
+
+(The `ask_about_book` scenario says "guide me" aloud since the "Guide me" button went; typos such as "guy me" and "er tqke me
+thre" used to fall through to the LLM, so the robot now matches a short reply to its own question more loosely, see
+[architecture.md](architecture.md#understanding-and-feedback).)
 
 The first batches (`mock-batch`, `real-batch`) found: questions asked in other words fell through to the LLM or to a
 "Sorry"; the same question was re-asked again and again; a slow LLM call left the screen and face unchanged; some replies

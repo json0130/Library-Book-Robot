@@ -410,15 +410,18 @@ class ScreenTest(unittest.TestCase):
         self.assertTrue(all(o["label"] for o in offer.options))
         self.assertEqual(next(u for u in reversed(common.screens) if u.state_path == "ENGAGED.OFFER").options, ())
 
-    def test_anything_else_has_buttons_in_a_quiet_zone_and_a_guide_button_when_it_can_drive(self):
-        app = new_app("quiet")
-        run(app, PersonEngaged(), UserUtterance("where is dune"))
-        buttons = [o["id"] for o in app.screens[-1].options]
-        self.assertEqual(app.screens[-1].state_path, "ENGAGED.ANYTHING_ELSE")
-        self.assertEqual(buttons, ["more", "guide", "done"])
-        again = new_app("quiet")                                                  # after a return there is nothing to guide to
+    def test_anything_else_shows_the_face_asking_with_no_yes_no_or_guide_buttons(self):
+        for zone in ("quiet", "common"):
+            with self.subTest(zone=zone):
+                app = new_app(zone)
+                run(app, PersonEngaged(), UserUtterance("where is dune"))
+                last = app.screens[-1]
+                self.assertEqual(last.state_path, "ENGAGED.ANYTHING_ELSE")
+                self.assertEqual(last.options, ())
+        again = new_app("quiet")                       # what was shown (the slot card) stays, still without buttons
         run(again, PersonEngaged(), UserChoice("return"), BookPlaced(), scanned(MARTIAN), BookDropped())
-        self.assertEqual([o["id"] for o in again.screens[-1].options], ["more", "done"])
+        last = again.screens[-1]
+        self.assertEqual((last.state_path, last.view, last.options), ("ENGAGED.ANYTHING_ELSE", "book_card", ()))
 
     def test_a_button_tap_is_a_choice_from_the_screen_and_is_logged_as_such(self):
         app = new_app("quiet")

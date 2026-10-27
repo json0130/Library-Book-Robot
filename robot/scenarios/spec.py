@@ -55,6 +55,7 @@ class Scenario:
     expect: list = field(default_factory=list)
     setup: dict = field(default_factory=dict)
     path: str = ""
+    heldout: str = ""                  # set by scenarios/heldout.py: the phrasings file this copy of the scenario was given
 
 
 def load_scenario(path) -> Scenario:
@@ -204,6 +205,8 @@ def load_all(directory=SCENARIO_DIR) -> dict:
     """{name: Scenario} for every scenarios/*.yaml. Raises ScenarioError for the first bad file, and for a name used twice."""
     found: dict = {}
     for path in sorted(Path(directory).glob("*.yaml")):
+        if path.name.startswith("heldout"):                 # phrasings for `scenarios run --variants`, not a scenario
+            continue
         scenario = load_scenario(path)
         if scenario.name in found:
             raise ScenarioError(f"{path.name}: the name {scenario.name!r} is also used by {Path(found[scenario.name].path).name}")

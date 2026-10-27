@@ -310,7 +310,7 @@ class DirectionsTest(unittest.TestCase):
         lift = self.plan.lift(3)
         self.assertEqual(p.path[0], [lift.x, lift.y])
         self.assertEqual(p.path[-1], [4.0, 1.0])
-        self.assertEqual(p.buttons, [{"id": "guide", "label": "Guide me"}])
+        self.assertEqual(p.buttons, [])                  # no "Guide me" button: the robot offers to guide in words
 
     def test_a_floor_lists_its_sections(self):
         p = directions(self.plan, "floor", "Level 3", 3, (1, 9.0, 5.5))
@@ -397,7 +397,21 @@ class PlaceResolutionTest(unittest.TestCase):
             place = r.resolve(text)
             self.assertEqual((place.kind, place.floor), ("floor", level), text)
         self.assertIsNone(r.resolve("what's on level 9"))
-        self.assertIsNone(r.resolve("where is the bathroom"))
+        self.assertIsNone(r.resolve("where did I leave my umbrella"))              # no book, section, floor or facility
+
+    def test_facilities_are_places_too(self):
+        r = resolver()
+        for text, kind in (("where is the bathroom", "toilets"), ("where are the restrooms", "toilets"), ("the loo", "toilets"),
+                           ("where is the help desk", "help_desk"), ("where is the information desk", "help_desk"),
+                           ("where is the exit", "exit"), ("how do I get out", "exit"), ("where is the entrance", "entrance")):
+            place = r.resolve(text)
+            self.assertEqual((place.kind, place.landmark), ("facility", kind), text)
+            self.assertEqual(place.floor, 1, text)                                 # the nearest to the robot's station
+            self.assertFalse(place.requested, text)
+        self.assertIsNone(r.resolve("exit"))                                       # a bare "exit" may mean "I am leaving"
+        named = r.resolve("where are the toilets on level 3")                      # the floor they named, not "what is on level 3"
+        self.assertEqual((named.kind, named.landmark, named.floor, named.requested), ("facility", "toilets", 3, True))
+        self.assertEqual(r.resolve("what is on level 3").kind, "floor")
 
     def test_a_section_name_inside_a_title_is_ambiguous_only_when_more_was_said(self):
         r = resolver()

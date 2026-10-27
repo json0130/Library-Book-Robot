@@ -167,8 +167,14 @@ def reply_variety(records: list) -> dict:
 def summary_markdown(records: list, directory: Path) -> str:
     stat = stats(records)
     meta = records[0] if records else {}
-    lines = ["# Scenario run summary", "",
-             f"- directory: `{directory}`", f"- runs: **{stat['runs']}**, passed **{stat['passed']}** ({pct(stat['rate'])})",
+    heldout = sorted({r["heldout"] for r in records if r.get("heldout")})
+    lines = ["# Scenario run summary", ""]
+    if heldout:
+        lines += [f"> **HELD-OUT batch**: the visitor said the phrasings in `{', '.join(heldout)}`, not the tuned paraphrases "
+                  "of the scenarios. Do not compare its pass rate with a tuned batch without saying so.", ""]
+    elif records:
+        lines += ["> Tuned batch: the visitor said the scenarios' own paraphrases (the ones the router was tuned on).", ""]
+    lines += [f"- directory: `{directory}`", f"- runs: **{stat['runs']}**, passed **{stat['passed']}** ({pct(stat['rate'])})",
              f"- llm: {meta.get('llm', '-')}, speed x{meta.get('speed', 1):g}",
              f"- first screen update: median {ms(stat['screen_median'])}, 90th percentile {ms(stat['screen_p90'])}",
              f"- first spoken sentence: median {ms(stat['sentence_median'])}, 90th percentile {ms(stat['sentence_p90'])}",
@@ -255,7 +261,10 @@ def delta(a, b, fmt) -> str:
 def compare_markdown(records_a: list, records_b: list, name_a: str = "A", name_b: str = "B") -> str:
     ga, gb = group(records_a), group(records_b)
     sa, sb = stats(records_a), stats(records_b)
+    kinds = ["held-out" if any(r.get("heldout") for r in records) else "tuned" for records in (records_a, records_b)]
     lines = [f"# Compare {name_a} -> {name_b}", "",
+             *([f"> **{name_a} is a {kinds[0]} batch and {name_b} is a {kinds[1]} batch**: different phrasings, so the "
+                "difference is not only the robot.", ""] if kinds[0] != kinds[1] else []),
              f"- pass rate: {delta(sa['rate'], sb['rate'], pct)} ({sa['runs']} -> {sb['runs']} runs)",
              f"- first screen median: {delta(sa['screen_median'], sb['screen_median'], ms)}",
              f"- first sentence median: {delta(sa['sentence_median'], sb['sentence_median'], ms)}",
