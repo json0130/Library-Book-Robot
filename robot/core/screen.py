@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import time
 import urllib.parse
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional
 
 from robot.events import (ThinkingEnded, ThinkingStarted, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, LocationResolved,
@@ -37,6 +37,7 @@ VIEWS = ("face", "book_card", "book_list", "directions", "options", "status")
 FACE_STATES = ("IDLE", "GREET", "FAREWELL", "PLAN")
 RETURNING_STATES = ("NAVIGATING", "AT_SHELF", "ANNOUNCE", "HOMING")
 CONTENT_STATES = ("OFFER", "AWAIT_BOOK", "ANSWER", "RECOMMEND", "ANYTHING_ELSE")
+MESSAGE_VIEWS = ("book_card", "book_list", "directions")     # content views that carry the robot's words in a quiet zone (`message`)
 
 
 # ---------------------------------------------------------------------------------------------- payloads
@@ -62,12 +63,14 @@ class BookCardPayload(_Payload):
     shelf: str = ""
     badge: str = ""                         # e.g. "Storage slot 5" while it is being returned
     buttons: list = field(default_factory=list)      # [{"id", "label"}]
+    message: str = ""                       # quiet zone: what the robot would have said (an explanation, a confirmation), in full
 
 
 @dataclass
 class BookListPayload(_Payload):
     heading: str
     items: list = field(default_factory=list)        # [{"isbn", "title", "author", "reason", "cover_url"}]
+    message: str = ""                       # quiet zone: what the robot would have said
 
 
 @dataclass
@@ -90,6 +93,7 @@ class DirectionsPayload(_Payload):
     other_floor: bool = False
     steps: list = field(default_factory=list)         # ["Take the lift to Level 3", ...]
     buttons: list = field(default_factory=list)
+    message: str = ""                       # quiet zone: what the robot would have said
 
 
 @dataclass
@@ -123,9 +127,10 @@ def cover_url(isbn: str, title: str = "", author: str = "") -> str:
 
 
 def trim(text: str, limit: int) -> str:
-    """Cut at a word boundary with an ellipsis (the page also clamps to two lines)."""
+    """Cut at a word boundary with an ellipsis (the page also clamps to two lines). A limit of 0 keeps all of it: in a quiet
+    zone the screen is the only voice, so nothing is cut."""
     text = " ".join((text or "").split())
-    if len(text) <= limit:
+    if limit <= 0 or len(text) <= limit:
         return text
     cut = text[:limit].rsplit(" ", 1)[0].rstrip(",;:.")
     return cut + "…"
@@ -210,6 +215,7 @@ class ScreenComposer:
         self.settings = settings or {}
         self.get_style, self.state_of, self.clock = get_style, state_of, clock
         self.path, self.zone, self.text, self.options, self.title = "IDLE", "common", "", (), ""
+        self.carried = self.carried_for = ""           # the answer just given, shown with the follow-up question that comes after it
         self.choices: tuple = ()
         self.repair = False
         self.thinking = False
@@ -242,7 +248,7 @@ class ScreenComposer:
         return float(ttl.get(self.zone, 15) if isinstance(ttl, dict) else ttl)
 
     def summary_chars(self) -> int:
-        chars = self.settings.get("summary_chars", {"quiet": 180, "common": 110})
+        chars = self.settings.get("summary_chars", {"quiet": 0, "common": 110})      # 0: all of it
         return int(chars.get(self.zone, 110) if isinstance(chars, dict) else chars)
 
     @property
@@ -257,7 +263,19 @@ class ScreenComposer:
     async def on_state(self, event: StateEntered) -> None:
         if self.state_of() and self.state_of() != event.state_path:
             return                          # the machine has moved on: a newer StateEntered follows, don't undo its content
+        previous_leaf, previous_text = self.leaf, self.text
         self.path, self.zone, self.text = event.state_path, event.zone, event.text
+        if self.leaf == "ANYTHING_ELSE":
+            # The follow-up question follows an answer straight away. In a quiet zone the answer is READ, so it stays on the
+            # screen with the question under it, instead of being replaced by it the moment it appears.
+            if previous_leaf in ("ANSWER", "RECOMMEND", "STORE") and previous_text:
+                self.carried, self.carried_for = previous_text, event.text
+            elif event.text != self.carried_for:         # something new was said in this state: it replaces the answer
+                self.carried = ""
+            if self.carried and self.carried not in event.text:
+                self.text = f"{self.carried} {event.text}".strip()
+        else:
+            self.carried = ""
         self.options, self.title = tuple(event.options), event.title
         self.choices = tuple(event.choices or event.options)
         self.repair = event.repair
@@ -291,7 +309,7 @@ class ScreenComposer:
             if book is None:
                 continue
             items.append({"isbn": book.isbn13, "title": book.title, "author": book.author or "",
-                          "reason": short_reason(pick.get("because", ""), 90 if self.zone == "quiet" else 70),
+                          "reason": short_reason(pick.get("because", ""), 0 if self.zone == "quiet" else 70),
                           "cover_url": cover_url(book.isbn13, book.title, book.author)})
         if items:
             source = self.lookup(event.source_isbn) if event.source_isbn else None
@@ -320,7 +338,7 @@ class ScreenComposer:
         self.storing = event
         card = self.book_card(event.isbn)
         if card is not None:
-            card.badge = f"In storage slot {event.slot}"
+            card.badge = f"\u2713 Returned \u00b7 storage slot {event.slot}"     # what stays on screen once the pad has dropped it
             card.buttons = []                           # they handed it in: nothing to ask about it
             self.set_content("book_card", card)
 
@@ -336,6 +354,7 @@ class ScreenComposer:
             self.nav = (self.plan.station.level, event.x, event.y)
 
     def on_interaction(self, event) -> None:
+        self.carried = ""                               # a new question or a tap: the next answer replaces the last one
         if self.content is not None:
             self.until = self.clock() + self.ttl()
 
@@ -417,10 +436,18 @@ class ScreenComposer:
             return "face", FacePayload(self.text if self.zone == "quiet" and self.text else self.title or "Anything else?")
         return "face", FacePayload(self.text if self.zone == "quiet" else "")
 
+    def with_message(self, view: str, payload):
+        """A quiet zone does not hear the robot, so what it says goes on the screen, in full, under the content it is about
+        (an explanation, "Done: ... is in storage slot 1", the next question). The stored content is not changed."""
+        if view in MESSAGE_VIEWS and self.zone == "quiet" and self.text:
+            return replace(payload, message=" ".join(self.text.split()))
+        return payload
+
     async def show(self, view: Optional[str] = None, payload=None) -> ScreenUpdate:
         self.path = self.state_of() or self.path          # content can arrive while the machine enters a state
         if view is None:
             view, payload = self.compose()
+        payload = self.with_message(view, payload)
         content = view != "face"
         update = ScreenUpdate(self.path, self.zone, "split" if content else "full_face", self.title,
                               self.text, tuple(self.options), view, payload.to_json(),

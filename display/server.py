@@ -49,8 +49,8 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
                  ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 
 
-INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another")
-CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|section:[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
+INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
+CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|(?:section|topic):[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
 OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset",
                      "screen", "next", "abort")
 INBOX_KEEP = 200
@@ -163,6 +163,11 @@ def parse_command(line: str) -> dict | None:
     return make_talk_event(seconds=seconds) if talking else make_event(parts[0], seconds)
 
 
+def ui_version() -> str:
+    """Changes whenever a file of the page changes: an open page (a kiosk is never reloaded by hand) reloads itself."""
+    return "-".join(f"{p.stat().st_mtime_ns:x}" for p in sorted(UI_DIR.glob("*")) if p.is_file() and p.suffix in (".html", ".js", ".css"))
+
+
 def make_handler(hub: Hub):
     class Handler(BaseHTTPRequestHandler):
         server_version = "RobotFace"
@@ -216,6 +221,8 @@ def make_handler(hub: Hub):
                     self._send(200, hub.frame, "image/jpeg")
             elif url.path == "/camera.mjpg":
                 self._mjpeg()
+            elif url.path == "/ui-version":
+                self._json(200, {"version": ui_version()})
             elif url.path == "/emotion":
                 name, hold = first("name", "emotion"), first("hold", "hold_s")
                 self._emit(lambda: make_event(name or "", DEFAULT_HOLD_S if hold is None else hold))

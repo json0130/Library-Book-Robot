@@ -53,8 +53,8 @@ from robot.events import (ThinkingEnded, ThinkingStarted, BookDropped, BookFocus
                           LocationResolved, NavigationRequested, PersonEngaged, PersonLeft, PersonNearbyBusy,
                           RecommendationsReady, ReplySentence, ReturningProgress, ScanFailed, StateEntered,
                           StateTransition, StoringBook, UserChoice, UserUtterance)
-from robot.core.expectations import expect_anything_else, expect_choice, expect_guide, match_answers
-from robot.core.intents import IntentRouter
+from robot.core.expectations import expect_anything_else, expect_choice, expect_guide, expect_lend, match_answers
+from robot.core.intents import POLITE, STOP, IntentRouter, edit_cost, normalise
 from robot.services.places import FACILITIES, Place, PlaceResolver
 from robot.persona import NAME
 from robot.services.book_graph import Location
@@ -96,7 +96,19 @@ INTEREST_PATTERNS = (               # what a visitor is interested in, said in p
 )
 STORAGE_PATTERN = (r"\bstorage\b|\bslots?\b|\b(?:holding|carrying|keeping)\b.*\bbooks?\b|"
                    r"\bwhat books? (?:do you have|are you holding|have you got)\b|\bon board\b|"
-                   r"\b(?:have|hold|got) any (?:returned )?books\b|\bbooks? (?:do you have|are you holding)\b")
+                   r"\b(?:have|hold|got) any (?:returned )?books\b|\bbooks? (?:do you have|are you holding)\b|"
+                   r"\bwhich books? (?:do|are|have) (?:you|u)\b.*\b(?:hold|holding|carry|carrying|got|have|storing)\b")
+HOLDING_VERBS = ("have", "hold", "holding", "carry", "carrying", "keep", "keeping", "got")
+PAD_PATTERN = r"\bpad\b|\bin (?:your|ur|my) hands?\b"
+# "which book do you hold rn?", "do you have any book with u?": the robot's OWN books (its pad, its storage), not the library's
+HOLDINGS_CUES = (r"\bwith (?:you|u|ya)\b|\bon (?:you|u|board)\b|\b(?:on|in) (?:your|ur) (?:pad|storage|slots?|ring)\b|\byour (?:pad|storage|slots?)\b|"
+                 r"\bright now\b|\brn\b|\bat the moment\b|\bcurrently\b|\bon hand\b|\binside you\b|"
+                 r"\b(?:you|u) (?:are |r )?(?:holding|carrying|keeping|hold|carry)\b")
+PICK_ME = (r"\bjust (?:recommend|suggest|give|pick|choose|one|anything|something)\b|\bsurprise\b|\byou (?:pick|choose|decide)\b|\byour (?:choice|pick)\b|\bup to you\b|\bwhatever\b|\bnot sure\b|"
+           r"\bno idea\b|\bidk\b|\bdunno\b|\bdon'?t know\b|\bany ?(?:one|book)\b|\brandom\b|\banything (?:is )?(?:fine|good|ok|okay)\b")
+CHANGED_MIND = (r"\bnever ?mind\b|\bnvm\b|\bforget it\b|\bchanged my mind\b|\bdon'?t (?:need|want)\b|\bdo not (?:need|want)\b|"
+                r"\bno longer (?:need|want)\b|\btake (?:it|that) back\b|\byou can (?:have|keep) (?:it|that)\b|\bgive it back\b|\bput it back\b")
+HOW_TO_ASK = "Of course! Ask me about a book, ask where something is, or ask for a recommendation."
 THIS_BOOK = ("it", "this", "this book", "that", "that book", "this one", "that one", "here")
 ANOTHER_BOOK_WORDS = ("another book", "next book", "different book", "new book", "one more book",
                       "scan another", "another one")
@@ -149,10 +161,14 @@ def mentions(text: str, phrases) -> bool:
     return False
 
 
+ASKS_FOR_MORE = re.compile(r"\?|\b(?:can|could|may|will|would) (?:you|i|we)\b|\b(?:tell|show|give|guide) me\b|\b(?:recommend|suggest)\b"
+                          r"|\b(?:where|what|which|who|how|why)\b")
+
+
 def is_done(text: str, state: str) -> bool:
     """The visitor is finishing: a goodbye or thanks, or "no" / "no questions" after "anything else?" (state "closing")."""
     if mentions(text, GOODBYES) or text.strip(" .!?") in ("done", "finished"):
-        return True
+        return not ASKS_FOR_MORE.search(text)         # "thank you, can you recommend me a book?" is thanks AND a request
     words = text.replace(",", " ").strip(" .!").split()
     if not (state == "closing" and 0 < len(words) <= 8 and "?" not in text and words[0].strip(".,!") in NO_WORDS):
         return False
@@ -417,6 +433,7 @@ class ChoiceInfo:
     place: Optional[object] = None       # services.places.Place the router found (a section, a floor, a book, or several to choose from)
     take_me: bool = False                # they asked to be taken there, not only told where
     area: bool = False                   # they asked about a section or topic area ("where are the history books")
+    pick: bool = False                   # for recommend: no topic and no book, just "recommend me one": the robot chooses
 
 
 @dataclass
@@ -441,6 +458,9 @@ class Session:
     repair: bool = False                 # the choices are shown as buttons because it did not understand
     awaiting_interest: bool = False      # it asked "what kind of books do you like?" outside AWAIT_BOOK
     focus: str = ""                      # ISBN of the book it just recommended: what "that book" means next
+    pick: bool = False                   # the recommendation to make is the robot's own choice (no topic, no book)
+    offered: set = field(default_factory=set)     # ISBNs it has suggested this visit: "another one" is a different book
+    handed_in: set = field(default_factory=set)   # ISBNs of books returned during this visit: not on offer again
     expect: Optional[object] = None      # core/expectations.Expectation: the answers to the question it just asked (next utterance only)
 
 
@@ -492,6 +512,8 @@ class Dialogue:
         self.current_shelf: Optional[str] = None            # the shelf it is heading for or at
         self.returning_paused = False                       # a trip was interrupted and is waiting to resume
         self.interrupted_returning = False                  # the person who engaged interrupted a trip
+        self.lent_slot: Optional[int] = None                # the slot lit for a visitor who took their book out
+        self.lent_book = None                               # ...and which StoredBook it was: it is NOT in storage while they hold it
         self.store_slot: Optional[int] = None               # the slot reserved for the book being stored
         self._stored = False
         self._screen_text = ""
@@ -624,6 +646,10 @@ class Dialogue:
         if kind == "guide" and book is not None:
             self.guide_target = self.target_for(book.isbn13, book.title)
             return ChoiceInfo("guide", choice)
+        if kind == "surprise":
+            return ChoiceInfo("recommend", "surprise me", pick=True)
+        if kind == "topic" and value.strip():
+            return ChoiceInfo("recommend", value.strip(), interest=value.strip().lower())
         if kind == "section" and value:
             return ChoiceInfo("ask", choice, question=f"where is the {value} section", area=True)
         if kind == "floor" and value:
@@ -646,10 +672,16 @@ class Dialogue:
             return                                       # "thanks" after the goodbye is not a new visit
         info = None
         if self.leaf not in ("IDLE", "FAREWELL", "GREET"):
-            info = self.expected_info(text, expect)                   # a short answer to the question it just asked
-            if info is None:
+            if expect is not None and expect.kind == "lend" and await self.answer_lend(text, expect):
+                return                                                # "Would you like it?" (a copy in its storage)
+            if self.lent_book is not None and re.search(CHANGED_MIND, low):
+                await self.changed_mind()                             # "nvm, I don't need it": what it did, never the LLM's guess
+                return
+            about_itself = self.asks_permission(low) or self.holdings_query(low) is not None   # answered from facts below
+            info = None if about_itself else self.expected_info(text, expect)   # a short answer to the question it just asked
+            if info is None and not about_itself:
                 info = self.route_info(text, was_awaiting)            # the router: rules, fuzzy, no LLM
-            if info is None:
+            if info is None and not about_itself:
                 info = self.classify(low, text, was_awaiting)         # then the older rules
         if info is not None:
             self.session.misses = 0
@@ -712,6 +744,85 @@ class Dialogue:
         if self.style_speaks():
             await asyncio.get_running_loop().run_in_executor(None, self.out.deliver, self.thinking_text, self.get_style())
 
+    def asked_for_stored(self, low: str):
+        """The StoredBook when the visitor asks whether the robot has a book on it ("do you have I Robot with you?",
+        "can I borrow it?") and it is holding a copy in its storage; None otherwise (the usual answer follows)."""
+        words = normalise(low).split()
+        you = any(w in ("you", "u", "ya") for w in words)
+        holds = any(edit_cost(w, cue) <= 1 for w in words for cue in ("have", "hold", "holding", "carrying", "got") if len(w) >= 3)
+        borrow = re.search(r"\b(?:can|could|may) (?:i|we) (?:have|take|borrow|get|grab|check out)\b|\b(?:borrow|check out)\b", low)
+        if not ((you and (holds or "with" in words)) or borrow):
+            return None
+        named = self.finder.titles_in(low) if self.finder is not None else []
+        isbn = named[0].isbn13 if named else (self.session.book.isbn if self.session.book is not None
+                                              and any(w in ("it", "this", "that", "one") for w in words) else "")
+        return self.stored_copy(isbn)
+
+    def stored_copy(self, isbn: str):
+        """The StoredBook if the robot is holding a returned copy of this book in its storage, else None. The book on
+        a visitor just handed in during this visit is not on offer: it is going back on its shelf."""
+        if not isbn or isbn in self.session.handed_in:
+            return None
+        slot = self.storage.slot_of(isbn)
+        return self.storage.books[slot] if slot is not None else None
+
+    async def offer_stored(self, stored) -> None:
+        """It has the book the visitor asked about in its storage: say so and offer it, instead of sending them to the shelf."""
+        if self.publish is not None and self.finder is not None and self.finder.catalog.lookup(stored.isbn) is not None:
+            await self.publish(BookFocused(stored.isbn, "ask"))
+        self.session.expect = expect_lend(stored.isbn)
+        self.session.last_action = "choose"                           # the question is asked: no generic one after it
+        await self.say(f"I have {stored.title or 'that book'} in my storage, in slot {stored.slot}. Would you like it?", "happy")
+
+    async def changed_mind(self) -> None:
+        """The visitor was handed a book from the storage ring and now says they do not want it ("nvm, you can have it"). It
+        goes back into its slot, which is still lit: they are asked to put it there, and the book is in the storage again, on
+        the screen and in what the robot says it holds. It never says it is "kept" somewhere it is not."""
+        book, self.lent_book = self.lent_book, None
+        self._screen_text = ""
+        slot = self.storage.reserve(preferred=self.lent_slot)
+        if slot is None:                                              # the ring filled up meanwhile: the pad is the way back
+            self.session.intent = "return"
+            await self.say(f"No problem. To give {book.title or 'it'} back, place it on my pad and I'll take it.", "happy")
+        else:
+            self.storage.commit(slot, book)
+            self.out.ring.rotate_to(slot)
+            self.out.ring.light_slot(slot, True)                      # lit until the visit ends: where to put it
+            self.lent_slot = slot
+            if self.publish is not None and self.finder is not None and self.finder.catalog.lookup(book.isbn) is not None:
+                await self.publish(StoringBook(book.isbn, book.title or "", slot))       # the card, with "Returned", on the screen
+            await self.say(f"No problem. Please put {book.title or 'it'} back in slot {slot}, it's lit up on my ring. "
+                           "I'll keep it there.", "happy")
+        self.session.expect = expect_anything_else()
+        await self.say("Is there anything else I can help with?", "neutral")
+        self._screen_text = ""
+
+    async def answer_lend(self, text: str, expect) -> bool:
+        """The reply to "Would you like it?": True if it was a yes or a no (and has been answered)."""
+        found = match_answers(text, expect, self.settings.intents)
+        if found is None:
+            return False
+        log.info("[expect] %r -> %s (%s, lend)", text, found.answer, found.phrase)
+        slot = self.storage.slot_of(expect.data)
+        stored = self.storage.books[slot] if slot is not None else None
+        if found.answer == "yes" and stored is not None:
+            self.storage.release(slot)                                # it leaves the ring: it is not going back to a shelf
+            self.out.ring.rotate_to(slot)
+            self.out.ring.light_slot(slot, True)
+            self.lent_slot, self.lent_book = slot, stored
+            self._screen_text = ""                                    # (nothing changes state here: start the screen text afresh)
+            await self.say(f"Here you go: {stored.title or 'your book'} is in slot {stored.slot}, lit up on my ring. "
+                           "Please take it from there.", "happy")
+        elif found.answer == "yes":
+            await self.say("Sorry, that book is not in my storage any more. The help desk can help.", "neutral")
+        else:
+            where = f" It goes back on shelf {stored.shelf} when I'm free." if stored is not None and stored.shelf else ""
+            await self.say(f"No problem.{where}", "happy")
+        self.session.expect = expect_anything_else()
+        await self.say("Is there anything else I can help with?", "neutral")
+        self._screen_text = ""                                        # no state change here: the next reply starts the screen text afresh
+        return True
+
     def expected_info(self, text: str, expect) -> Optional[ChoiceInfo]:
         """A ChoiceInfo when a short reply is one of the answers the robot expected (None: the router decides)."""
         if expect is None:
@@ -732,6 +843,8 @@ class Dialogue:
         """A ChoiceInfo from the intent router's best candidate (None: nothing confident, or an intent that needs the
         state to say what it means). Two close places become a question: the options view."""
         s = self.session
+        if (stored := self.asked_for_stored(text.lower())) is not None:        # "do you have Dune with you?": it has a copy
+            return ChoiceInfo("ask", text, question=text, isbn=stored.isbn, explicit=True)
         prompted = ("recommend" if (self.leaf == "AWAIT_BOOK" and s.intent == "recommend") or s.awaiting_interest else
                     "ask" if self.leaf == "AWAIT_BOOK" and s.intent == "ask" else None)
         route = self.router.route(text, self.leaf, was_awaiting, s.book is not None or bool(s.focus), prompted)
@@ -750,6 +863,8 @@ class Dialogue:
                 return ChoiceInfo("guide", text)
             return ChoiceInfo("more", text) if self.leaf == "ANYTHING_ELSE" else None
         if intent == "another":
+            if s.last_action == "recommend" and s.focus:                  # "another one?" right after a suggestion: a different one
+                return ChoiceInfo("recommend", text, pick=True)
             return ChoiceInfo("another", text)
         if intent == "return":
             return ChoiceInfo("return", text)
@@ -766,7 +881,8 @@ class Dialogue:
         if intent == "recommend":
             other = re.search(r"\b(?:other|different|else|new|any books|anything|something)\b", text.lower()) is not None
             general = not best.isbn and not best.interest and s.recommend_failed and other
-            return ChoiceInfo("recommend", text, interest=best.interest, isbn=best.isbn, general=bool(general))
+            pick = not best.isbn and not best.interest and self.wants_a_pick(text.lower(), prompted)
+            return ChoiceInfo("recommend", text, interest=best.interest, isbn=best.isbn, general=bool(general), pick=pick)
         if intent == "where":
             if best.place is None:                                    # "where is it": the book in hand
                 isbn, explicit = self.referent(text.lower())
@@ -815,10 +931,19 @@ class Dialogue:
             general = not isbn and not interest and (
                 re.search(r"\b(?:other|different|else|new|any books|anything|something)\b", low) is not None
                 and self.session.recommend_failed)          # "any other books?" after nothing was found for this one
-            return ChoiceInfo("recommend", text, interest=interest, isbn=isbn, general=bool(general))
+            pick = not isbn and not interest and self.wants_a_pick(low, prompted)
+            return ChoiceInfo("recommend", text, interest=interest, isbn=isbn, general=bool(general), pick=pick)
         if action == "explain":
             return ChoiceInfo("ask", text, question=text, isbn=isbn)
         return None
+
+    def wants_a_pick(self, low: str, prompted: Optional[str]) -> bool:
+        """A recommendation with no topic and no book to go on, where they want the robot to choose: after it has already asked
+        "what kind of books do you like?" (asking it again is the loop), or in words that hand the choice over ("just
+        recommend me one", "surprise me"). With a book in hand the usual "something like this" applies."""
+        s = self.session
+        nothing_to_go_on = (s.book is None or s.virtual) and (not s.focus or s.focus in s.offered)   # or only a book it picked itself
+        return nothing_to_go_on and (prompted == "recommend" or re.search(PICK_ME, low) is not None)
 
     def answer_to_prompt(self, low: str, text: str, intent: Optional[str] = None) -> Optional[ChoiceInfo]:
         """The reply to "what kind of books do you like?" or "which book?": a title they name, or (for a
@@ -829,6 +954,8 @@ class Dialogue:
             if intent == "recommend":
                 return ChoiceInfo("recommend", text, isbn=named[0].isbn13)
             return ChoiceInfo("ask", text, question=f"tell me about {named[0].title}", isbn=named[0].isbn13)
+        if intent == "recommend" and re.search(PICK_ME, low):
+            return ChoiceInfo("recommend", text, pick=True)      # "surprise me", "not sure", "you pick": it chooses
         if intent == "recommend" and not is_question(low):
             topic = re.sub(r"\b(?:i|i'm|im|i am|really|like|love|enjoy|into|maybe|perhaps|some|something|anything|"
                            r"about|on|books?|novels?|stories|reading|please|just|hmm+|um+|well|so)\b|[?!.,]+", " ", low)
@@ -889,7 +1016,7 @@ class Dialogue:
 
     def recommend_ready(self, event) -> bool:
         info = event.payload
-        return self._is(event, "recommend") and (bool(info.interest) or bool(info.isbn) or
+        return self._is(event, "recommend") and (bool(info.interest) or bool(info.isbn) or info.pick or
                                                  (self.has_book(event) and not info.general))
 
     def choice_done(self, event) -> bool:
@@ -947,6 +1074,7 @@ class Dialogue:
         s.intent = info.name if info.name in ("return", "ask", "recommend") else None
         s.question = info.question or None
         s.interest = info.interest or None
+        s.pick = bool(info.pick)
         s.awaiting_interest = False
         s.place, s.take_me = info.place, info.take_me
         if info.isbn and (s.book is None or s.virtual or info.explicit):   # a book they named: no pad needed
@@ -1014,6 +1142,7 @@ class Dialogue:
                                              section=place.section, floor=place.floor, zone=place.zone,
                                              map_x=place.map_x, map_y=place.map_y, map_yaw=place.map_yaw))
         self._stored = True
+        self.session.handed_in.add(book.isbn)
         title = book.title or "this book"
         parts = [f"Done: {title} is in storage slot {slot}."]     # where it belongs is the robot's business
         self.guide_target = None                         # they handed it in: no "shall I guide you to it?"
@@ -1081,6 +1210,9 @@ class Dialogue:
         if self.assistant is not None:
             self.assistant.reset()
         self.out.lights.spotlight(False)
+        if self.lent_slot is not None:
+            self.out.ring.light_slot(self.lent_slot, False)
+            self.lent_slot, self.lent_book = None, None
 
     async def enter_greet(self, event) -> None:
         s = self.session
@@ -1214,7 +1346,10 @@ class Dialogue:
         s = self.session
         s.intent = None
         interest, s.interest = s.interest, None
-        if interest:
+        pick, s.pick = s.pick, False
+        if pick:
+            await self.recommend_pick()
+        elif interest:
             await self.recommend_by_interest(interest)
         else:
             book = s.book
@@ -1240,7 +1375,7 @@ class Dialogue:
         if self.style_speaks():
             await self.say(spoken, "happy")
         else:                                            # a quiet zone: eyes and light, no words
-            self.show("Goodbye")
+            self.show(spoken)                            # (the line is read, not said)
             self.out.neck.look_at("forward")
             self.out.lights.pattern("pulse")
             if self.publish is not None:
@@ -1389,26 +1524,68 @@ class Dialogue:
         if state == "ANYTHING_ELSE":                    # no buttons: the face asks "anything else?" and the visitor answers aloud
             return []
         if state == "AWAIT_BOOK":
-            return [{"id": "more", "label": "Back"}, {"id": "done", "label": "Done"}]
+            leave = [{"id": "more", "label": "Back"}, {"id": "done", "label": "Done"}]
+            return self.recommend_options() + leave if self.session.intent == "recommend" else leave
         return []
 
     # ---- the conversation (kept from the flat dialogue) ----
+    def holdings_query(self, low: str) -> Optional[str]:
+        """"pad", "storage" or "both" when the visitor asks what the robot ITSELF is holding ("which book do you hold rn?",
+        "do you have any book with you?", "what's on your pad?", "what's in your storage?"), else None. A book named that
+        a copy of is in its storage is the lending question instead (asked_for_stored), and "books about space" is a
+        recommendation: this needs a word that says the robot's own hands, pad or storage."""
+        if self.asked_for_stored(low) is not None:
+            return None
+        words = normalise(low).split()
+        you = any(w in ("you", "u", "ya", "your", "ur") for w in words)
+        verb = any(edit_cost(w, v) <= 1 for w in words for v in HOLDING_VERBS if len(w) >= 3)
+        bookish = any(w.startswith("book") or edit_cost(w, "books") <= 1 or w in ("anything", "something", "any") for w in words)
+        explicit = re.search(STORAGE_PATTERN, low) or re.search(r"\byour (?:pad|storage|slots?)\b", low)
+        if re.search(r"\b(?:about|involving|featuring|regarding)\b", low) and not re.search(r"\b(?:pad|storage|slots?)\b", low):
+            return None                                      # "do you have any books about space?": a request for a topic
+        if not (explicit or (you and verb and bookish and re.search(HOLDINGS_CUES, low))):
+            return None
+        pad_said = re.search(PAD_PATTERN, low) is not None
+        storage_said = re.search(r"\bstorage\b|\bslots?\b|\bstored\b|\breturned\b", low) is not None
+        return "pad" if pad_said and not storage_said else "storage" if storage_said and not pad_said else "both"
+
+    def asks_permission(self, low: str) -> bool:
+        """"can I ask you some questions?", "I have a question": just the permission, nothing asked yet (so not "can I ask
+        you who wrote it", which has a question in it)."""
+        words = normalise(low).split()
+        if any(w in ("no", "not", "nothing", "none", "never", "nope") for w in words):
+            return False                                     # "no, I don't have any questions": the opposite
+        is_question_word = lambda w: w == "question" or (len(w) >= 6 and edit_cost(w, "questions") <= 2)
+        if not (any(is_question_word(w) for w in words) or ("ask" in words and any(w in ("something", "anything", "you") for w in words))):
+            return False
+        left = [w for w in words if w not in STOP and w not in POLITE and not is_question_word(w)
+                and w not in ("ask", "asking", "few", "couple", "quick", "something", "anything", NAME.lower())]
+        return not left
+
     def storage_fact(self, text: str) -> Optional[str]:
-        """What the robot is holding, from its own storage (never the LLM): "are you holding any books?", "what's in
-        your storage?", "do you have Cosmos?". None if that is not what they asked."""
-        if not re.search(STORAGE_PATTERN, text):
+        """What the robot is holding, from its own pad and storage (never the LLM): "are you holding any books?", "what's
+        in your storage?", "which book do you hold?". Always says both places clearly. None if that is not what they asked."""
+        kind = self.holdings_query(text)
+        if kind is None:
             return None
         books = self.storage.stored()
         pad = self.session.book if self.session.book is not None and not self.session.virtual else None
-        on_pad = f" {pad.title or 'A book'} is on my pad." if pad is not None else ""
+        on_pad = f" {pad.title or 'A book'} is on my pad." if pad is not None else " Nothing is on my pad right now."
+        if kind == "pad":
+            return (f"{pad.title or 'A book'} is on my pad." if pad is not None else
+                    "Nothing is on my pad right now. Place a book on it and I'll scan it, or tell me a title.")
         if not books:
-            return f"My storage is empty right now, so I'm not holding any returned books.{on_pad}"
-        names = [f"{b.title or 'a book'} in slot {b.slot}" for b in books]
-        where = "; ".join(f"{b.title} goes back to shelf {b.shelf}" for b in books if b.shelf and b.title)
-        many = f"{len(books)} returned books" if len(books) > 1 else "1 returned book"
-        return (f"I'm holding {many} in my storage: {join_names(names)}. "
-                + (f"{where[0].upper()}{where[1:]}. " if where else "")
-                + f"I'll put {'them' if len(books) > 1 else 'it'} back when I'm free.{on_pad}")
+            stored = f"My storage is empty right now, so I'm not holding any returned books.{on_pad}"
+        else:
+            names = [f"{b.title or 'a book'} in slot {b.slot}" for b in books]
+            where = "; ".join(f"{b.title} goes back to shelf {b.shelf}" for b in books if b.shelf and b.title)
+            many = f"{len(books)} returned books" if len(books) > 1 else "1 returned book"
+            stored = (f"I'm holding {many} in my storage: {join_names(names)}. "
+                      + (f"{where[0].upper()}{where[1:]}. " if where else "")
+                      + f"I'll put {'them' if len(books) > 1 else 'it'} back when I'm free.{on_pad}")
+        if kind == "both":                               # not clear which one they meant: say where each kind of book is
+            stored += " To look up a book in the library, tell me its title or a topic."
+        return stored
 
     async def talk(self, text: str) -> None:
         """Free text with no book to talk about: what it is holding (from its storage), small talk through the LLM
@@ -1416,6 +1593,9 @@ class Dialogue:
         low = text.lower()
         if (held := self.storage_fact(low)) is not None:
             await self.say(held, "happy")
+            return
+        if self.asks_permission(low):                  # "can I ask you some questions?": yes, and what they can ask
+            await self.say(HOW_TO_ASK, "happy")
             return
         if is_greeting(low):
             intro = "" if self.greeted else f"I'm {NAME}. "
@@ -1457,6 +1637,13 @@ class Dialogue:
         if (held := self.storage_fact(low)) is not None:
             await self.say(held, "happy")
             self.session.last_action = "answer"
+            return
+        if self.asks_permission(low):
+            await self.say(HOW_TO_ASK, "happy")
+            self.session.last_action = "answer"
+            return
+        if (stored := self.asked_for_stored(low)) is not None:       # "do you have I Robot with you?", "can I borrow it?"
+            await self.offer_stored(stored)
             return
         book = self.session.book
         title = (book.title if book and book.title else None) or "this book"
@@ -1643,6 +1830,9 @@ class Dialogue:
         await self.say(where + offer, "happy")
 
     async def tell_where(self, target: GuideTarget) -> None:
+        if (stored := self.stored_copy(target.isbn)) is not None:
+            await self.offer_stored(stored)
+            return
         where = target.location.describe() if target.location else ""
         if not where:
             reason = self.finder.locate_with_reason(target.isbn)[1] if self.finder is not None else ""
@@ -1778,6 +1968,64 @@ class Dialogue:
         self.guide_target = self.target_for(best.book.isbn13, best.book.title)
         self.focus_on(best.book)
         await self.say(self.recommendation_text(None, picks, interest), "happy")
+
+    async def recommend_pick(self) -> None:
+        """"Recommend me one" with nothing to go on: the robot chooses, from the catalogue, instead of asking again. It names
+        the book and reads the first line of its summary, never the same book twice in a visit; asked again, it offers the next."""
+        s = self.session
+        picks = self.choose_picks(max(1, int(self.get_style().recommendations)))
+        if not picks:
+            await self.say("I've suggested all I have for now. Tell me a topic or a title and I'll look again, "
+                           "or ask at the help desk.", "neutral")
+            return
+        s.offered.update(p.book.isbn13 for p in picks)
+        for pick in picks:
+            log.info("[dialogue] picked %s (%s)", pick.book.title, pick.because)
+        await self.publish_recommendations(picks)
+        best = picks[0].book
+        self.guide_target = self.target_for(best.isbn13, best.title)
+        self.focus_on(best)
+        await self.say(self.pick_text(picks), "happy")
+
+    def choose_picks(self, n: int) -> list:
+        """Up to n catalogue books for a visitor who named no topic: the librarians' picks first, then the books whose topics
+        the most other books share (the popular ones). Never one already suggested this visit, handed in, or in hand. The
+        same visit gets the same suggestions in the same order."""
+        from types import SimpleNamespace
+        if self.finder is None or getattr(self.finder, "graph", None) is None:
+            return []
+        s = self.session
+        skip = s.offered | s.handed_in | ({s.book.isbn} if s.book is not None else set()) | ({s.focus} if s.focus else set())
+        graph = self.finder.graph
+        counts = graph.topic_counts()
+        liked = {link.to_isbn for link in graph.links if link.relation == "librarian_pick"}
+        weight = lambda b: sum(counts.get(t, 0) for t in graph.topics_of(b.isbn13))
+        books = sorted((b for b in self.finder.catalog.books if b.isbn13 not in skip),
+                       key=lambda b: (b.isbn13 not in liked, -weight(b), b.title))
+        picks = []
+        for book in books[:n]:
+            topics = [t for t in graph.topics_of(book.isbn13) if t in counts]
+            because = ("the librarians recommend it" if book.isbn13 in liked else
+                       f"a popular choice in {max(topics, key=lambda t: counts[t])}" if topics else "a good place to start")
+            picks.append(SimpleNamespace(book=book, because=because))
+        return picks
+
+    @staticmethod
+    def pick_text(picks: list) -> str:
+        """"How about Dune by Frank Herbert? <the first line of its summary>" (several: the names, then the first one's line)."""
+        names = [f"{p.book.title} by {p.book.author}" if p.book.author else p.book.title for p in picks]
+        best = picks[0].book
+        line = re.split(r"(?<=[.!?])\s", (best.summary or "").strip())[0]
+        if len(picks) == 1:
+            return f"How about {names[0]}? {line}".strip()
+        return f"Here are a few to try: {join_names(names)}. I'd start with {best.title}: {line}".strip()
+
+    def recommend_options(self) -> list:
+        """The buttons under "what kind of books do you like?": the topics with the most books, and "Surprise me"."""
+        graph = getattr(self.finder, "graph", None) if self.finder is not None else None
+        counts = graph.topic_counts() if graph is not None else {}
+        top = sorted(counts, key=lambda t: (-counts[t], t))[:3]
+        return [{"id": f"topic:{t}", "label": t.title()} for t in top] + [{"id": "surprise", "label": "Surprise me"}]
 
     def focus_on(self, book) -> None:
         """The book just recommended is what "that book" means in the next question. With no book on the pad it becomes

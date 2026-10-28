@@ -369,7 +369,7 @@ class SessionFlowTest(unittest.TestCase):
         self.assertFalse(any("Enjoy" in p["text"] for p in sent(quiet, "print")))
         self.assertIn({"name": "pulse"}, sent(quiet, "light_pattern"))                  # eyes and light instead
         self.assertEqual(quiet.screens[-1].state_path, "ENGAGED.FAREWELL")
-        self.assertEqual(quiet.screens[-1].text, "Goodbye")
+        self.assertIn("Enjoy your reading", quiet.screens[-1].text)                     # the line is on the screen to be read
 
     def test_nothing_about_a_visitor_goes_into_the_graph_or_the_storage_file(self):
         app = new_app()
@@ -863,7 +863,7 @@ class RecommendationFallbacksTest(unittest.TestCase):
         self.assertEqual(app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
         card = app.screens[-1]
         self.assertEqual((card.view, card.payload["title"], card.payload["badge"]),
-                         ("book_card", "The Great Gatsby", "In storage slot 1"))
+                         ("book_card", "The Great Gatsby", "\u2713 Returned \u00b7 storage slot 1"))   # says the return worked
         self.assertEqual(card.payload["buttons"], [])                               # handed in: nothing to ask about it
 
 

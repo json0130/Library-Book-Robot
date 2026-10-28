@@ -24,8 +24,8 @@
     zone quiet | zone common     change the zone
     engage | busy                a person engages / is near but busy (PersonEngaged / PersonNearbyBusy)
     dropped                      the pad dropped the book into its slot (BookDropped)
-    pick return|ask|recommend|more|guide|done   press that screen button
-    pick book:<isbn> | similar:<isbn> | guide:<isbn> | section:<name>   tap a book, a card button or a choice
+    pick return|ask|recommend|more|guide|done|surprise   press that screen button
+    pick book:<isbn> | similar:<isbn> | guide:<isbn> | section:<name> | topic:<name>   tap a book, a card button or a choice
     screen <view> [isbn | section]  show a screen view with sample data: face book_card book_list directions
                                  options status (`screen face` goes back to the face)
     reset | reset all            back to IDLE (`all` also empties the storage)

@@ -30,7 +30,7 @@ from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged
 from robot.services.isbn import to_isbn13
 
 COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen")
-PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another")
+PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 ZONES = ("quiet", "common")
 GROUP_SIZES = {"alone": 1, "group": 3}
 
@@ -130,10 +130,10 @@ class Operator:
         elif command == "dropped":
             await bus.publish(BookDropped(source="operator"))
         elif command == "pick":
-            content = arg.split(":", 1)[0].lower() in ("book", "where", "guide", "similar", "section", "floor")
+            content = arg.split(":", 1)[0].lower() in ("book", "where", "guide", "similar", "section", "floor", "topic")
             if arg.lower() not in PICKS and not (content and ":" in arg):
                 self.say("  usage: pick " + "|".join(PICKS) + " | book:<isbn> | where:<isbn> | similar:<isbn> | "
-                         "guide:<isbn> | section:<name> | floor:<n>")
+                         "guide:<isbn> | section:<name> | floor:<n> | topic:<name>")
                 return False
             await bus.publish(UserChoice(arg if content else arg.lower(), source="operator"))
         elif command == "book":

@@ -49,6 +49,7 @@ EXPLAINED_EXTRA = frozenset("book books novel novels stuff section sections area
 NEVER_MATCH = {frozenset(p) for p in (("anything", "nothing"), ("another", "other"), ("another", "mother"), ("no", "now"),
                                       ("done", "dune"), ("dune", "done"), ("floor", "flour"), ("tell", "tall"),
                                       ("where", "there"), ("where", "here"), ("this", "that"))}
+POLITE = frozenset("thanks thank thx cheers".split())      # "thank you" alone ends the visit; "thank you, and also..." does not
 ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "ground": 1, "one": 1, "two": 2, "to": 2, "too": 2,
             "three": 3, "four": 4, "for": 4, "five": 5, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
 
@@ -61,7 +62,7 @@ PHRASES = {
                 "synopsis", "plot", "storyline"],
     "recommend": ["recommend", "recommendation", "suggest", "similar", "something like", "anything like", "related",
                   "read next", "other books", "more books", "what else", "recommendations", "books like this", "like this one",
-                  "more like this", "something similar"],
+                  "more like this", "something similar", "surprise me"],
     "guide": ["guide me", "guide us", "take me there", "take me to it", "lead me", "walk me", "show me the way", "show me way", "show us the way", "lead the way",
               "follow you", "take us there"],
     "yes": ["yes", "yeah", "yep", "yup", "sure", "please", "okay", "go ahead", "why not"],
@@ -364,6 +365,7 @@ class IntentRouter:
                 entity_idx |= interest_idx
         # intent phrases
         strong_idx: set = set()
+        slip_idx: set = set()                    # words a phrase matched only through a typo ("aobut" for "about"): not part of a title
         for intent, phrases in PHRASES.items():
             conf, used = self.best_phrase(words, phrases, content, frozenset(entity_idx) if intent in ("explain", "recommend") else frozenset())
             if not used:
@@ -372,17 +374,22 @@ class IntentRouter:
                 continue
             if intent == "yes" and len(content_list) > 1:
                 continue
+            if intent == "done" and all(words[i] in POLITE or words[i] in STOP for i in used) and any(words[i] in POLITE for i in used) \
+                    and any(w not in POLITE for i, w in enumerate(words) if i not in used and w not in STOP and w not in EXPLAINED_EXTRA):
+                continue                                              # "thank you, also can I ask some questions?": thanks, but not finished
             if intent == "explain" and [words[i] for i in used] == ["about"]:
                 conf *= 0.8                                           # a lone "about" is weak
             add(intent, conf, label=" ".join(words[i] for i in used))
             if conf >= 0.85 and intent in ("done", "guide", "yes", "no", "return", "another"):
                 strong_idx |= set(used)
+            if conf >= self.settings["min_confidence"]:
+                slip_idx |= {i for i in used if words[i] not in INTENT_WORDS and words[i] not in STOP}
         if not any(c.intent == "done" for c in cand) and len(content_list) == 1 and state in ("OFFER", "ANYTHING_ELSE", "AWAIT_BOOK"):
             word = content_list[0]
             if len(word) == 4 and (word[0] == "d" or word in ("none", "gone")) and edit_cost(word, "done") <= 1 and word not in self.all_words() and set(words) <= STOP | {word}:
                 add("done", 0.75, label=f"{word!r} for done")          # "I'm dine": a slip of the finger on a four-letter word
-        if strong_idx:                                                 # "guide me" is not about "The Hitchhiker's Guide"
-            entity_content = {w for i, w in enumerate(words) if i not in strong_idx and w not in STOP
+        if strong_idx or slip_idx:                                     # "guide me" is not about "The Hitchhiker's Guide"; "aobut" is not a title word
+            entity_content = {w for i, w in enumerate(words) if i not in strong_idx | slip_idx and w not in STOP
                               and w not in EXPLAINED_EXTRA and w not in INTENT_WORDS}
             titles = self.title_candidates(words, entity_content) if entity_content else []
             best_title = titles[0] if titles and titles[0][1] >= self.settings["min_confidence"] else None

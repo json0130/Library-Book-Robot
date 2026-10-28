@@ -42,6 +42,7 @@ class Expectation:
     kind: str                                               # guide | anything_else | choose
     answers: dict = field(default_factory=dict)            # answer name -> phrases that mean it
     options: list = field(default_factory=list)             # for choose: [(choice id, label)]
+    data: Optional[object] = None                           # for lend: the ISBN of the stored book on offer
 
 
 @dataclass
@@ -58,6 +59,11 @@ def expect_guide() -> Expectation:
 
 def expect_anything_else() -> Expectation:
     return Expectation("anything_else", {"more": YES, "another": ANOTHER, "done": NO})
+
+
+def expect_lend(isbn: str) -> Expectation:
+    """The robot has a stored copy of the book asked about and offered it ("Would you like it?"): yes or no."""
+    return Expectation("lend", {"yes": YES + ["please", "i would", "i do", "i would like it"], "no": NO}, data=isbn)
 
 
 def expect_choice(options: list) -> Expectation:

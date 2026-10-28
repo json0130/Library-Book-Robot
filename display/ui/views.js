@@ -36,39 +36,50 @@ const Views = (() => {
     return img;
   }
   function badge(text) { return el("span", "badge", text); }
+  // what the robot would have said, for a quiet zone where it does not speak (the composer sends it as `message`): shown in full
+  const LONG = 150;                                      // characters: longer text is set a little smaller so that it fits
+  function message(text) { return el("p", "message" + (text.length > LONG ? " long" : ""), text); }
 
   // ---- face: the face fills the screen; in a quiet zone with a caption of what the robot said
   function face(p) {
     const root = el("div", "view-face");
+    const long = (p.caption || "").length > 70;
     document.body.classList.toggle("captioned", !!p.caption);       // the face moves up to make room
-    if (p.caption) root.append(el("div", "caption", p.caption));
+    document.body.classList.toggle("captioned-long", long);         // ...more room for a long caption, which is shrunk, not cut off
+    if (p.caption) root.append(el("div", "caption" + (long ? " long" : ""), p.caption));
     return root;
   }
 
-  // ---- book_card: cover, title, author, two-line summary, where it lives, two buttons
+  // ---- book_card: cover, title, author, two-line summary, where it lives, two buttons.
+  // With a message (a quiet zone): a small cover, the message in full instead of the summary, the buttons last
   function bookCard(p, send) {
-    const root = el("div", "view-card");
+    const root = el("div", "view-card" + (p.message ? " has-message" : ""));
     root.append(cover(p.cover_url, p.title));
     const info = el("div", "card-info");
     info.append(el("h1", "title clamp2", p.title));
     if (p.author) info.append(el("div", "author", p.author));
-    if (p.summary) info.append(el("p", "summary clamp2", p.summary));
+    if (p.summary && !p.message) info.append(el("p", "summary clamp2", p.summary));
     const where = el("div", "badges");
     if (p.badge) where.append(badge(p.badge));
     if (p.level != null) where.append(badge(`Level ${p.level}`));
     if (p.section) where.append(badge(p.section));
     if (p.shelf) where.append(badge(`Shelf ${p.shelf}`));
     if (where.childElementCount) info.append(where);
-    if ((p.buttons || []).length) info.append(buttons(p.buttons, send));
     root.append(info);
+    if (p.message) {
+      root.append(message(p.message));
+      if ((p.buttons || []).length) root.append(buttons(p.buttons, send));
+    } else if ((p.buttons || []).length) {
+      info.append(buttons(p.buttons, send));
+    }
     return root;
   }
 
   // ---- book_list: up to three covers, a title and one short reason each; a tap opens that book's card
   function bookList(p, send, show) {
-    const root = el("div", "view-list");
+    const root = el("div", "view-list" + (p.message ? " has-message" : ""));
     root.append(el("h1", "heading clamp1", p.heading));
-    const row = el("div", "list-row");
+    const row = el("div", "list-row" + ((p.items || []).length > 1 ? " many" : ""));
     (p.items || []).slice(0, 3).forEach(item => {
       const card = el("button", "list-item");
       card.append(cover(item.cover_url, item.title), el("div", "item-title clamp2", item.title));
@@ -82,7 +93,14 @@ const Views = (() => {
       });
       row.append(card);
     });
-    root.append(row);
+    if (p.message && (p.items || []).length <= 1) {      // one pick (a quiet zone): the message beside it, in the empty space
+      const both = el("div", "list-with-message");
+      both.append(row, message(p.message));
+      root.append(both);
+    } else {
+      root.append(row);
+      if (p.message) root.append(message(p.message));
+    }
     return root;
   }
 
@@ -136,7 +154,7 @@ const Views = (() => {
   }
 
   function directionsView(p, send) {
-    const root = el("div", "view-directions");
+    const root = el("div", "view-directions" + (p.message ? " has-message" : ""));
     const map = el("div", "map");
     map.append(floorPlan(p));
     root.append(map);
@@ -153,6 +171,7 @@ const Views = (() => {
     if (p.distance_m != null) side.append(el("div", "distance", `About ${p.distance_m} m`));
     if ((p.buttons || []).length) side.append(buttons(p.buttons, send));
     root.append(side);
+    if (p.message) root.append(message(p.message));        // across the bottom, under the map and the steps
     return root;
   }
 
@@ -177,7 +196,7 @@ const Views = (() => {
     if (p.prompt || cards.length) {
       const head = el("div", "opt-head");
       if (cards.length) head.append(el("div", "eyebrow", "Stuart \u00b7 Library Book Robot"));
-      if (p.prompt) head.append(el("h1", "heading clamp2", p.prompt));
+      if (p.prompt) head.append(el("h1", "heading clamp2" + (p.prompt.length > 60 ? " long" : ""), p.prompt));   // read, not cut off
       root.append(head);
     }
     if (cards.length) {
@@ -216,9 +235,37 @@ const Views = (() => {
 
   const RENDER = { face, book_card: bookCard, book_list: bookList, directions: directionsView, options, status };
 
+  // Quiet zone: whatever the robot says is read, so it is all there. Text that does not fit is made smaller, a step at a time
+  // (down to a readable floor), until the view fits the screen, instead of being clamped.
+  const FIT = ".message, .caption, .heading, .summary, .item-reason, .item-title, .title, .destination, .detail";
+  function fit(target) {
+    const root = target.firstElementChild;
+    if (!root || !document.body.classList.contains("zone-quiet")) return;
+    const caption = root.querySelector(".caption");
+    // too much: the caption outgrows its box, the view scrolls, or something sticks out above or below it (a centred column
+    // overflows both ways, which scrollHeight does not see)
+    const over = () => {
+      if (caption && caption.scrollHeight > caption.clientHeight + 1) return true;
+      if (target.scrollHeight > target.clientHeight + 1 || root.scrollHeight > root.clientHeight + 1) return true;
+      const box = target.getBoundingClientRect();
+      return [...root.children].some(c => { const r = c.getBoundingClientRect(); return r.top < box.top - 1 || r.bottom > box.bottom + 1; });
+    };
+    const floor = 14 * Math.min(window.innerWidth / 1024, window.innerHeight / 600);
+    const texts = [...root.querySelectorAll(FIT)];
+    for (let i = 0; i < 14 && over(); i++) {
+      let shrunk = false;
+      for (const t of texts) {
+        const px = parseFloat(getComputedStyle(t).fontSize);
+        if (px > floor) { t.style.fontSize = `${Math.max(floor, px * 0.92)}px`; shrunk = true; }
+      }
+      if (!shrunk) break;
+    }
+  }
+
   function render(update, target, send, show) {
     const fn = RENDER[update.view] || face;
     target.replaceChildren(fn(update.payload || {}, send, show));
+    fit(target);
   }
 
   return { render, names: Object.keys(RENDER) };

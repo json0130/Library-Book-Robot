@@ -36,7 +36,7 @@ scenarios:                # the scenario test harness: python -m robot scenarios
 screen:                   # what the robot's screen shows next to its face (robot/core/screen.py)
   content_ttl_s: {quiet: 30, common: 15}    # a book card, list or map stays this long after the last interaction, then
                                             # the face comes back (a quiet zone reads; a common area mostly listens)
-  summary_chars: {quiet: 180, common: 110}  # how much of a summary the book card shows
+  summary_chars: {quiet: 0, common: 110}    # how much of a summary the book card shows (0 = all of it: a quiet zone reads it)
   greeting_hold_s: 2.5                      # the hello stays on the full face at least this long (spoken or not), then the options appear
 
 display:                  # the face page served by `python -m display.server`

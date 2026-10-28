@@ -140,6 +140,14 @@ What a visitor says goes to `Dialogue.handle_text` (`core/dialogue.py`):
   after the last interaction; `App.run_ticker()` calls `ScreenComposer.tick()`, which brings the face back. Content
   views use the `split` layout: small eyes in a corner, never no face. A quiet zone gets longer summaries and larger
   text; a common area shorter ones (`screen.summary_chars`).
+- **Reading, not listening (quiet zone).** A quiet zone does not hear the robot, so `ScreenComposer.with_message()` puts what
+  it said (the state's `text`) on the card, list or directions payload as `message`, in full, and the page shows it
+  instead of the clipped summary (`display/ui/views.js`; nothing is clamped or trimmed with "…" in a quiet zone: `fit()` sets the text smaller until the view fits, and the card's summary and a pick's reason are sent whole).
+  Each state's text only holds what that state said, and the follow-up question ("Is there anything else I can help
+  with?") follows an answer at once, so on entering ANYTHING_ELSE from ANSWER, RECOMMEND or STORE the composer carries
+  the answer along (`carried`) and keeps it while the state is re-published with the same text; anything new said in the
+  state replaces it. A returned book's card says "✓ Returned · storage slot N" once the pad has dropped it. A common
+  area gets no message: the speech carries the words.
 - **Places.** `services/places.py` resolves what place a visitor means: a floor ("what's on level 2"), a full title,
   a section name (the longest), a topic or alias from topics.yaml (the section holding most of its books), then a
   loosely typed title. Equally good candidates give `ChoicesOffered` and an options view. `services/floorplan.py`
@@ -162,6 +170,12 @@ What a visitor says goes to `Dialogue.handle_text` (`core/dialogue.py`):
   "show me", "lead the way"). Every word said must be explained by the answer ("show me Dune" is not "show me"), and the
   `NEVER_MATCH` pairs still hold, typos of them included ("anyting else" is not "nothing else"). The expectation is used
   up by the next utterance (or a button press, or the end of the visit); no match leaves the normal router untouched.
+- **Books in the robot's storage.** `Dialogue.asked_for_stored` (a fuzzy "do you have / borrow ... it/with you" check plus a
+  title or "it") and `tell_where` (for any book that is stored) call `offer_stored`: the book card, "I have X in my storage, in
+  slot N. Would you like it?", and a `lend` expectation (`expectations.expect_lend`). `answer_lend` handles the yes/no itself
+  (no state change): yes releases the slot from `Storage`, rotates and lights it (`lent_slot`, switched off when the visit
+  ends); no says which shelf it goes back to. Both then ask "anything else?". `session.handed_in` keeps a book returned in this
+  visit from being offered back.
 - **Facilities.** `places.FACILITIES` maps a landmark kind of the floor plan (toilets, help_desk, exit, entrance) to the ways
   people name it. The router adds a `where` candidate with a `Place("facility")` (a multi-word name needs no cue; a bare
   "exit" or "entrance" needs "where" or "the"), `PlaceResolver.facility_in` does the same for the older rules, and
