@@ -1,0 +1,136 @@
+<!--
+  Visual SLAM (RTAB-Map) for TurtleBot 2 + Orbbec camera + Hokuyo LiDAR.
+
+  The CAMERA does the SLAM: it remembers what places look like, corrects drift
+  when it sees a place again (loop closure), and in localization mode works out
+  where the robot is on the saved map by itself.
+  The LIDAR draws the walls of the 2D map and is used for obstacle avoidance.
+  The WHEELS give short-term movement (odometry).
+
+  Usually started by run_vslam_mapping.sh / run_vslam_noise_nav.sh, which also
+  start minimal.launch and the helper nodes in nodes/.
+
+  Mapping (camera only):  roslaunch config/vslam.launch use_lidar:=false
+  Navigation:             roslaunch config/vslam.launch localization:=true navigation:=true
+                              rtabmap_use_scan:=false grid_sensor:=1
+                          (camera finds the robot on the camera-made map,
+                           LiDAR is only used by move_base to avoid obstacles)
+
+  Options:
+    database_path:=/home/robot/vslam_map2.db   which map file to make / use
+    rtabmap_pkg:=rtabmap_ros                   older RTAB-Map installs
+    use_lidar:=false    run without the LiDAR (camera-only SLAM + camera-drawn map)
+    grid_sensor:=1      2D map drawn from: 0 = LiDAR, 1 = camera, 2 = both
+    port:=/dev/ttyACM1  laser_z:=0.3  laser_yaw:=3.14159   (LiDAR settings)
+-->
+<launch>
+  <arg name="localization"  default="false"/>
+  <arg name="navigation"    default="false"/>
+  <arg name="database_path" default="$(env HOME)/vslam_map.db"/>
+  <arg name="rtabmap_pkg"   default="rtabmap_slam"/>
+  <arg name="use_lidar"     default="true"/>
+  <!-- does RTAB-Map itself use the LiDAR? (move_base always does when use_lidar is on) -->
+  <arg name="rtabmap_use_scan" default="$(arg use_lidar)"/>
+  <!-- 2D map: from the camera when there's no LiDAR, otherwise from the LiDAR -->
+  <arg     if="$(arg use_lidar)" name="grid_default" value="0"/>
+  <arg unless="$(arg use_lidar)" name="grid_default" value="1"/>
+  <arg name="grid_sensor"   default="$(arg grid_default)"/>
+  <arg     if="$(arg localization)" name="rtabmap_args" value=""/>
+  <arg unless="$(arg localization)" name="rtabmap_args" value="--delete_db_on_start"/>
+
+  <arg name="rgb_topic"         default="/camera/rgb/image_rect_color"/>
+  <arg name="depth_topic"       default="/camera/depth_registered/image_raw"/>
+  <arg name="camera_info_topic" default="/camera/rgb/camera_info"/>
+  <arg name="scan_topic"        default="/hokuyo_scan_filtered"/>
+
+  <arg name="port"      default="/dev/ttyACM0"/>
+  <arg name="laser_x"   default="0.0"/>
+  <arg name="laser_y"   default="0.0"/>
+  <arg name="laser_z"   default="0.3"/>
+  <arg name="laser_yaw" default="0.0"/>
+
+  <!-- ===== LiDAR ===== -->
+  <group if="$(arg use_lidar)">
+  <node pkg="urg_node" type="urg_node" name="hokuyo" output="screen">
+    <param name="serial_port" value="$(arg port)"/>
+    <param name="frame_id"    value="laser"/>
+    <remap from="scan" to="hokuyo_scan"/>
+  </node>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="laser_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
+  </group>
+
+  <!-- ===== Camera (Orbbec, RGB + depth) ===== -->
+  <include file="$(find turtlebot_bringup)/launch/3dsensor.launch"/>
+
+  <!-- ===== RTAB-Map visual SLAM ===== -->
+  <group ns="rtabmap">
+    <node pkg="$(arg rtabmap_pkg)" type="rtabmap" name="rtabmap" output="screen"
+          args="$(arg rtabmap_args)">
+      <param name="database_path"      value="$(arg database_path)"/>
+      <param name="frame_id"           value="base_footprint"/>
+      <param name="odom_frame_id"      value="odom"/>
+      <param name="map_frame_id"       value="map"/>
+      <param name="subscribe_depth"    value="true"/>
+      <param name="subscribe_scan"     value="$(arg rtabmap_use_scan)"/>
+      <param name="approx_sync"        value="true"/>   <!-- camera colour + depth are not synced -->
+      <param name="queue_size"         value="20"/>
+      <param name="wait_for_transform_duration" value="0.3"/>
+      <param name="map_negative_poses_ignored"  value="true"/>
+      <param name="odom_tf_linear_variance"     value="0.001"/>
+      <param name="odom_tf_angular_variance"    value="0.001"/>
+
+      <remap from="rgb/image"       to="$(arg rgb_topic)"/>
+      <remap from="depth/image"     to="$(arg depth_topic)"/>
+      <remap from="rgb/camera_info" to="$(arg camera_info_topic)"/>
+      <remap from="scan"            to="$(arg scan_topic)"/>
+      <remap from="odom"            to="/odom"/>
+      <remap from="grid_map"        to="/map"/>          <!-- the 2D map everyone else uses -->
+      <remap from="initialpose"     to="/initialpose"/>  <!-- "Set robot position" on the web page -->
+
+      <!-- Visual SLAM -->
+      <param name="Reg/Strategy"              type="string" value="0"/>    <!-- 0 = visual -->
+      <param name="Reg/Force3DoF"             type="string" value="true"/> <!-- robot drives on a flat floor -->
+      <param name="Vis/MinInliers"            type="string" value="15"/>
+      <param name="Vis/InlierDistance"        type="string" value="0.1"/>
+      <param name="Kp/MaxDepth"               type="string" value="4.0"/>
+      <param name="Vis/MaxDepth"              type="string" value="4.0"/>
+      <param name="RGBD/ProximityBySpace"     type="string" value="true"/>
+      <param name="RGBD/NeighborLinkRefining" type="string" value="$(arg rtabmap_use_scan)"/> <!-- LiDAR fine-tunes wheel odometry -->
+      <param name="RGBD/OptimizeFromGraphEnd" type="string" value="false"/>
+      <param name="RGBD/AngularUpdate"        type="string" value="0.1"/>
+      <param name="RGBD/LinearUpdate"         type="string" value="0.1"/>
+      <param name="RGBD/ProximityPathMaxNeighbors" type="string" value="0"/>
+      <param name="Icp/CorrespondenceRatio"   type="string" value="0.3"/>
+      <param name="Mem/RehearsalSimilarity"   type="string" value="0.30"/>
+      <param name="Rtabmap/TimeThr"           type="string" value="0"/>
+
+      <!-- 2D map -->
+      <param name="Grid/Sensor"               type="string" value="$(arg grid_sensor)"/>
+      <param name="Grid/RangeMax"             type="string" value="4.0"/>
+      <param name="GridGlobal/MinSize"        type="string" value="20"/>
+      <!-- when the camera draws the map: floor = free, things up to 1.2 m tall = obstacles,
+           ceiling/lights ignored; trace free space between the camera and what it sees -->
+      <param name="Grid/MaxObstacleHeight"    type="string" value="1.2"/>
+      <param name="Grid/MaxGroundHeight"      type="string" value="0.05"/>
+      <param name="Grid/RayTracing"           type="string" value="true"/>
+      <param name="Grid/3D"                   type="string" value="false"/>
+      <!-- remove isolated noisy depth points before they become black specks (new maps) -->
+      <param name="Grid/NoiseFilteringRadius"       type="string" value="0.05"/>
+      <param name="Grid/NoiseFilteringMinNeighbors" type="string" value="5"/>
+
+      <!-- Mapping vs localization -->
+      <param     if="$(arg localization)" name="Mem/IncrementalMemory"  type="string" value="false"/>
+      <param     if="$(arg localization)" name="Mem/InitWMWithAllNodes" type="string" value="true"/>
+      <param unless="$(arg localization)" name="Mem/IncrementalMemory"  type="string" value="true"/>
+      <param unless="$(arg localization)" name="Mem/InitWMWithAllNodes" type="string" value="false"/>
+    </node>
+  </group>
+
+  <!-- ===== Path planning + obstacle avoidance with the LiDAR ===== -->
+  <include if="$(arg navigation)"
+           file="$(find turtlebot_navigation)/launch/includes/move_base.launch.xml">
+    <arg name="laser_topic"       value="$(arg scan_topic)"/>
+    <arg name="custom_param_file" value="$(dirname)/hokuyo_costmap.yaml"/>
+  </include>
+</launch>

@@ -1,0 +1,11 @@
+# maps, recordings and logs made on the robot
+*.db
+*.pgm
+run_logs/
+noise_log*.csv
+noise_nav_log*.csv
+noise_nav_map*.png
+mic_config.json
+*.wav
+__pycache__/
+*.pyc
