@@ -17,7 +17,7 @@ perception ──events──> bus ──> core ──events──> bus ──> 
 1. **Perception** turns sensor input into events. `people.py` counts faces (AI server face detection, smoothed so a missed frame or a visitor looking down at a book doesn't count as leaving) and `noise.py` measures the room, and both publish `ContextChanged`; its `EngagementDetector` turns the same detections into `PersonEngaged` (a frontal face big enough for long enough), `PersonNearbyBusy` and `PersonLeft`. A `BookReader` (`book_reader.py`; today the camera scanner in `book_scanner.py`, later RFID) reacts to `BookPlaced` and publishes `BookIdentified` (or `ScanFailed`). Speech-to-text gives `UserUtterance`, and the camera's emotion model gives `EmotionDetected`. `noise.py` and the speech and emotion inputs are not wired up yet; in the simulator the keyboard publishes those events instead, while `sim --faces` uses the real `people.py`.
 2. **The bus** (`robot/bus.py`) delivers each event to its subscribers in the order they subscribed, one at a time. A failing handler is logged and does not stop the others. An event published inside a handler is fully delivered before the outer one continues, so causes are always logged before their effects.
 3. **Core** decides what the robot does:
-   - `context.py` combines the map zone, the head count and an optional noise reading into a `Context` (quiet or common, alone or group). A loud reading turns a quiet area common and a silent one turns a common area quiet, using the thresholds in `config/zones.yaml`.
+   - `context.py` combines the map zone, the head count and an optional noise reading into a `Context` (quiet or common, alone or group). A loud reading turns a quiet area common and a silent one turns a common area quiet, using the thresholds in `config/zones.yaml`. With a base, `zones.py` decides the zone first (see [The base](#the-base-the-dell-on-the-turtlebot)).
    - `style.py` maps the `Context` to a `StyleVector` (voice, channels, lights, neck pose, screen layout, proactivity, speed limit) using `config/styles.yaml`. `fixed` mode ignores the context: it is the study's baseline.
    - `fsm.py` is a small generic hierarchical state machine (nesting, history, guards, timers, entry and exit actions, `force()`), and `dialogue.py` is the table on top of it: IDLE, ENGAGED (GREET, OFFER, AWAIT_BOOK, SCAN, STORE, ANSWER, RECOMMEND, ANYTHING_ELSE, FAREWELL) and RETURNING (PLAN, NAVIGATING, AT_SHELF, ANNOUNCE, HOMING); see [The state machine](#the-state-machine). Every state reads the current `StyleVector`, so the same state is spoken in a common area but silent (eyes, light, screen) in a quiet one.
    - `storage.py` is the storage ring as data: which slot holds which returned book, saved to `data/state/storage.json`.
@@ -72,6 +72,49 @@ RETURNING: PLAN → NAVIGATING → AT_SHELF → (next shelf | HOMING) → IDLE; 
 - **Operator controls.** `robot/operator.py` is the one implementation behind the sim's terminal commands and the display server's `/operator` page (`display/ui/operator.html`; button taps and operator commands reach the robot through the server's inbox, polled by `display_link.py`). `goto <state>` fills in what a state needs: a sample book for SCAN, STORE, ANSWER and RECOMMEND, two stored books on different shelves for RETURNING.
 - **Config** (`config/robot.yaml`): `timeouts` (offer_s, await_book_s, scan_s, store_s, answer_s, anything_else_s, farewell_s), `returning` (auto_start, auto_start_delay_s, sim_drive_s, sim_unload_s, announce_s, home pose), `storage` (slots, path, sim_drop_s: the simulated `BookDropped` after the slot lights, 0 to wait for the operator or the real pad), `engagement` (min_face_px, dwell_s, left_after_s), `display` (host, port, bind_host, poll_s), `books.reader`.
 - **Real hardware.** The ESP32 commands the machine uses (`stop`, `slot_light`, `pad_vibrate`, `light_pattern`) are in `firmware/esp32/README.md`. Driving to a shelf is `NavigationRequested` → `Navigation.go_to_pose`; the simulated drive and unload are timers (`returning.sim_drive_s`, `sim_unload_s`) until a real base reports arrival.
+
+## The base (the Dell on the TurtleBot)
+
+```
+ Jetson                                            Dell (ROS Noetic)
+ dialogue ─NavigationRequested─> App ─> TurtleBotNavigation ─> TurtleBotLink ══ HTTP/JSON, 192.168.50.1 → .2:8010 ══> API server ─> move_base
+    ^                                                              │ heartbeat 1 Hz (thread)                             noise_logger
+    │ NavArrived / NavFailed / NavCancelled / LinkUp / LinkDown     │ state poll 2 Hz (thread)  <── pose, nav, noise ──   RTAB-Map pose
+    └───────────── bus <───────── PoseUpdated / NavProgress / NoiseReading ─┘ commands (thread): goal, cancel, speaking, max_speed
+```
+
+The contract is [robot_link.md](robot_link.md). `robot/drivers/turtlebot_link.py` is standard library only and keeps three threads
+(heartbeat, state poll, ordered commands with retries) so the event loop never waits for the cable; its events reach the bus
+through a queue, in order. The link is *connected*, *degraded* or *lost* (3 s with no reply: `LinkDown`, then `LinkUp`).
+The outcome of a goal is read from the base's `nav` for the `goal_id` that was sent, once; a goal the base never confirmed is
+sent again with the same id; losing the link drops the goal (the base stops by itself after 3 s without a heartbeat).
+
+- **Navigation.** `navigation.backend: sim | turtlebot` picks `Navigation` (ESP32 command, the dialogue's timer drive) or
+  `TurtleBotNavigation` (`async_arrival = True`). Its safety checks reject, log and report as failed any goal that is not a
+  finite pose, is outside the floor plan, is on another floor than `turtlebot.floor`, or is further than
+  `turtlebot.max_goal_distance_m` from the base.
+- **RETURNING.** `NAVIGATING` and `HOMING` have no drive timer with a real base: `NavArrived` for the current `goal_id` ends the
+  drive (a limit, `returning.drive_timeout_s`, ends it as failed). A person engaging cancels the goal (`stop_driving`); the history
+  resume re-enters NAVIGATING, which sends the same target again with a new `goal_id`. `NavFailed` is tried again once
+  (`returning.nav_retries`), then `skip_shelf`: the shelf is left out of this trip, its books stay in storage, and it is logged and listed
+  on the operator page. Reasons that say the base cannot drive at all (`not_localised`, `ros_unavailable`, `no_heartbeat`,
+  `link_down`) never skip a shelf: the trip waits with the status view "Navigation unavailable" (nothing spoken in a quiet zone) and the
+  goal is sent again, at most every 2 s, when `Navigation.available()` is true. An arrival or failure that comes while "excuse me" is
+  showing is kept and handled when the drive is resumed.
+- **Voice.** `Voice(on_speaking=...)` calls `link.set_speaking(True)` when the first sentence (or the chime) starts playing and
+  `False` after the last, so the Dell can mark those readings `robot_noise`. `Actuators.apply_style` sends the style's
+  `speed_limit` through `set_speed_limit` to `/api/max_speed` (only when it changes, and again when the link returns).
+- **Zones.** `perception/noise.py` `NoiseFilter` (robot noise out, calibrated dB only, rolling median, hysteresis) and
+  `core/zones.py` `ZoneResolver` decide the zone with this precedence: *frozen* while the dialogue is in ENGAGED, then the
+  *noise* answer, then the *map* (the section the localised base is in, with a dwell time, when `zone_from_pose` is on; otherwise the
+  typed or operator zone). `App.refresh_zone()` runs on every pose and noise event and on the ticker, and publishes a `ContextChanged`
+  with `zone_source` only when the zone changes; the head count still updates a frozen zone's style. Without a link none of this exists
+  and the sim's `noise <dB>` works as before.
+- **Tools.** `tools/fake_base.py` (the model and a `ThreadingHTTPServer`; driving, `--fail-rate`, `--drop-link-after`, the watchdog, noise per
+  area, the speaking flag), `tools/teach_poses.py` (poses into `shelves.csv` and `floorplan.yaml` with backups and `catalog_check`),
+  `python -m robot sim --base turtlebot|fake`, `scenarios run --base fake`, and the Base section of the operator page (`App.link_info()`
+  goes out with the state). High-rate events (`PoseUpdated`, `NoiseReading`, `NavProgress`) are written to the study log at most once
+  every 5 s each.
 
 ## Understanding and feedback
 
@@ -223,3 +266,5 @@ What a visitor says goes to `Dialogue.handle_text` (`core/dialogue.py`):
 | Which view a state shows, timing per zone | `robot/core/screen.py`, `screen:` in `config/robot.yaml` |
 | How a view looks | `display/ui/views.js` (and the styles in `index.html`) |
 | The floor plan for directions | `data/floorplan.yaml` (docs/catalog.md) |
+| How the robot talks to the base, its safety limits | `turtlebot:` and `navigation:` in `config/robot.yaml`, [robot_link.md](robot_link.md) |
+| Noise thresholds from the base's microphones, zone from position | `noise:`, `zone_from_pose`, `zone_dwell_s` in `config/zones.yaml` |

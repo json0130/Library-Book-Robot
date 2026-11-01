@@ -47,6 +47,13 @@ def main(argv=None) -> int:
                      help="with piped input: after the last line, wait up to this long for the robot to finish its "
                           "goodbye and the trip putting books back (0 = quit at once)")
     sim.add_argument("--live", action="store_true", help="--camera --faces --auto-scan --speak --llm together")
+    sim.add_argument("--base", choices=("sim", "turtlebot", "fake"), default=None,
+                     help="what drives the robot: sim (timers; the default, or navigation.backend), turtlebot (the Dell over the\n"
+                          "cable, needs ROBOT_LINK_TOKEN; docs/robot_link.md) or fake (tools/fake_base.py started in this process)")
+    sim.add_argument("--base-url", default=None, metavar="URL", help="with --base turtlebot: the Dell's address (default turtlebot.base_url)")
+    sim.add_argument("--base-speed", type=float, default=1.0, metavar="TIMES", help="with --base fake: the fake base drives this many times faster than the style's speed limit allows (default %(default)s)")
+    sim.add_argument("--config-set", action="append", default=[], metavar="SECTION.KEY=VALUE",
+                     help="override a setting of config/robot.yaml for this run (YAML value), e.g. returning.auto_start=true")
     states = sub.add_parser("states", help="print the state machine from its transition table")
     states.add_argument("--mermaid", action="store_true", help="print the Mermaid diagram")
     states.add_argument("--markdown", action="store_true", help="print the whole generated document")
@@ -84,14 +91,20 @@ def main(argv=None) -> int:
 
     from robot.services.books import CatalogError
     if args.command == "sim":
-        from robot.sim.keyboard import run_sim
+        from robot.sim.keyboard import apply_overrides, run_sim
+        try:
+            apply_overrides(cfg, args.config_set)
+        except ValueError as exc:
+            print(f"--config-set: {exc}", file=sys.stderr)
+            return 2
         try:
             return asyncio.run(run_sim(cfg, log_sessions=not args.no_log, use_llm=args.llm or args.live,
                                      use_camera=args.camera or args.live, speak=args.speak or args.live,
                                      use_faces=args.faces or args.live, preview=args.preview and not args.no_preview,
                                      auto_scan=args.auto_scan or args.live, settle_s=args.settle,
                                      persist_storage=not args.no_persist,
-                                     local_faces=args.local_faces))
+                                     local_faces=args.local_faces, base=args.base, base_url=args.base_url,
+                                     base_speed=args.base_speed))
         except KeyboardInterrupt:
             # run_sim's cleanup has run. Exit without Python's shutdown, which can abort or hang while
             # the keyboard reader thread is still blocked in stdin.readline().

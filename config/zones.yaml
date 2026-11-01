@@ -2,6 +2,10 @@
 
 default_zone: common
 
+zone_from_pose: false    # true: with a localised base, the zone is that of the floor-plan section it is in (the section's own
+                         # `zone:` in data/floorplan.yaml, else the zone of its shelves), `default_zone` outside every section
+zone_dwell_s: 3          # ...and a new zone must be held this long before it counts (a section's edge does not flicker)
+
 map:                     # named areas -> zone
   reading_room: quiet
   silent_study: quiet
@@ -14,3 +18,16 @@ noise:
   # quiet_below_db it counts as quiet, and in between the map zone stands.
   quiet_below_db: 45
   common_above_db: 60
+
+  # From the base's microphones (robot/perception/noise.py, docs/robot_link.md). The zone follows the rolling median of the
+  # last window_s seconds, with hysteresis: common when it is above to_common_above_db, quiet again below to_quiet_below_db.
+  # Readings made while the robot talks or drives (robot_noise) are ignored. Only calibrated dB can be compared with these.
+  window_s: 45
+  min_samples: 6                   # readings needed before the median counts
+  to_common_above_db: 55
+  to_quiet_below_db: 48
+  uncalibrated: ignore             # a reading with calibrated=false (dBFS): ignore it, or `raw` = compare with raw_thresholds
+  raw_thresholds:                  # dBFS, only used with `uncalibrated: raw`: measure the library at its quietest and busiest
+    to_common_above_db: -35
+    to_quiet_below_db: -45
+  enabled: true                    # false: the base's microphones are never used for the zone

@@ -5,7 +5,7 @@ draw directions on the screen and by tools/catalog_check.py to check the shelves
 only, never anything about visitors.
 
     plan = FloorPlan.load("data/floorplan.yaml")      # raises FloorPlanError naming every problem
-    plan.floor(3).section("History")                  # Section(name, x, y, w, h)
+    plan.floor(3).section("History")                  # Section(name, x, y, w, h, zone)
     plan.where_section("History")                     # (Floor, Section) or None
     plan.lift(2)                                      # the lift Landmark on level 2, or None
     plan.find("toilets")                              # [(Floor, Landmark)] wherever there are toilets
@@ -35,6 +35,7 @@ class Section:
     y: float
     w: float
     h: float
+    zone: Optional[str] = None           # "quiet" or "common"; None: the zone of the section's shelves (shelves.csv)
 
     def contains(self, x: float, y: float, margin: float = 0.0) -> bool:
         return (self.x - margin <= x <= self.x + self.w + margin) and (self.y - margin <= y <= self.y + self.h + margin)
@@ -206,7 +207,11 @@ def _floor(raw, where: str, problems: list) -> Optional[Floor]:
             problems.append(f"{here}: the rectangle ({x:g}, {y:g}, {w:g} x {h:g}) is outside the floor "
                             f"({width:g} x {height:g} m)")
             continue
-        sections.append(Section(name, x, y, w, h))
+        zone = s.get("zone")
+        if zone is not None and str(zone).strip().lower() not in ("quiet", "common"):
+            problems.append(f"{here}: `zone` must be quiet or common, not {zone!r}")
+            continue
+        sections.append(Section(name, x, y, w, h, str(zone).strip().lower() if zone is not None else None))
     landmarks = []
     for j, m in enumerate(raw.get("landmarks") or [], 1):
         if not isinstance(m, dict):

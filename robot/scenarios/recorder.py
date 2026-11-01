@@ -18,7 +18,8 @@ from typing import Callable, Optional
 from robot.events import (NavigationRequested, ScreenUpdate, StateTransition, ThinkingEnded, ThinkingStarted)
 from robot.services.book_llm import BookAssistant
 
-SKIP_EVENTS = {"StateEntered", "ThinkingStarted", "ThinkingEnded", "ReplySentence", "ExpressionRequested", "StyleChanged", "ContextChanged"}
+SKIP_EVENTS = {"StateEntered", "ThinkingStarted", "ThinkingEnded", "ReplySentence", "ExpressionRequested", "StyleChanged", "ContextChanged",
+               "PoseUpdated", "NoiseReading", "NavProgress"}      # the base reports these twice a second
 TEXT_LIMIT = 400
 
 

@@ -66,6 +66,13 @@
   ol#books .slot { font: 600 .8rem ui-monospace, monospace; color: var(--accent); min-width: 3.2rem; }
   ol#books .title { font-weight: 600; }
   ol#books .where { color: var(--muted); font-size: .8rem; }
+  dl#base { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: .88rem; }
+  dl#base dt { color: var(--muted); }
+  dl#base dd { margin: 0; overflow-wrap: anywhere; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); font: 600 .78rem ui-monospace, monospace; }
+  .pill.good { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  #skipped { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--warn); font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -93,6 +100,11 @@
       <h2>Test step <span id="guideno"></span></h2>
       <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
       <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
+    </section>
+    <section id="basebox" hidden>
+      <h2>Base (the TurtleBot) <span id="baseurl"></span></h2>
+      <dl id="base"></dl>
+      <ul id="skipped"></ul>
     </section>
     <section>
       <h2>Zone (a style setting, not a state)</h2>
@@ -210,6 +222,45 @@ function showMap(s) {
   if (!items.length) { const li = document.createElement("li"); li.className = "auto"; li.textContent = "(nowhere: waiting)"; items.push(li); }
   $("next").replaceChildren(...items);
 }
+function pill(text, kind) {
+  const p = document.createElement("span"); p.className = "pill " + (kind || ""); p.textContent = text; return p;
+}
+function showBase(s) {
+  const l = s.link || {}, box = $("basebox"), ret = l.returning || {};
+  box.hidden = l.backend !== "turtlebot" && !(ret.skipped || []).length;
+  if (box.hidden) return;
+  const turtle = l.backend === "turtlebot";
+  $("baseurl").textContent = turtle ? l.url || "" : "(simulated drive)";
+  const pose = l.pose || {}, nav = l.nav || {}, noise = l.noise, zone = l.zone || {}, f = (v, n = 2) => v == null ? "–" : Number(v).toFixed(n);
+  const rows = [];
+  const add = (name, ...content) => rows.push([name, content]);
+  if (turtle) {
+    add("Link", pill(l.status || "?", l.status === "connected" ? "good" : "warn"),
+        l.incompatible ? ` ${l.incompatible}` : ` ROS ${l.ros_ok === false ? "DOWN" : l.ros_ok ? "ok" : "?"}${l.battery != null ? ` · battery ${Math.round(l.battery * 100)}%` : ""}${l.clock_skew_s != null ? ` · clock ${l.clock_skew_s >= 0 ? "+" : ""}${l.clock_skew_s} s` : ""}`);
+    add("Base pose", "x " + f(pose.x) + "  y " + f(pose.y) + "  yaw " + f(pose.yaw) + " ", pill(pose.localised === false ? "NOT localised" : pose.localised ? "localised" : "no pose yet", pose.localised ? "good" : "warn"));
+    add("Drive", pill(nav.status || "idle", nav.status === "active" ? "good" : nav.status === "failed" ? "warn" : ""),
+        (nav.goal_id ? ` goal ${nav.goal_id}` : "") + (nav.distance_left != null ? ` · ${f(nav.distance_left, 1)} m left` : "") + (nav.reason ? ` · ${nav.reason}` : ""));
+  }
+  if (ret.blocked) add("Trip", pill("Navigation unavailable", "warn"), ` waiting: ${ret.blocked}`);
+  if (turtle) {
+    const n = zone.noise || {};
+    add("Noise", noise ? `${f(noise.overall, 1)} ${noise.unit || ""} (${noise.calibrated ? "calibrated" : "raw, not calibrated"})${noise.robot_noise ? " — the robot's own" : ""}`
+                       : "no reading",
+        n.median != null ? ` · median ${f(n.median, 1)} over ${n.samples} readings` : ` · median: not enough readings yet`);
+    add("Zone", pill(zone.zone || s.zone, "good"), ` decided by ${zone.source || "map"}${zone.area ? ` (${zone.area})` : ""}${zone.noise_zone ? ` · noise says ${zone.noise_zone}` : ""}${zone.from_pose ? "" : " · pose lookup off"}`);
+  }
+  $("base").replaceChildren(...rows.flatMap(([name, content]) => {
+    const dt = document.createElement("dt"); dt.textContent = name;
+    const dd = document.createElement("dd");
+    content.forEach(c => dd.append(c));
+    return [dt, dd];
+  }));
+  $("skipped").replaceChildren(...(ret.skipped || []).slice().reverse().map(k => {
+    const li = document.createElement("li");
+    li.textContent = `⚠ shelf ${k.shelf} skipped (${k.section || "?"}, level ${k.floor ?? "?"}): ${k.reason}; ${k.books} book(s) stay in storage`;
+    return li;
+  }));
+}
 function showState(s) {
   $("path").textContent = s.state || "–";
   $("meta").textContent = `zone ${s.zone} (${s.social})${s.fixed ? ", fixed mode" : ""} · ${s.style || ""}`;
@@ -219,6 +270,7 @@ function showState(s) {
   }
   showBooks(s);
   showMap(s);
+  showBase(s);
   const g = s.guide;                                    // a guided scenario test (python -m robot scenarios live)
   $("guide").hidden = !g;
   if (g) { $("guideno").textContent = `${g.n} of ${g.total} (${g.scenario})`; $("guidetext").textContent = g.text; }

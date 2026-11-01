@@ -3,7 +3,8 @@
 Perception publishes ContextChanged, PersonEngaged, PersonNearbyBusy, PersonLeft, BookPlaced, BookIdentified (a
 BookReader read the book), ScanFailed, BookDropped, UserUtterance, UserChoice and EmotionDetected.
 Core publishes StyleChanged, StateTransition, ScreenUpdate, ReplySentence, ExpressionRequested and
-NavigationRequested for actuation and the display to act on.
+NavigationRequested for actuation and the display to act on. The link to the base (drivers/turtlebot_link.py) publishes
+LinkUp, LinkDown, PoseUpdated, NavProgress, NavArrived, NavFailed, NavCancelled and NoiseReading (docs/robot_link.md).
 
 `source` says where an event came from: "sensor" (the real hardware or the camera), "operator" (the terminal or the
 /operator page), "screen" (a touch button), "timeout" (a state's timer). It goes into the session log with every
@@ -31,6 +32,7 @@ class ContextChanged:
     noise_db: Optional[float] = None
     person_ids: tuple = ()
     timestamp: float = field(default_factory=_now)
+    zone_source: Optional[str] = None      # set by core/zones.py when the zone is already decided from the pose and the noise
 
 
 @dataclass
@@ -291,4 +293,75 @@ class StyleChanged:
     """The interaction style changed; style is a core.style.StyleVector."""
     style: Any
     context: Any = None
+    timestamp: float = field(default_factory=_now)
+
+
+# ---- the link to the base (the Dell on the TurtleBot, docs/robot_link.md) ----
+@dataclass
+class LinkUp:
+    """The base answered after the link was lost (or for the first time)."""
+    base_url: str = ""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class LinkDown:
+    """No reply from the base for `lost_after_s`: the base stops by itself after 3 s without a heartbeat."""
+    reason: str = ""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class PoseUpdated:
+    """The base's pose in the RTAB-Map map frame (metres, radians). Not published for every poll: when it moved, when
+    `localised` changed, and at least every few seconds."""
+    x: float
+    y: float
+    yaw: float
+    localised: bool = True
+    frame: str = "map"
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class NavProgress:
+    """The goal is being driven: metres left along the plan (None if the base does not know)."""
+    goal_id: str
+    distance_left: Optional[float] = None
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class NavArrived:
+    goal_id: str
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class NavFailed:
+    """The goal did not succeed. reason: the base's (no_path, blocked, not_localised...) or ours (rejected: ..., link_down)."""
+    goal_id: str
+    reason: str = ""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class NavCancelled:
+    goal_id: str
+    reason: str = ""
+    timestamp: float = field(default_factory=_now)
+
+
+@dataclass
+class NoiseReading:
+    """The base's microphones: `overall` in `unit` ("dB" calibrated, "dBFS" relative to full scale). robot_noise: taken while
+    the robot itself was making noise, so it says nothing about the room."""
+    overall: float
+    left: Optional[float] = None
+    right: Optional[float] = None
+    balance: Optional[float] = None
+    unit: str = "dBFS"
+    calibrated: bool = False
+    robot_noise: bool = False
+    t: float = 0.0
     timestamp: float = field(default_factory=_now)

@@ -40,8 +40,10 @@ def split_first(sentences: list) -> list:
 
 class Voice:
     def __init__(self, audio, synthesize: Optional[Callable[[str], bytes]] = None, face=None,
-                 whisper_volume: float = 0.35, cache_dir: Optional[Path] = None, cache_tag: str = ""):
+                 whisper_volume: float = 0.35, cache_dir: Optional[Path] = None, cache_tag: str = "",
+                 on_speaking: Optional[Callable[[bool], None]] = None):
         self.audio = audio
+        self.on_speaking = on_speaking      # called with True when playback starts and False when it ends (the base marks its noise readings as the robot's own)
         self.synthesize = synthesize        # text -> WAV bytes, e.g. services.speech.Speech.synthesize
         self.face = face                    # FaceDisplay, for the talking mouth
         self.whisper_volume = whisper_volume
@@ -50,15 +52,26 @@ class Voice:
         self.cache_tag = cache_tag                  # voice and shaping: a changed voice does not reuse old speech
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts")
 
+    def _speaking(self, speaking: bool) -> None:
+        if self.on_speaking is None:
+            return
+        try:
+            self.on_speaking(speaking)
+        except Exception:                                   # telling the base must never stop the robot talking
+            log.exception("could not tell the base about the sound")
+
     def chime(self, style) -> None:
         """A soft two-note chime at the style's volume ("excuse me"). Never raises: a missing speaker is logged."""
         from robot.actuation.chime import chime_wav
         volume = style.volume * 0.6
         log.info("[voice chime, volume %.2f]", volume)
+        self._speaking(True)
         try:
             self.audio.play(chime_wav(), volume)
         except (OSError, subprocess.SubprocessError) as exc:
             log.warning("could not play the chime (%s)", exc)
+        finally:
+            self._speaking(False)
 
     CACHE_MAX = 64
 
@@ -127,20 +140,28 @@ class Voice:
             return
         sentences = split_first(split_sentences(text) or [text])
         pending = self._pool.submit(self._wav, sentences[0])
-        for i in range(len(sentences)):
-            try:
-                wav = pending.result()
-            except (OSError, EOFError, ValueError) as exc:
-                log.warning("text-to-speech failed (%s); the reply is only shown", exc)
-                return
-            if i + 1 < len(sentences):
-                pending = self._pool.submit(self._wav, sentences[i + 1])      # made while this one plays
-            if self.face is not None:
-                self.face.talk_audio(wav)
-            try:
-                self.audio.play(wav, volume)
-            except (OSError, subprocess.SubprocessError) as exc:
-                log.warning("could not play the reply (%s)", exc)
+        started = False                                      # from the first sentence playing to the end of the last, gaps included
+        try:
+            for i in range(len(sentences)):
+                try:
+                    wav = pending.result()
+                except (OSError, EOFError, ValueError) as exc:
+                    log.warning("text-to-speech failed (%s); the reply is only shown", exc)
+                    return
+                if i + 1 < len(sentences):
+                    pending = self._pool.submit(self._wav, sentences[i + 1])      # made while this one plays
                 if self.face is not None:
-                    self.face.stop_talking()
-                return
+                    self.face.talk_audio(wav)
+                if not started:
+                    started = True
+                    self._speaking(True)
+                try:
+                    self.audio.play(wav, volume)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    log.warning("could not play the reply (%s)", exc)
+                    if self.face is not None:
+                        self.face.stop_talking()
+                    return
+        finally:
+            if started:
+                self._speaking(False)

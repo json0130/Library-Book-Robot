@@ -108,11 +108,12 @@ class Context:
             raise RunAborted(f"the run took more than {self.run_timeout_s:g} real seconds")
 
 
-def build_robot(cfg: Config, assistant_factory, clock: ScaledClock, overrides: dict):
-    """The real robot core on fake drivers (as the unit tests build it), with the scenario clock."""
+def build_robot(cfg: Config, assistant_factory, clock: ScaledClock, overrides: dict, link=None):
+    """The real robot core on fake drivers (as the unit tests build it), with the scenario clock. `link`: a TurtleBotLink
+    (to tools/fake_base.py) when the run uses `--base fake`; the robot then drives through the real link code."""
     cfg.robot.setdefault("books", {})["online_fallback"] = False          # scenarios never touch the network for books
     drivers = fake_drivers()
-    app = build_app(cfg, drivers, face=FaceDisplay(enabled=False), log_sessions=False, persist_storage=False)
+    app = build_app(cfg, drivers, face=FaceDisplay(enabled=False), log_sessions=False, persist_storage=False, link=link)
     app.dialogue.assistant = assistant_factory(app) if assistant_factory else None
     app.dialogue.clock = clock
     app.screen.clock = clock
@@ -286,8 +287,9 @@ async def wait(base: dict, value, ctx: Context) -> None:
 
 async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Config, llm: tuple, speed: float,
                typo_probability: Optional[float] = None, steps=None, guide=None,
-               speech_probability: Optional[float] = None) -> dict:
-    """Run one scenario once in one zone. llm: ("none", None) | (host, port, 'real'|'mock'). Returns the run record."""
+               speech_probability: Optional[float] = None, base: str = "sim") -> dict:
+    """Run one scenario once in one zone. llm: ("none", None) | (host, port, 'real'|'mock'). Returns the run record.
+    base: sim (the drive is a timer) or fake (tools/fake_base.py in this process: the drive goes through the link)."""
     harness = cfg.scenarios
     clock = ScaledClock(speed)
     rng = random.Random(seed)
@@ -301,7 +303,15 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
         from robot.services.llm import LLMClient
         timeout = float(cfg.robot["ai_server"].get("llm_timeout_s", 20))
         factory = lambda app: RecordingAssistant(LLMClient(llm[0], llm[1], timeout), recorder)
-    app, drivers = build_robot(cfg, factory, clock, harness.get("robot_overrides"))
+    fake = link = None
+    if base == "fake":
+        from robot.sim.base import start_fake_base
+        cfg.zones.setdefault("noise", {})["enabled"] = False       # the scenario's zone is the run's zone, not the fake room's noise
+        cfg.zones["zone_from_pose"] = False
+        fake = start_fake_base(cfg, speed=1.0, time_scale=speed)    # it drives as much faster as the robot's own timers
+        link = fake.make_link(cfg)
+        cfg.robot.setdefault("navigation", {})["backend"] = "turtlebot"
+    app, drivers = build_robot(cfg, factory, clock, harness.get("robot_overrides"), link)
     recorder.attach(app.bus)
     recorder.wrap_actuators(app.actuators, drivers.esp32)
     ctx = Context(app, recorder, clock, rng, zone, harness, Operator(app), typo_probability=(
@@ -318,6 +328,7 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
 
     task = asyncio.create_task(ticker())
     try:
+        await app.start_link()
         await app.bus.publish(ContextChanged(zone, 1))
         if scenario.setup.get("stored"):
             app.dialogue.fill_storage(int(scenario.setup["stored"]))
@@ -339,6 +350,9 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
             await task
         except asyncio.CancelledError:
             pass
+        await app.stop_link()
+        if fake is not None:
+            fake.stop()
         root.removeHandler(handler)
     for event, handler_, exc in app.bus.errors:                       # the bus isolates handler failures: they are still bugs
         recorder.add("error", where=f"handler for {type(event).__name__}", message=f"{type(exc).__name__}: {exc}", exception=True)
@@ -349,7 +363,7 @@ async def play(scenario: Scenario, zone: str, seed: int, run_id: str, cfg: Confi
               "timeline": recorder.entries, "events": recorder.event_names,
               "thresholds": harness["latency"], "timeouts": dict(app.dialogue.settings.timeouts),
               "typo_probability": ctx.typo_probability, "speech_probability": ctx.speech_probability,
-              "heldout": scenario.heldout}
+              "heldout": scenario.heldout, "base": base}
     record["checks"] = [c.to_json() for c in checks_module.run_checks(record, scenario)]
     record["passed"] = all(c["passed"] for c in record["checks"])
     return record
@@ -380,13 +394,13 @@ def plan_batch(names: list, scenarios: dict, runs: int, zones: list, seed: int) 
 
 
 async def run_batch(plan: list, cfg: Config, llm: tuple, speed: float, typo_probability: Optional[float], out_dir: Path,
-                    progress=print, speech_probability: Optional[float] = None) -> list:
+                    progress=print, speech_probability: Optional[float] = None, base: str = "sim") -> list:
     out_dir.mkdir(parents=True, exist_ok=True)
     records = []
     with open(out_dir / "runs.jsonl", "w", encoding="utf-8") as f:
         for scenario, zone, seed, run_id in plan:
             record = await play(scenario, zone, seed, run_id, cfg, llm, speed, typo_probability,
-                                  speech_probability=speech_probability)
+                                  speech_probability=speech_probability, base=base)
             records.append(record)
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             f.flush()
@@ -394,7 +408,7 @@ async def run_batch(plan: list, cfg: Config, llm: tuple, speed: float, typo_prob
             failed = [c["name"] for c in record["checks"] if not c["passed"]]
             progress(f"  {run_id:34} seed {seed:<11} {'PASS' if record['passed'] else 'FAIL ' + ', '.join(failed[:3])}")
     (out_dir / "meta.json").write_text(json.dumps({"llm": llm[2] if len(llm) > 2 else "none", "speed": speed,
-                                                   "runs": len(records), "created": time.time(),
+                                                   "runs": len(records), "created": time.time(), "base": base,
                                                    "heldout": next((r["heldout"] for r in records if r.get("heldout")), "")}), encoding="utf-8")
     return records
 

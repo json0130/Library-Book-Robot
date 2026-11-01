@@ -32,6 +32,7 @@
     wait <seconds> | wait idle   let the timers run (for scripted runs)
     help, quit
 
+    base                         the link to the base (with --base turtlebot | fake): link status, pose, the drive, the noise, the zone
 Options: --llm      the AI server's LLM words explain and recommend (else the catalogue text)
          --camera   scan with the real webcam, and show a live camera window
          --faces    count the people the webcam sees (AI server face detection): the first face makes the
@@ -41,6 +42,9 @@ Options: --llm      the AI server's LLM words explain and recommend (else the ca
          --speak    speak replies through the speaker (TTS from the AI server); the face display's mouth moves
          --live     all of them: webcam, faces, auto-scan, speaker, LLM
          --preview  also open a camera window on the robot (the operator page already shows the camera)
+         --base turtlebot|fake   drive with the Dell on the TurtleBot (ROBOT_LINK_TOKEN, --base-url) or with tools/fake_base.py
+                    started here (--base-speed N: N times quicker); the default is the simulated drive (timers)
+         --config-set returning.auto_start=true   change a robot.yaml setting for this run (repeatable)
 The `--live` flow: step in front of the camera (hello), hold a book's barcode up to it (or type `book`), then type
 "can you explain it?" or "can you recommend something?". Replies are spoken only in styles with the speech
 channel (a common area, the default); quiet zones print or use other channels instead. With --faces the
@@ -69,7 +73,7 @@ from robot.operator import COMMANDS as OPERATOR_COMMANDS, GROUP_SIZES, Operator
 from robot.services.books import CatalogError
 
 CHOICES = ("return", "explain", "recommend")
-COMMANDS = {"quit", "exit", "help", "?", "noise", "scan", "feel", "fixed", "guide", "where", "reload", "wait",
+COMMANDS = {"quit", "exit", "help", "?", "noise", "scan", "feel", "fixed", "guide", "where", "reload", "wait", "base",
             *OPERATOR_COMMANDS, *CHOICES}
 SETTLE_S = 120.0                                    # at the end of piped input, how long to let a return trip finish
 
@@ -96,8 +100,22 @@ class Sim:
         self.say(f"  context: {c.zone} {c.social} (map {self.zone}, {c.group_size} {'person' if c.group_size == 1 else 'people'}{noise})"
                  + ("  [fixed mode]" if self.app.fixed else ""))
         self.say(f"  style:   {self.app.style.summary()}")
+        if self.app.link is not None:
+            self.say("  " + self.base_line())
         stored = len(self.app.dialogue.storage)
         self.say(f"  dialogue: {self.app.dialogue.state}" + (f"   (storage: {stored} book{'s' * (stored != 1)})" if stored else ""))
+
+    def base_line(self) -> str:
+        """One line about the base: the link, where it is, the drive, the zone and what decided it."""
+        info = self.app.link_info()
+        pose, nav = info.get("pose") or {}, info.get("nav") or {}
+        where = f"({pose['x']:.2f}, {pose['y']:.2f})" if "x" in pose else "(no pose yet)"
+        drive = f"{nav.get('status', 'idle')}" + (f" {nav['goal_id']} {nav['distance_left']} m left" if nav.get("status") == "active" else "")
+        zone = info.get("zone") or {}
+        noise = (zone.get("noise") or {}).get("median")
+        return (f"base:    link {info.get('status')}, at {where}{'' if info.get('localised') is not False else ' NOT localised'}, "
+                f"drive {drive}, zone {zone.get('zone', '-')} by {zone.get('source', '-')}"
+                + (f" (area {zone['area']})" if zone.get("area") else "") + (f", noise median {noise} dB" if noise is not None else ""))
 
     async def context_changed(self) -> None:
         await self.op.context_changed()
@@ -202,6 +220,9 @@ class Sim:
             await bus.publish(UserUtterance(cmd))
         elif cmd == "guide" and not args:
             await bus.publish(UserUtterance("guide me"))
+        elif cmd == "base" and not args:
+            self.say("  " + (self.base_line() if self.app.link is not None else "base:    none (the simulated drive)"))
+            return True
         elif cmd == "reload" and not args:
             try:
                 self.app.finder.reload()
@@ -253,6 +274,27 @@ def build_identify(cfg: Config, sim: "Sim"):
     return PersonTracker(embedder, float(seen.get("identity_threshold", 0.40)))
 
 
+def apply_overrides(cfg: Config, settings: list) -> None:
+    """--config-set section.key=value: set a robot.yaml value (zones.key=value: one of config/zones.yaml) (the value is read as YAML: true, 5, 0.5, text) for this run.
+    Raises ValueError saying what is wrong."""
+    import yaml
+    for item in settings:
+        key, sep, value = item.partition("=")
+        parts = key.strip().split(".")
+        if not sep or not all(parts):
+            raise ValueError(f"{item!r}: use section.key=value")
+        node = cfg.zones if parts[0] == "zones" else cfg.robot           # zones.* is config/zones.yaml (zones.noise.window_s=10)
+        if parts[0] == "zones":
+            parts = parts[1:]
+            if not parts:
+                raise ValueError(f"{item!r}: use zones.key=value")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"{item!r}: {part} is not a section")
+        node[parts[-1]] = yaml.safe_load(value)
+
+
 async def read_line(loop: asyncio.AbstractEventLoop, stdin: TextIO) -> str:
     """stdin.readline() without the loop's default executor: that one is joined when asyncio.run() shuts
     down, so a read blocked on the keyboard made Ctrl+C hang until Enter was pressed."""
@@ -277,7 +319,8 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                   log_sessions: bool = True, use_llm: bool = False, use_camera: bool = False,
                   speak: bool = False, use_faces: bool = False, preview: bool = False,
                   auto_scan: bool = False, settle_s: float = SETTLE_S, persist_storage: bool = True,
-                  local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None) -> int:
+                  local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None,
+                  base: Optional[str] = None, base_url: Optional[str] = None, base_speed: float = 1.0) -> int:
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
     for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan")):
         if wanted and not use_camera:
@@ -294,10 +337,26 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         speech = Speech.from_config(cfg)
     assistant = build_assistant(cfg) if use_llm else None
     speaker = cfg.robot.get("devices", {}).get("speaker") or "default"
-    counter = window = counter_task = watch_task = ticker = link_task = feed_task = warm_task = None
+    counter = window = counter_task = watch_task = ticker = link_task = feed_task = warm_task = fake_base = app = None
     try:
+        link = None
+        if base == "sim":
+            cfg.robot.setdefault("navigation", {})["backend"] = "sim"
+        elif base in ("turtlebot", "fake"):
+            cfg.robot.setdefault("navigation", {})["backend"] = "turtlebot"
+            try:
+                if base == "fake":
+                    from robot.sim.base import start_fake_base
+                    fake_base = start_fake_base(cfg, speed=1.0, time_scale=base_speed)
+                    link = fake_base.make_link(cfg)
+                else:
+                    from robot.app import build_link
+                    link = build_link(cfg, base_url=base_url)
+            except ValueError as exc:                        # LinkConfigError: no ROBOT_LINK_TOKEN
+                print(f"Cannot start the link to the base: {exc}", file=sys.stderr)
+                return 1
         app = build_app(cfg, drivers, speech=speech, log_sessions=log_sessions, assistant=assistant,
-                        persist_storage=persist_storage)
+                        persist_storage=persist_storage, link=link)
         sim = Sim(app, out)
         sim.guide = None                                     # the guided scenario test (robot/scenarios/live.py), if any
         sim.say("Robot simulator. Type help for commands, quit to exit.")
@@ -315,6 +374,10 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             sim.say(f"  {len(app.dialogue.storage)} book(s) are still in storage from last time "
                     "(`reset all` empties it)")
         ticker = asyncio.create_task(app.run_ticker())
+        if app.link is not None:
+            await app.start_link()
+            sim.say(f"  base: {app.link.settings.base_url}{' (fake_base.py, in this process)' if fake_base else ''}, "
+                    f"link {app.link.status}")
         if use_llm:                                         # one silent request now, and keep-alives while idle (services/warmup.py)
             warm_task = asyncio.create_task(Warmup.from_app(app).run())
         if speak and speech is not None:
@@ -399,6 +462,10 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         for task in (counter_task, watch_task, ticker, link_task, feed_task, warm_task, locals().get("guide_task")):
             if task is not None:
                 task.cancel()
+        if app is not None:
+            await app.stop_link()
+        if fake_base is not None:
+            fake_base.stop()
         if window is not None:
             window.stop()
         for camera in (drivers.camera, drivers.scanner_camera):

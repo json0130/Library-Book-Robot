@@ -45,7 +45,9 @@ state RETURNING {
     [*] --> PLAN
     PLAN --> NAVIGATING: planned [has_stops]
     PLAN --> HOMING: planned
-    NAVIGATING --> AT_SHELF: arrived
+    NAVIGATING --> AT_SHELF: arrived [arrival_current]
+    NAVIGATING --> NAVIGATING: nav_failed [more_stops] / skip_shelf
+    NAVIGATING --> HOMING: nav_failed / skip_shelf
     NAVIGATING --> ANNOUNCE: PersonNearbyBusy
     NAVIGATING --> PLAN: replan
     AT_SHELF --> NAVIGATING: unloaded [more_stops] / finish_unload
@@ -62,7 +64,8 @@ state RETURNING {
     RETURNING --> GREET: PersonEngaged / pause_returning
     RETURNING --> SCAN: BookPlaced / pause_returning_for_book
     ANNOUNCE --> RETURNING: announced (previous)
-    HOMING --> IDLE: home / finish_returning
+    HOMING --> IDLE: home [arrival_current] / finish_returning
+    HOMING --> IDLE: nav_failed / abandon_returning
     note right of ENGAGED
         in any ENGAGED state:
         PersonLeft -> FAREWELL
@@ -98,10 +101,10 @@ state RETURNING {
 | FAREWELL | ENGAGED |  | `timeouts.farewell_s`, plus `returning.auto_start_delay_s` when books are waiting | goodbye, then IDLE or RETURNING |
 | RETURNING |  |  |  | putting the stored books back (composite, starts in PLAN) |
 | PLAN | RETURNING |  |  | group the stored books by shelf |
-| NAVIGATING | RETURNING |  | `returning.sim_drive_s` → arrived | driving to the next shelf (simulated) |
+| NAVIGATING | RETURNING |  | `returning.sim_drive_s` → arrived, `returning.drive_timeout_s` → nav_failed | driving to the next shelf (a timer in the simulator, NavArrived from the base) |
 | AT_SHELF | RETURNING |  | `returning.sim_unload_s` → unloaded | unloading (simulated) |
 | ANNOUNCE | RETURNING |  | `returning.announce_s` → announced | excuse me: signal without starting a conversation |
-| HOMING | RETURNING |  | `returning.sim_drive_s` → home | driving home (simulated) |
+| HOMING | RETURNING |  | `returning.sim_drive_s` → home, `returning.drive_timeout_s` → nav_failed | driving home (a timer in the simulator, NavArrived from the base) |
 
 ## Transitions
 
@@ -164,12 +167,17 @@ state RETURNING {
 | RETURNING | BookPlaced |  | SCAN | pause_returning_for_book |  |
 | PLAN | planned | has_stops | NAVIGATING |  |  |
 | PLAN | planned |  | HOMING |  |  |
-| NAVIGATING | arrived |  | AT_SHELF |  |  |
+| NAVIGATING | arrived | arrival_current | AT_SHELF |  |  |
+| NAVIGATING | nav_failed | can_retry | (stays) | retry_goal | a failed drive is tried once more |
+| NAVIGATING | nav_failed | more_stops | NAVIGATING | skip_shelf | then the shelf is skipped (its books stay in storage) |
+| NAVIGATING | nav_failed |  | HOMING | skip_shelf |  |
 | NAVIGATING | PersonNearbyBusy |  | ANNOUNCE |  |  |
 | NAVIGATING | replan |  | PLAN |  |  |
 | AT_SHELF | unloaded | more_stops | NAVIGATING | finish_unload |  |
 | AT_SHELF | unloaded |  | HOMING | finish_unload |  |
 | AT_SHELF | PersonNearbyBusy |  | ANNOUNCE |  |  |
 | ANNOUNCE | announced |  | RETURNING (previous) |  |  |
-| HOMING | home |  | IDLE | finish_returning |  |
+| HOMING | home | arrival_current | IDLE | finish_returning |  |
+| HOMING | nav_failed | can_retry | (stays) | retry_goal |  |
+| HOMING | nav_failed |  | IDLE | abandon_returning | could not get home: stay where it is |
 | HOMING | replan |  | PLAN |  |  |

@@ -21,7 +21,16 @@ python -m robot scenarios replay return_book-quiet-003               # the same 
 python -m robot scenarios compare data/eval_runs/A data/eval_runs/B  # did a fix help?
 python -m robot scenarios live --scenario return_book --zone quiet   # a human tester on the real robot
 python -m robot scenarios run --variants scenarios/heldout_alex.yaml --llm real   # held-out phrasings (below)
+python -m robot scenarios run --scenario returning_interrupted --runs 4 --llm mock --base fake   # through the real link code
 ```
+
+- `--base fake` starts `tools/fake_base.py` (the stand-in for the Dell on the TurtleBot, [robot_link.md](robot_link.md)) in the
+  process and has the robot drive through the real link client, so the returning scenarios exercise the goals, the
+  cancel and resend when a person engages, and NavArrived instead of the drive timer. The fake drives as much faster as
+  `--speed`. The default, `--base sim`, is the timer-driven drive; a run's record and `meta.json` say which was used. The base's
+  microphones and the pose-based zone are switched off in these runs, so the scenario's zone stays the run's zone.
+  The link itself is tested by `tests/test_turtlebot_link.py`, `tests/test_returning_link.py`, `tests/test_noise_zone.py` and
+  `tests/test_robot_link_contract.py` (which can also be pointed at the real Dell: `--target URL`, `--drive`).
 
 - `--runs N` is per scenario, split evenly over the zones (10 runs = 5 quiet + 5 common).
 - `--llm mock` uses the repo's mock receiver (`python -m vendor.ai_server.llm receive --mock`, started on a free local

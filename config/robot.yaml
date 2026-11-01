@@ -117,6 +117,24 @@ returning:                # putting the stored books back
   sim_unload_s: 3         # simulated unload at a shelf
   announce_s: 3           # how long the "excuse me" signal lasts when someone is near but busy
   home: {x: 0.0, y: 0.0, yaw: 0.0}   # the robot's home spot on the map (TODO: set the real one)
+  drive_timeout_s: 600    # with a real base (navigation.backend: turtlebot): a drive not ended after this long counts as failed
+  nav_retries: 1          # ...a failed drive is tried again this many times, then the shelf is skipped (its books stay in storage)
+
+navigation:               # how the robot drives (robot/actuation/navigation.py)
+  backend: sim            # sim: the drive is a timer (returning.sim_drive_s), the ESP32 `navigate` is only logged.
+                          # turtlebot: the Dell on the TurtleBot, over the cable (docs/robot_link.md); needs ROBOT_LINK_TOKEN in the environment
+
+turtlebot:                # the link to the Dell on the TurtleBot (robot/drivers/turtlebot_link.py). The shared secret is the
+                          # environment variable ROBOT_LINK_TOKEN, never written here.
+  base_url: http://192.168.50.2:8010
+  timeout_s: 1.0          # each request
+  poll_hz: 2              # GET /api/state
+  heartbeat_hz: 1         # POST /api/heartbeat; the base stops by itself after 3 s without one
+  health_every_s: 5       # GET /api/health
+  lost_after_s: 3         # no reply for this long: the link is lost (LinkDown), the trip waits
+  retries: 2              # extra tries of a command (goal, cancel, speaking, max_speed); they are idempotent
+  max_goal_distance_m: 40 # a goal further than this from the base is never sent
+  floor: null             # the floor the base's map covers (a goal on another floor is never sent); null = any floor of the plan
 
 dialogue:
   greet_cooldown_s: 120   # say hello at most once per visit and once per this many seconds (a person leaving the camera's view and returning isn't greeted again)

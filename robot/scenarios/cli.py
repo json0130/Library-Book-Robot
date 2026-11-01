@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--variants", type=Path, default=None, metavar="FILE",
                      help="held-out evaluation: say the phrasings in this YAML file (scenario -> step -> list) instead of the "
                           "scenarios' own; only the scenarios filled in are run (see scenarios/heldout_template.yaml)")
+    run.add_argument("--base", choices=("sim", "fake"), default="sim",
+                     help="sim: the drive to a shelf is a timer (default). fake: tools/fake_base.py is started and the robot drives\n"
+                          "through the real link code (docs/robot_link.md), so the returning scenarios exercise it")
     run.add_argument("--out", type=Path, default=None, help="output directory (default data/eval_runs/<timestamp>)")
     rep = sub.add_parser("report", help="write summary.md and review.csv for a run directory")
     rep.add_argument("directory", type=Path)
@@ -139,12 +142,12 @@ def run_command(args, scenarios: dict, cfg) -> int:
     if args.variants is not None:
         print(f"HELD-OUT batch: phrasings from {args.variants.name}, not the tuned paraphrases of the scenarios")
     print(f"{len(plan)} run(s): {', '.join(names)} | zones {','.join(zones)} | llm {args.llm} | seed {args.seed} | "
-          f"speed x{args.speed:g}\nWriting to {out_dir}")
+          f"speed x{args.speed:g}" + (" | base FAKE (through the link)" if args.base == "fake" else "") + f"\nWriting to {out_dir}")
     with ExitStack() as stack:
         llm = llm_target(args.llm, cfg, stack)
         started = time.time()
         records = asyncio.run(runner.run_batch(plan, cfg, llm, args.speed, args.typos, out_dir,
-                                                 speech_probability=args.speech))
+                                                 speech_probability=args.speech, base=args.base))
     summary, review = report_module.write_report(out_dir)
     failed = [r for r in records if not r["passed"]]
     print(f"\n{len(records) - len(failed)}/{len(records)} runs passed in {time.time() - started:.0f} s.\n"
@@ -169,7 +172,8 @@ def replay_command(args, scenarios: dict, cfg) -> int:
     with ExitStack() as stack:
         llm = llm_target(mode, cfg, stack) if mode in ("real", "mock") else ("none", None, "none")
         new = asyncio.run(runner.play(scenario, old["zone"], old["seed"], args.run_id, cfg, llm, old["speed"],
-                                      old.get("typo_probability"), speech_probability=old.get("speech_probability", 0.0)))
+                                      old.get("typo_probability"), speech_probability=old.get("speech_probability", 0.0),
+                                      base=old.get("base", "sim")))
     out_dir = runner.new_run_dir()
     out_dir.mkdir(parents=True)
     import json

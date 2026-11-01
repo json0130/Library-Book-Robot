@@ -185,6 +185,13 @@ station:                     # where the robot waits for visitors: its "you are 
 ```
 
 - A section's `name` must match `section` in `shelves.csv` exactly (case aside) and be unique across floors.
+- A section may name its own zone: `{name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7, zone: quiet}`. Without it the robot uses the
+  zone most of that section's shelves have in `shelves.csv`. Only used when the robot drives with a real base and
+  `zone_from_pose: true` in `config/zones.yaml` (the zone follows the section the base stands in).
+- **With the real base, these numbers are the base's.** Poses are in the RTAB-Map `map` frame, which is the frame of these two
+  files, so a floor's `0..width` x `0..height` must contain the area the base maps. `python tools/teach_poses.py` records
+  shelves, section corners, landmarks and the station from the live pose (it backs the files up and keeps their comments);
+  see [robot_link.md](robot_link.md).
 - Give every floor a `lift` landmark: directions to another floor start with "Take the lift to Level N" and draw the
   path from the lift.
 - **Facilities.** Landmarks of kind `toilets`, `help_desk`, `exit` and `entrance` are what the robot tells visitors when they

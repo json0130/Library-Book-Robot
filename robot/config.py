@@ -51,6 +51,34 @@ RETURNING_DEFAULTS = {
     "sim_unload_s": 3,              # how long a simulated unload at a shelf takes
     "announce_s": 3,                # how long the "excuse me" signal lasts
     "home": {"x": 0.0, "y": 0.0, "yaw": 0.0},   # the map pose of the robot's home spot
+    "drive_timeout_s": 600,         # with a real base: a drive that has not ended after this long counts as failed
+    "nav_retries": 1,               # with a real base: a failed drive is tried again this many times, then the shelf is skipped
+}
+
+NAVIGATION_DEFAULTS = {
+    "backend": "sim",               # sim: the drive is a timer (returning.sim_drive_s); turtlebot: the Dell on the base (docs/robot_link.md)
+}
+
+TURTLEBOT_DEFAULTS = {              # the link to the base; the shared secret is the environment variable ROBOT_LINK_TOKEN, never this file
+    "base_url": "http://192.168.50.2:8010",
+    "timeout_s": 1.0,               # every request
+    "poll_hz": 2.0,                 # GET /api/state
+    "heartbeat_hz": 1.0,            # POST /api/heartbeat: the base stops by itself after 3 s without one
+    "health_every_s": 5.0,          # GET /api/health
+    "lost_after_s": 3.0,            # no reply for this long: the link is lost (LinkDown)
+    "retries": 2,                   # extra tries of an idempotent command (goal, cancel, speaking, max_speed)
+    "max_goal_distance_m": 40.0,    # a goal further than this from the base is never sent
+    "floor": None,                  # the floor the base's map covers; a goal on another floor is never sent (None: any floor of the plan)
+}
+
+NOISE_DEFAULTS = {                  # config/zones.yaml `noise:`; the instantaneous override below it is the sim's `noise <dB>`
+    "enabled": True,                # use the base's microphones for the zone
+    "window_s": 45,                 # rolling median over this many seconds
+    "min_samples": 6,               # readings needed before the median counts
+    "to_common_above_db": 55.0,     # hysteresis (calibrated dB): above this the room counts as common...
+    "to_quiet_below_db": 48.0,      # ...and below this as quiet again; in between the last answer stands
+    "uncalibrated": "ignore",       # readings with calibrated=false: ignore | raw (compare with raw_thresholds, in dBFS)
+    "raw_thresholds": {"to_common_above_db": -35.0, "to_quiet_below_db": -45.0},
 }
 
 STORAGE_DEFAULTS = {
@@ -151,6 +179,22 @@ class Config:
     @property
     def engagement(self) -> dict:
         return self.section("engagement", ENGAGEMENT_DEFAULTS)
+
+    @property
+    def navigation(self) -> dict:
+        return self.section("navigation", NAVIGATION_DEFAULTS)
+
+    @property
+    def turtlebot(self) -> dict:
+        return self.section("turtlebot", TURTLEBOT_DEFAULTS)
+
+    @property
+    def noise(self) -> dict:
+        """The base-microphone filter settings (config/zones.yaml `noise:`) with defaults filled in."""
+        merged = {k: (dict(v) if isinstance(v, dict) else v) for k, v in NOISE_DEFAULTS.items()}
+        for key, value in ((self.zones or {}).get("noise") or {}).items():
+            merged[key] = {**merged[key], **value} if isinstance(merged.get(key), dict) and isinstance(value, dict) else value
+        return merged
 
     @property
     def intents(self) -> dict:

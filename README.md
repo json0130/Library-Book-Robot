@@ -34,23 +34,24 @@ robot/             the robot program: python -m robot check | sim | run
   operator.py      operator controls (goto, zone, engage, busy, dropped, pick, book, say, reset): the sim's terminal and the /operator page share it
   display_link.py  collects button taps and /operator commands from the display server
   config.py        loads config/*.yaml
-  perception/      book_reader (the BookReader interface: camera scanner, RFID stub), book_scanner (barcode -> ISBN -> BookIdentified), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged; EngagementDetector -> PersonEngaged / PersonNearbyBusy / PersonLeft); noise level (stub)
-  core/            context, style, fsm (the generic state machine), dialogue (the table: IDLE / ENGAGED / RETURNING), screen (the screen composer: which view to show), storage (which book is in which slot), state_doc, expression blending, session log
+  perception/      book_reader (the BookReader interface: camera scanner, RFID stub), book_scanner (barcode -> ISBN -> BookIdentified), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged; EngagementDetector -> PersonEngaged / PersonNearbyBusy / PersonLeft); noise (the filter for the base's microphones: median, hysteresis)
+  core/            context, zones (pose + noise + visit -> quiet or common), style, fsm (the generic state machine), dialogue (the table: IDLE / ENGAGED / RETURNING), screen (the screen composer: which view to show), storage (which book is in which slot), state_doc, expression blending, session log
   services/        AI server wrappers: llm (client + sentence splitter), speech, vision;
                    isbn (validation), books (catalogue, Open Library fallback), book_graph (the book knowledge graph:
                    recommendations and shelf locations), places (what place a visitor means), floorplan, covers,
                    topics, call_numbers, text_similarity
   actuation/       voice, face display, lights, neck, storage ring, printer, navigation
-  drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), fake (logs only)
+  drivers/         audio (PulseAudio), camera (OpenCV), esp32 (not yet), turtlebot_link (the Dell on the TurtleBot over the cable), fake (logs only)
   scenarios/       the scenario test harness (python -m robot scenarios ...; scenarios/*.yaml are the scenarios)
-  sim/             keyboard simulator
+  sim/             keyboard simulator; base.py (tools/fake_base.py inside the simulator and the scenario harness)
 display/           face display: server.py (SSE, /screen, /input, /operator, /covers) + ui/index.html (face) + ui/views.js (content views), ui/operator.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
 tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes;
-                   book data tools: catalog_check, import_books, similarity_report, graph_view
+                   book data tools: catalog_check, import_books, similarity_report, graph_view;
+                   the base: fake_base (a stand-in for the Dell, API v1), teach_poses (record shelf, section, landmark and station poses from the live pose)
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
-docs/              architecture notes, state_machine.md (generated), testing.md (scenario tests), reference images
+docs/              architecture notes, robot_link.md (the Jetson-Dell contract and network setup), state_machine.md (generated), testing.md (scenario tests), reference images
 data/              catalog.csv, topics.yaml, shelves.csv, curated_links.csv, floorplan.yaml (SAMPLE data, see docs/catalog.md), test_barcodes/ (barcode PNGs, committed),
                    cache/, covers/, logs/, screens/, state/, graph.html and catalog_draft.csv (generated, gitignored)
 ```
@@ -126,6 +127,38 @@ against the real robot core in both zones, records every state, sentence, screen
 writes `data/eval_runs/<timestamp>/summary.md`, `review.csv` (rate runs 1-5 by hand) and one transcript per run. `replay`,
 `compare` and a guided `live` mode for a human tester are in the same command. How to write a scenario, run, replay, review
 and compare: [docs/testing.md](docs/testing.md). The harness only observes the robot; it never changes its behaviour.
+
+### The TurtleBot base (the Dell)
+
+The robot can drive with the Dell laptop on the TurtleBot 2 (`turtlebot/`: Kobuki, Astra, Hokuyo, RTAB-Map, `move_base`,
+`noise_logger`) instead of the simulated drive. The two machines talk JSON over HTTP on a direct Ethernet cable; the contract
+(`api_version` 1, the endpoints, the 3 s heartbeat rule, the network and chrony commands) is [docs/robot_link.md](docs/robot_link.md).
+This repository has the Jetson side; the Dell's server is built separately against that contract.
+
+```bash
+export ROBOT_LINK_TOKEN=some-shared-secret                      # the same on both machines; never in a config file
+python tools/fake_base.py --port 8010 --speed 1 &               # a stand-in for the Dell (keys: + - louder/quieter, d drop the link, f fail a goal)
+python -m robot sim --base turtlebot --base-url http://127.0.0.1:8010 --config-set returning.auto_start=true
+python -m robot sim --base fake                                 # or: the fake base started inside the simulator
+python -m robot scenarios run --scenario returning_interrupted --llm mock --base fake
+python -m pytest tests/test_robot_link_contract.py              # the contract; --target URL [--drive] holds the real Dell to it
+python tools/teach_poses.py --floor 1                           # drive the base to a shelf, `shelf 1-FIC-A`, `save`
+```
+
+`navigation.backend: sim` (the default) is the old timer drive; `turtlebot` (or `--base`) sends goals to the base. Then
+RETURNING waits for the base's NavArrived, a person engaging cancels the goal and the resume sends the same target with a new
+`goal_id`, a drive that fails is tried once more and then that shelf is skipped (its books stay in storage, flagged on the
+operator page), and a lost link or an unlocalised base pauses the trip ("Navigation unavailable" on the screen, nothing spoken
+in a quiet zone) until it can resend. A goal outside the floor plan, on another floor than `turtlebot.floor`, or further than
+`turtlebot.max_goal_distance_m` is never sent. The voice tells the base when it is speaking (so the microphone readings of its
+own voice are not taken for the room), and each style's speed limit is sent as `max_speed`.
+
+The base's microphones also decide the zone: the rolling median over `noise.window_s` of the readings that are not the robot's
+own, with hysteresis (common above 55 dB, quiet again below 48; `config/zones.yaml`), and only calibrated dB (the TurtleBot's
+`noise_logger` reports uncalibrated dBFS today, which is ignored unless `noise.uncalibrated: raw`). With `zone_from_pose: true`
+the zone also follows the floor-plan section the localised base stands in. Precedence: the visit (frozen while a visitor is
+helped), then the noise, then the map (the zone typed or set by the operator is the starting point). The operator page has a
+Base section: link status, pose, drive, noise, and what decided the zone.
 
 ### Understanding what the visitor says
 
@@ -300,6 +333,7 @@ python -m unittest discover -s tests -t .           # the test suite
 ## Next
 
 1. ESP32 firmware and `robot/drivers/esp32.py`, then `python -m robot run` on the hardware.
-2. Perception: noise level feeding `ContextChanged` (people counting is done: `robot/perception/people.py`, used by `sim --faces`); the pad's weight sensor publishing `BookPlaced` from the ESP32.
+2. Perception: the pad's weight sensor publishing `BookPlaced` from the ESP32 (people counting is done: `robot/perception/people.py`, used by `sim --faces`; the noise level comes from the base's microphones through the link).
+2b. The Dell's side of `docs/robot_link.md`, and survey the real shelves with `tools/teach_poses.py`.
 3. Replace the sample catalogue with the library's real one.
 4. Speak replies sentence by sentence to cut the TTS delay (about 5 s for a three-sentence reply today).

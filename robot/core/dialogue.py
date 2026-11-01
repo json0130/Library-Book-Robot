@@ -14,7 +14,9 @@ docs/state_machine.md for the diagram, generated from the table below).
       FAREWELL       goodbye (silent in a quiet zone: eyes and light only), then IDLE or on to RETURNING
     RETURNING   putting the stored books back on their shelves
       PLAN           group the stored books by shelf (book_graph.locate) into a queue
-      NAVIGATING     drive to the next shelf (simulated by a timer; NavigationRequested goes to the base)
+      NAVIGATING     drive to the next shelf (NavigationRequested goes to the base; with the sim backend a timer ends the
+                     drive, with the turtlebot backend NavArrived does, and a failed drive is tried once more, then the
+                     shelf is skipped and its books stay in storage)
       AT_SHELF       unload (simulated), free the slots, then the next shelf or HOMING
       ANNOUNCE       someone is near but busy: signal ("excuse me") without starting a conversation, then carry on
       HOMING         drive home, then IDLE
@@ -28,6 +30,9 @@ Waiting states (the ones that wait for the visitor or a sensor) all have a timeo
 for FAREWELL on PersonLeft. After a session ends with books in storage the robot waits returning.auto_start_delay_s
 (in FAREWELL, so a new person engaging cancels it) and then goes RETURNING. If a visitor engages during RETURNING the
 trip is paused (the base stops) and, when that session ends, resumed from the same shelf with the same time left.
+With the turtlebot backend the pause cancels the goal and the resume sends the same target again with a new goal_id; if
+the link to the base is lost (or the base is not localised) the trip waits, showing "Navigation unavailable", and
+carries on by sending the goal again when the base is back.
 
 The conversation itself is unchanged: the same words end it ("thanks", "that's everything"), the same questions
 go to the LLM grounded in the catalogue, "where is Dune" and "guide me" work, the hello is said once per person, and
@@ -50,7 +55,7 @@ from robot.config import (ENGAGEMENT_DEFAULTS, INTENT_DEFAULTS, RETURNING_DEFAUL
 from robot.core.fsm import Event, History, Machine, MachineSpec, Previous, StateDef, Timer, Transition
 from robot.core.storage import ShelfStop, Storage, StoredBook
 from robot.events import (ThinkingEnded, ThinkingStarted, BookDropped, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, ExpressionRequested,
-                          LocationResolved, NavigationRequested, PersonEngaged, PersonLeft, PersonNearbyBusy,
+                          LinkDown, LinkUp, LocationResolved, NavArrived, NavCancelled, NavFailed, NavigationRequested, PoseUpdated, PersonEngaged, PersonLeft, PersonNearbyBusy,
                           RecommendationsReady, ReplySentence, ReturningProgress, ScanFailed, StateEntered,
                           StateTransition, StoringBook, UserChoice, UserUtterance)
 from robot.core.expectations import expect_anything_else, expect_choice, expect_guide, expect_lend, match_answers
@@ -121,6 +126,8 @@ NAME_WORDS = ("your name", "who are you", "introduce yourself", "what are you", 
 REPAIR_STATES = ("OFFER", "AWAIT_BOOK", "ANYTHING_ELSE")
 HELLO = f"Hello! My name is {NAME}."
 LOOSE_MIN_SCORE = 0.03            # when nothing reaches books.similarity.min_score: the nearest books above this
+UNAVAILABLE_REASONS = ("not_localised", "ros_unavailable", "no_heartbeat", "link_down")     # the base cannot drive: wait, do not skip the shelf
+NAV_RESUME_AFTER_S = 2.0
 RETURNING_OPENING = "Hi! I'm returning some books, can I help you with anything?"
 FOLLOW_UP_HELP = "I can tell you what it's about, suggest similar books, or return it."
 NO_ANSWER = "Sorry, I'm not sure how to answer that. " + FOLLOW_UP_HELP
@@ -278,14 +285,16 @@ STATES = [
       doc="goodbye, then IDLE or RETURNING"),
     S("RETURNING", initial="PLAN", doc="putting the stored books back"),
     S("PLAN", parent="RETURNING", enter=("enter_plan",), transient=True, doc="group the stored books by shelf"),
-    S("NAVIGATING", parent="RETURNING", enter=("enter_navigating",), timers=(Timer("t_drive", "arrived"),),
-      doc="driving to the next shelf (simulated)"),
+    S("NAVIGATING", parent="RETURNING", enter=("enter_navigating",),
+      timers=(Timer("t_drive", "arrived"), Timer("t_drive_limit", "nav_failed")),
+      doc="driving to the next shelf (a timer in the simulator, NavArrived from the base)"),
     S("AT_SHELF", parent="RETURNING", enter=("enter_at_shelf",), timers=(Timer("t_unload", "unloaded"),),
       doc="unloading (simulated)"),
     S("ANNOUNCE", parent="RETURNING", enter=("enter_announce",), timers=(Timer("t_announce", "announced"),),
       transient=True, doc="excuse me: signal without starting a conversation"),
-    S("HOMING", parent="RETURNING", enter=("enter_homing",), timers=(Timer("t_drive", "home"),),
-      doc="driving home (simulated)"),
+    S("HOMING", parent="RETURNING", enter=("enter_homing",),
+      timers=(Timer("t_drive", "home"), Timer("t_drive_limit", "nav_failed")),
+      doc="driving home (a timer in the simulator, NavArrived from the base)"),
 ]
 
 T = Transition
@@ -360,14 +369,20 @@ TRANSITIONS = [
     T("RETURNING", "BookPlaced", "SCAN", action="pause_returning_for_book"),
     T("PLAN", "planned", "NAVIGATING", guard="has_stops"),
     T("PLAN", "planned", "HOMING"),
-    T("NAVIGATING", "arrived", "AT_SHELF"),
+    T("NAVIGATING", "arrived", "AT_SHELF", guard="arrival_current"),
+    T("NAVIGATING", "nav_failed", None, guard="can_retry", action="retry_goal", note="a failed drive is tried once more"),
+    T("NAVIGATING", "nav_failed", "NAVIGATING", guard="more_stops", action="skip_shelf",
+      note="then the shelf is skipped (its books stay in storage)"),
+    T("NAVIGATING", "nav_failed", "HOMING", action="skip_shelf"),
     T("NAVIGATING", "PersonNearbyBusy", "ANNOUNCE"),
     T("NAVIGATING", "replan", "PLAN"),
     T("AT_SHELF", "unloaded", "NAVIGATING", guard="more_stops", action="finish_unload"),
     T("AT_SHELF", "unloaded", "HOMING", action="finish_unload"),
     T("AT_SHELF", "PersonNearbyBusy", "ANNOUNCE"),
     T("ANNOUNCE", "announced", Previous("RETURNING")),
-    T("HOMING", "home", "IDLE", action="finish_returning"),
+    T("HOMING", "home", "IDLE", guard="arrival_current", action="finish_returning"),
+    T("HOMING", "nav_failed", None, guard="can_retry", action="retry_goal"),
+    T("HOMING", "nav_failed", "IDLE", action="abandon_returning", note="could not get home: stay where it is"),
     T("HOMING", "replan", "PLAN"),
 ]
 
@@ -382,8 +397,9 @@ EVENT_WHY = {"PersonLeft": "they walked away", "timeout": "nobody answered in ti
              "BookDropped": "the pad dropped the book into its slot", "BookIdentified": "the barcode was read",
              "ScanFailed": "no barcode could be read", "greeted": "the hello is done", "stored": "the book is in its slot",
              "answered": "the answer was given", "recommended": "the recommendation was given",
-             "planned": "the shelves are planned", "arrived": "the drive timer ended", "unloaded": "the unload timer ended",
+             "planned": "the shelves are planned", "arrived": "the drive ended (timer, or NavArrived from the base)", "unloaded": "the unload timer ended",
              "announced": "the announcement is over", "home": "the drive home ended", "full": "no free slot",
+             "nav_failed": "the base could not get there (or took too long)",
              "rejected": "not in the catalogue"}
 OPERATOR_FOR = {"PersonEngaged": ("engage", ""), "PersonNearbyBusy": ("busy", ""), "PersonLeft": ("leave", ""),
                 "BookPlaced": ("book", ""), "BookDropped": ("dropped", "")}
@@ -398,7 +414,8 @@ GUARD_WHY = {"return_with_book": "a book is on the pad", "choice_return": "no bo
              "intent_recommend": "they chose a recommendation", "first_failure": "the first failed read: try again",
              "has_book": "a book is on the pad", "resume_paused": "a trip was paused: carry on at the same shelf",
              "auto_return": "books are in storage: start putting them back", "has_stops": "there are shelves to visit",
-             "more_stops": "more shelves to visit", "book_statement": "not a question: repeat the choices"}
+             "more_stops": "more shelves to visit", "arrival_current": "it is the goal that was sent (a timer always counts)",
+             "can_retry": "the drive may be tried again", "book_statement": "not a question: repeat the choices"}
 
 SCREENS = {                          # state -> (layout, title): placeholder layouts, to be designed
     "IDLE": ("full_face", ""), "GREET": ("full_face", "Hello"), "OFFER": ("split", "How can I help?"),
@@ -414,6 +431,7 @@ TIMER_SETTINGS = {                   # timer method -> (settings section, key)
     "t_offer": ("timeouts", "offer_s"), "t_await_book": ("timeouts", "await_book_s"),
     "t_scan": ("timeouts", "scan_s"), "t_store": ("timeouts", "store_s"), "t_answer": ("timeouts", "answer_s"),
     "t_anything_else": ("timeouts", "anything_else_s"), "t_drive": ("returning", "sim_drive_s"),
+    "t_drive_limit": ("returning", "drive_timeout_s"),
     "t_unload": ("returning", "sim_unload_s"), "t_announce": ("returning", "announce_s"),
     "t_sim_drop": ("storage", "sim_drop_s"),
 }
@@ -512,6 +530,14 @@ class Dialogue:
         self.current_shelf: Optional[str] = None            # the shelf it is heading for or at
         self.returning_paused = False                       # a trip was interrupted and is waiting to resume
         self.interrupted_returning = False                  # the person who engaged interrupted a trip
+        self.nav_goal_id: Optional[str] = None              # the goal being driven (turtlebot backend): NavArrived / NavFailed must carry it
+        self.nav_blocked: Optional[str] = None              # why the trip waits: the link is down, the base is not localised...
+        self.nav_blocked_at = 0.0
+        self.nav_attempts = 0                               # tries made at the current target
+        self.homing = False                                 # the drive in progress (or interrupted by "excuse me") is the one home
+        self.pending_nav: Optional[tuple] = None            # (event name, payload): the base finished while "excuse me" was showing
+        self.skipped: set = set()                           # shelves this trip could not reach (their books stay in storage)
+        self.skipped_log: list = []                         # ...and why, newest last, for the operator page
         self.lent_slot: Optional[int] = None                # the slot lit for a visitor who took their book out
         self.lent_book = None                               # ...and which StoredBook it was: it is NOT in storage while they hold it
         self.store_slot: Optional[int] = None               # the slot reserved for the book being stored
@@ -541,6 +567,20 @@ class Dialogue:
                 return float(value) if value else None
             return seconds
         raise AttributeError(name)
+
+    def real_base(self) -> bool:
+        """The drive is done by a base that reports back (NavArrived / NavFailed), not by a timer."""
+        return bool(getattr(self.out.nav, "async_arrival", False))
+
+    def t_drive(self, event):
+        """The simulated drive: a timer. With a real base the drive ends when the base says so."""
+        value = self.settings.returning.get("sim_drive_s")
+        return None if self.real_base() or not value else float(value)
+
+    def t_drive_limit(self, event):
+        """With a real base: a drive that has not ended after returning.drive_timeout_s has failed."""
+        value = self.settings.returning.get("drive_timeout_s")
+        return float(value) if self.real_base() and value else None
 
     def t_farewell(self, event) -> float:
         """The goodbye lasts farewell_s; when books are waiting to go back, it also holds the auto-start delay, and
@@ -579,6 +619,7 @@ class Dialogue:
                 Event("PersonLeft", source="sensor")):
             self.leave_pending = False                     # quiet for leave_grace_s and still no face: they did go
             await self.fsm.dispatch("PersonLeft", None, "sensor")
+        await self.maybe_resume_navigation()
         return await self.fsm.tick()
 
     def active(self) -> None:
@@ -594,6 +635,12 @@ class Dialogue:
         bus.subscribe(BookDropped, lambda e: self._feed("BookDropped", e, e.source))
         bus.subscribe(UserChoice, self.on_choice)
         bus.subscribe(UserUtterance, self.on_utterance)
+        bus.subscribe(NavArrived, self.on_nav_arrived)
+        bus.subscribe(NavFailed, self.on_nav_failed)
+        bus.subscribe(NavCancelled, self.on_nav_cancelled)
+        bus.subscribe(LinkDown, self.on_link_down)
+        bus.subscribe(LinkUp, self.on_link_up)
+        bus.subscribe(PoseUpdated, self.on_pose)
 
     async def _feed(self, name: str, payload, source: str) -> None:
         await self.start()
@@ -1049,6 +1096,13 @@ class Dialogue:
     def more_stops(self, event) -> bool:
         return len(self.stops) > 1
 
+    def arrival_current(self, event) -> bool:
+        """A timer always ends a simulated drive; the base's NavArrived must be for the goal that was sent."""
+        return event.source == "timeout" or getattr(event.payload, "goal_id", None) == self.nav_goal_id
+
+    def can_retry(self, event) -> bool:
+        return self.nav_attempts < int(self.settings.returning.get("nav_retries", 1))
+
     def resume_paused(self, event) -> bool:
         return self.returning_paused and bool(self.storage.stops())
 
@@ -1153,24 +1207,34 @@ class Dialogue:
 
     # ---- transition actions: returning ----
     async def pause_returning(self, event) -> None:
-        self.out.nav.stop()
+        self.stop_driving()
         self.returning_paused = True
         self.interrupted_returning = True
         self.begin_session(event)
         log.info("[returning] paused at %s", self.current_shelf)
 
     async def pause_returning_for_book(self, event) -> None:
-        self.out.nav.stop()
+        self.stop_driving()
         self.returning_paused = True
         self.begin_session_with_book(event)
 
+    def stop_driving(self) -> None:
+        """Stop the base (a real one: cancel the goal) and forget the goal and anything that was waiting for it."""
+        self.out.nav.stop()
+        self.nav_goal_id, self.nav_blocked, self.pending_nav = None, None, None
+
+    def to_visit(self) -> list:
+        """The shelves with books waiting, the current one first, without those this trip could not reach."""
+        return [s for s in self.storage.stops(first=self.current_shelf) if s.shelf not in self.skipped]
+
     def resume_returning(self, event) -> None:
-        self.stops = self.storage.stops(first=self.current_shelf)
+        self.stops = self.to_visit()
         log.info("[returning] resuming at shelf %s (%d stop(s) left)", self.current_shelf, len(self.stops))
 
     def start_returning(self, event) -> None:
         self.returning_paused = False
         self.current_shelf = None
+        self.skipped = set()
         self.fsm.forget("RETURNING")
 
     async def finish_unload(self, event) -> None:
@@ -1186,8 +1250,38 @@ class Dialogue:
         self.returning_paused = False
         self.current_shelf = None
         self.stops = []
+        self.nav_goal_id, self.nav_blocked = None, None
         self.fsm.forget("RETURNING")
         log.info("[returning] all returned and home")
+
+    def abandon_returning(self, event) -> None:
+        """The base could not get home: stay where it is. The books still in storage are tried again next time."""
+        log.warning("[returning] could not get home (%s): staying here", getattr(event.payload, "reason", "") or "no reason")
+        self.finish_returning(event)
+
+    async def retry_goal(self, event) -> None:
+        """The drive failed: send the same target again, once (returning.nav_retries)."""
+        self.nav_attempts += 1
+        log.warning("[returning] the drive to %s failed (%s): trying again (%d of %d)", self.current_shelf or "home",
+                    getattr(event.payload, "reason", "") or "timed out", self.nav_attempts,
+                    int(self.settings.returning.get("nav_retries", 1)))
+        self.out.nav.stop()
+        await self.fsm.rearm(self.leaf, "nav_failed")
+        await self.send_current_goal()
+
+    async def skip_shelf(self, event) -> None:
+        """The drive failed again: give up on this shelf. The books stay in storage, the trip goes on, and the operator
+        page flags it."""
+        self.out.nav.stop()
+        reason = getattr(event.payload, "reason", "") or "timed out"
+        stop = self.stops.pop(0) if self.stops else None
+        if stop is not None:
+            self.skipped.add(stop.shelf)
+            self.skipped_log = (self.skipped_log + [{"shelf": stop.shelf, "section": stop.section, "floor": stop.floor,
+                                                      "books": len(stop.slots), "reason": reason,
+                                                      "t": round(time.time(), 1)}])[-10:]
+            log.warning("[returning] SKIPPED shelf %s (%d book(s) stay in storage): %s", stop.shelf, len(stop.slots), reason)
+        self.current_shelf, self.nav_goal_id = None, None
 
     # ---- entry and exit actions ----
     def show(self, text: str) -> None:
@@ -1384,16 +1478,39 @@ class Dialogue:
 
     # ---- returning ----
     def enter_plan(self, event) -> None:
-        self.stops = self.storage.stops(first=self.current_shelf)
+        self.stops = self.to_visit()
         log.info("[returning] %d stop(s) planned: %s", len(self.stops),
                  ", ".join(f"{s.shelf} ({len(s.slots)})" for s in self.stops) or "none")
         self.fsm.post("planned")
 
     async def _navigate(self, title: str, x: float, y: float, yaw: float, stop: Optional[ShelfStop] = None) -> None:
+        """Ask the base to drive there (NavigationRequested), then note the goal's id. A real base that cannot be used
+        now (link down, not localised) is waited for instead: the trip shows "Navigation unavailable" and goes on later."""
+        if self.real_base() and not self.out.nav.available():
+            link = getattr(self.out.nav, "link", None)
+            await self.block_navigation("not_localised" if link is not None and link.status != "lost" else "link_down")
+            return
         if self.publish is not None:
             await self.publish(NavigationRequested("", title, x, y, yaw, shelf=stop.shelf if stop else None,
                                                    section=stop.section if stop else None,
                                                    floor=stop.floor if stop else None, zone=stop.zone if stop else None))
+        self.nav_goal_id = getattr(self.out.nav, "current_goal", None)
+
+    async def send_current_goal(self) -> None:
+        """(Re)send the target of the current drive: the first shelf to visit, or home."""
+        if self.leaf == "HOMING" or (self.leaf == "ANNOUNCE" and self.homing):
+            home = self.home_pose()
+            await self._navigate("home", home["x"], home["y"], home["yaw"])
+        elif self.stops:
+            stop = self.stops[0]
+            await self._navigate(f"shelf {stop.shelf}", stop.x, stop.y, stop.yaw, stop)
+
+    def home_pose(self) -> dict:
+        home = self.settings.returning.get("home") or {}
+        station = self.plan.station if self.plan is not None else None
+        if station is not None:                            # the floor plan's station is home
+            return {"x": station.x, "y": station.y, "yaw": station.yaw}
+        return {"x": float(home.get("x", 0.0)), "y": float(home.get("y", 0.0)), "yaw": float(home.get("yaw", 0.0))}
 
     async def enter_navigating(self, event) -> None:
         if not self.stops:
@@ -1401,11 +1518,24 @@ class Dialogue:
             return
         stop = self.stops[0]
         self.current_shelf = stop.shelf
+        self.homing = False
         self.show(f"Returning books to the {stop.section or 'library'} section.")
         await self.progress("driving", stop)
         if event.name == "announced":                    # carrying on after "excuse me": the base is still driving
+            await self.deliver_pending_nav()
             return
-        await self._navigate(f"shelf {stop.shelf}", stop.x, stop.y, stop.yaw, stop)
+        self.nav_attempts = 0
+        await self.send_current_goal()
+
+    async def deliver_pending_nav(self) -> None:
+        """What the base reported while "excuse me" was showing is handled now."""
+        pending, self.pending_nav = self.pending_nav, None
+        if pending is None:
+            return
+        if pending[0] == "resend":                         # the base came back while "excuse me" was showing
+            await self.send_current_goal()
+        else:
+            self.fsm.post(pending[0], pending[1], "sensor")
 
     async def enter_at_shelf(self, event) -> None:
         stop = self.stops[0] if self.stops else None
@@ -1432,13 +1562,90 @@ class Dialogue:
         if self.stops:                                    # books arrived while it was paused
             self.fsm.post("replan")
             return
-        home = self.settings.returning.get("home") or {}
-        station = self.plan.station if self.plan is not None else None
-        if station is not None:                            # the floor plan's station is home
-            home = {"x": station.x, "y": station.y, "yaw": station.yaw}
         self.show("Heading home.")
+        self.homing = True
         await self.progress("homing", None)
-        await self._navigate("home", float(home.get("x", 0.0)), float(home.get("y", 0.0)), float(home.get("yaw", 0.0)))
+        if event.name == "announced" and self.real_base():     # carrying on after "excuse me": the base is still driving
+            await self.deliver_pending_nav()
+            return
+        self.nav_attempts = 0
+        await self.send_current_goal()
+
+    # ---- what the base reports (turtlebot backend; docs/robot_link.md) ----
+    def goal_is_current(self, goal_id: str) -> bool:
+        return self.nav_goal_id is not None and goal_id == self.nav_goal_id
+
+    async def on_nav_arrived(self, event: NavArrived) -> None:
+        if not self.goal_is_current(event.goal_id):
+            return
+        await self.base_finished("home" if self.homing else "arrived", event)
+
+    async def on_nav_failed(self, event: NavFailed) -> None:
+        if not self.goal_is_current(event.goal_id):
+            return
+        if event.reason in UNAVAILABLE_REASONS:            # nothing wrong with the shelf: the base cannot drive just now
+            if self.fsm.is_in("RETURNING"):
+                await self.block_navigation(event.reason)
+            return
+        await self.base_finished("nav_failed", event)
+
+    async def on_nav_cancelled(self, event: NavCancelled) -> None:
+        """The base stopped a goal we did not cancel (its watchdog, a person at its own screen, another goal)."""
+        if not self.goal_is_current(event.goal_id):
+            return
+        if event.reason in ("heartbeat_timeout", "superseded"):
+            if self.fsm.is_in("RETURNING"):
+                await self.block_navigation("link_down")
+            return
+        await self.base_finished("nav_failed", NavFailed(event.goal_id, event.reason or "cancelled"))
+
+    async def base_finished(self, name: str, event) -> None:
+        if self.leaf in ("NAVIGATING", "HOMING"):
+            await self.fsm.dispatch(name, event, "sensor")
+        elif self.leaf == "ANNOUNCE":
+            self.pending_nav = (name, event)
+
+    async def on_link_down(self, event: LinkDown) -> None:
+        if self.real_base() and self.leaf in ("NAVIGATING", "HOMING", "ANNOUNCE") and self.nav_goal_id is not None:
+            await self.block_navigation("link_down")
+
+    async def on_link_up(self, event: LinkUp) -> None:
+        await self.maybe_resume_navigation(force=True)
+
+    async def on_pose(self, event: PoseUpdated) -> None:
+        if self.nav_blocked:
+            await self.maybe_resume_navigation()
+
+    async def block_navigation(self, reason: str) -> None:
+        """The trip waits for the base. The goal is forgotten (the base stops by itself); it is sent again when the base is back."""
+        if self.leaf == "ANNOUNCE":
+            self.pending_nav = None
+        self.nav_goal_id, self.nav_blocked, self.nav_blocked_at = None, reason, self.clock()
+        log.warning("[returning] navigation unavailable (%s): waiting for the base", reason)
+        stop = self.stops[0] if self.stops and not self.homing else None
+        await self.progress("unavailable", stop)
+        if self.style_speaks():                            # a quiet zone says nothing: the screen shows it
+            await self.say("Sorry, I can't drive at the moment. I'll carry on as soon as I can.", "sad")
+
+    async def maybe_resume_navigation(self, force: bool = False) -> None:
+        """Send the goal again once the base can drive (not more often than every 2 s: a refusal is not retried in a loop)."""
+        if not self.nav_blocked or self.leaf not in ("NAVIGATING", "HOMING", "ANNOUNCE"):
+            return
+        if not self.out.nav.available() or (not force and self.clock() - self.nav_blocked_at < NAV_RESUME_AFTER_S):
+            return
+        log.info("[returning] the base is back (was: %s): sending the goal again", self.nav_blocked)
+        self.nav_blocked = None
+        if self.leaf == "ANNOUNCE":                        # the goal is sent when the announcement is over
+            self.pending_nav = ("resend", None)
+            return
+        stop = self.stops[0] if self.stops and not self.homing else None
+        await self.progress("homing" if self.homing else "driving", stop)
+        await self.send_current_goal()
+
+    def returning_info(self) -> dict:
+        """For the operator page: the goal being driven, why the trip waits, and the shelves it had to skip."""
+        return {"goal_id": self.nav_goal_id, "blocked": self.nav_blocked, "attempts": self.nav_attempts,
+                "skipped": list(self.skipped_log)}
 
     # ---- saying things ----
     async def say(self, text: str, tag: Optional[str] = None) -> None:
@@ -2181,6 +2388,8 @@ class Dialogue:
         self.session = Session()
         self.guide_target, self.awaiting_guide = None, False
         self.stops, self.current_shelf = [], None
+        self.stop_driving()
+        self.skipped, self.skipped_log = set(), []
         self.returning_paused = self.interrupted_returning = False
         self.present = self.leave_pending = False
         self.last_activity = None
