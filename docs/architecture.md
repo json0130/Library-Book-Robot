@@ -77,7 +77,7 @@ RETURNING: PLAN → NAVIGATING → AT_SHELF → (next shelf | HOMING) → IDLE; 
 
 ```
  Jetson                                            Dell (ROS Noetic)
- dialogue ─NavigationRequested─> App ─> TurtleBotNavigation ─> TurtleBotLink ══ HTTP/JSON, Wi-Fi (172.24.x) or a direct cable → :8010 ══> API server ─> move_base
+ dialogue ─NavigationRequested─> App ─> TurtleBotNavigation ─> TurtleBotLink ══ HTTP/JSON, through an ssh tunnel (127.0.0.1:8010; later a direct link) → :8010 ══> API server ─> move_base
     ^                                                              │ heartbeat 1 Hz (thread)                             noise_logger
     │ NavArrived / NavFailed / NavCancelled / LinkUp / LinkDown     │ state poll 2 Hz (thread)  <── pose, nav, noise ──   RTAB-Map pose
     └───────────── bus <───────── PoseUpdated / NavProgress / NoiseReading ─┘ commands (thread): goal, cancel, speaking, max_speed

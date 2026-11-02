@@ -131,7 +131,9 @@ class HeartbeatAndStatusTest(unittest.TestCase):
         down = [e for e in link.events if isinstance(e, LinkDown)]
         self.assertEqual(len(down), 1)
         self.assertIn("base unreachable at http://base", down[0].reason)
-        self.assertIn("check the Dell's IP", down[0].reason)
+        self.assertIn("ssh tunnel", down[0].reason)
+        self.assertIn("scripts/robot_link_tunnel.sh", down[0].reason)
+        self.assertIn("the Dell's IP", down[0].reason)
         self.assertIn("robot_link_api", down[0].reason)
 
     def test_link_down_for_another_reason_has_no_ip_advice(self):

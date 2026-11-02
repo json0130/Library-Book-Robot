@@ -122,13 +122,14 @@ returning:                # putting the stored books back
 
 navigation:               # how the robot drives (robot/actuation/navigation.py)
   backend: sim            # sim: the drive is a timer (returning.sim_drive_s), the ESP32 `navigate` is only logged.
-                          # turtlebot: the Dell on the TurtleBot, over the cable (docs/robot_link.md); needs ROBOT_LINK_TOKEN in the environment
+                          # turtlebot: the Dell on the TurtleBot, over the ssh tunnel or a direct link (docs/robot_link.md); needs ROBOT_LINK_TOKEN in the environment
 
 turtlebot:                # the link to the Dell on the TurtleBot (robot/drivers/turtlebot_link.py). The shared secret is the
                           # environment variable ROBOT_LINK_TOKEN, never written here.
-  base_url: http://172.24.2.122:8010   # the Dell on the Wi-Fi (a DHCP address: if it changed, robot_link_api prints the new one when it
-                                       # starts - `python3 nodes/robot_link_api.py --print-address` on the Dell). With a direct cable
-                                       # for a demo use http://192.168.50.2:8010 (docs/robot_link.md).
+  base_url: http://127.0.0.1:8010      # through the ssh tunnel (scripts/robot_link_tunnel.sh), which ends at the Dell's robot_link_api
+                                       # (started there with --local). The Dell's firewall blocks 8010 from the Wi-Fi, so the tunnel is the
+                                       # only way in. Later, with a travel router and a direct link: http://<the Dell's address>:8010
+                                       # (docs/robot_link.md, section 5).
   timeout_s: 1.0          # each request
   poll_hz: 2              # GET /api/state
   heartbeat_hz: 1         # POST /api/heartbeat; the base stops by itself after 3 s without one

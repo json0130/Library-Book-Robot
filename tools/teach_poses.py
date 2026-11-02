@@ -1,7 +1,7 @@
 """Teach the robot where things are: drive the TurtleBot there (keyboard teleop on the Dell, or push it) and record its pose.
 
     python tools/teach_poses.py                          # the Dell at turtlebot.base_url, token from $ROBOT_LINK_TOKEN
-    python tools/teach_poses.py --floor 2 --base-url http://172.24.2.122:8010
+    python tools/teach_poses.py --floor 2 --base-url http://127.0.0.1:8010
 
 It shows the live pose (RTAB-Map `map` frame, metres and radians: the same numbers the robot drives to) and takes commands:
 

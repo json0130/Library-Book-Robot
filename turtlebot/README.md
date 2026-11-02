@@ -644,16 +644,19 @@ program or pulling the network). A goal clicked on the web page wins over the Je
    ```
    On the Jetson the same value goes in the environment of the robot (`export ROBOT_LINK_TOKEN=...`). The API refuses to start without it.
 2. Microphones calibrated (until then the Jetson ignores the noise): start the stack, then `python3 calibrate_noise.py` (see below).
-3. Tell the Jetson the Dell's address: `turtlebot.base_url` in the Jetson's `config/robot.yaml`. The address is looked up from the Wi-Fi interface
-   (`wlp2s0`) each time the API starts and printed in its log; `python3 nodes/robot_link_api.py --print-address` shows it without starting
-   anything. It is a DHCP address, so it may change after a reboot.
+3. How the Jetson reaches the API. This laptop's firewall (`ufw`) blocks port 8010 from the Wi-Fi, so for now the API listens on `127.0.0.1`
+   only (`./run_robot_link.sh --local`, below) and the Jetson connects through an **ssh tunnel**: on the Jetson run `scripts/robot_link_tunnel.sh` and set
+   `turtlebot.base_url: http://127.0.0.1:8010` (already the default there). The Dell's Wi-Fi address does not matter. With a travel router or a cable
+   later: start without `--local`, allow the Jetson in the firewall and use the Dell's address on that link (`python3 nodes/robot_link_api.py --print-address`
+   shows what it would bind to). `docs/robot_link.md`, section 5, has both.
 
 **Run it** (from this folder, with nothing else running):
 
 ```bash
 ./run_robot_link.sh --check       # only looks: is another ROS stack or run script already running? Starts nothing.
 ./run_robot_link.sh --dry-run     # prints what it would start
-./run_robot_link.sh               # starts the base, camera, LiDAR, RTAB-Map, move_base, noise logger, web page and the API
+./run_robot_link.sh --local       # starts the base, camera, LiDAR, RTAB-Map, move_base, noise logger, web page and the API on 127.0.0.1 (for the tunnel)
+./run_robot_link.sh               # the same, with the API on the Wi-Fi address (needs a firewall rule for port 8010)
 ```
 
 It starts the same things as `run_vslam_noise_nav.sh` plus the API, but:

@@ -117,6 +117,23 @@ class ScriptTest(unittest.TestCase):
         finally:
             shutil.rmtree(home)
 
+    def test_local_option_binds_the_api_to_loopback_only(self):
+        home = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(home, "vslam_map.db"), "w") as f:
+                f.write("not a real map")
+            env = {"HOME": home, "ROBOT_LINK_TOKEN": "dry-run-token-1234"}
+            local = run(SCRIPT, "--dry-run", "--local", env=env)
+            plain = run(SCRIPT, "--dry-run", env=env)
+            self.assertEqual(local.returncode, 0, local.stdout + local.stderr)
+            api_local = [l for l in local.stdout.splitlines() if "would start robot_link_api:" in l][0]
+            api_plain = [l for l in plain.stdout.splitlines() if "would start robot_link_api:" in l][0]
+            self.assertIn("_host:=127.0.0.1", api_local)
+            self.assertNotIn("_host", api_plain)
+            self.assertIn("robot_link_tunnel.sh", local.stdout)
+        finally:
+            shutil.rmtree(home)
+
     def test_the_script_has_no_sudo_in_it(self):
         with open(SCRIPT) as f:
             code = [line for line in f if not line.lstrip().startswith("#")]

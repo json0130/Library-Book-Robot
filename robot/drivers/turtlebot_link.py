@@ -257,8 +257,8 @@ class TurtleBotLink:
         if went_down:
             reason = self.incompatible or f"no reply for {self.settings.lost_after_s:g} s"
             if self.unreachable and not self.incompatible:
-                reason += (f" - base unreachable at {self.settings.base_url}: check the Dell's IP (its Wi-Fi address can change; "
-                           "see turtlebot.base_url) and that robot_link_api is running there")
+                reason += (f" - base unreachable at {self.settings.base_url}: check that the ssh tunnel is running "
+                           "(scripts/robot_link_tunnel.sh) or the Dell's IP (turtlebot.base_url), and that robot_link_api is running there")
             log.warning("[link] LOST (%s)", reason)
             self._emit(LinkDown(reason))
         elif came_up:

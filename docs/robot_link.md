@@ -8,19 +8,21 @@ the TurtleBot 2 and runs ROS Noetic: the Kobuki base, the Astra camera, the Hoku
 whether a server keeps the contract.
 
 ```
- Jetson (brain)                                                                     Dell (on the TurtleBot, ROS Noetic)
- 172.24.35.96  ── robot/drivers/turtlebot_link.py ── HTTP, JSON over Wi-Fi ───────  172.24.2.122:8010  (this API: turtlebot/nodes/robot_link_api.py)
- (both are DHCP addresses on the university Wi-Fi and can change;                   localhost:8000      (noise_nav_web.py, unchanged, reached with ssh -L)
-  a direct Ethernet cable, section 5.2, is better for demos)
+ Jetson (brain)                                                                       Dell (on the TurtleBot, ROS Noetic)
+ 127.0.0.1:8010 ── robot/drivers/turtlebot_link.py ── HTTP, JSON ──┐
+                                                    ssh tunnel (scripts/robot_link_tunnel.sh, inside the Dell's port 22)
+                                                                   └──────────────────  127.0.0.1:8010  (this API: turtlebot/nodes/robot_link_api.py --local)
+ (the Dell's firewall blocks 8010 from the Wi-Fi; later a travel router            localhost:8000   (noise_nav_web.py, unchanged, reached with ssh -L)
+  and a direct link replaces the tunnel, section 5.2)
 ```
 
 ## 1. Rules for everything
 
 | | |
 |---|---|
-| Transport | HTTP/1.1. **Today both computers are on the university Wi-Fi** (`172.24.0.0/18`): Jetson `172.24.35.96`, Dell `172.24.2.122`. Those are DHCP addresses and can change, so no address is written in any code: on the Jetson it is `turtlebot.base_url` in `config/robot.yaml`; on the Dell the API binds to the address of its Wi-Fi interface (`_iface`, default `wlp2s0`), looked up each time it starts (or an explicit `_host`). The API is on port **8010** (the click-to-go page of `noise_nav_web.py` stays on 8000, on the Dell's localhost). For demos use a direct Ethernet cable (section 5.2): no one else is on it. |
+| Transport | HTTP/1.1. **Today the API listens on the Dell's `127.0.0.1:8010` only and the Jetson reaches it through an ssh tunnel** (`scripts/robot_link_tunnel.sh`; section 5.1), because the Dell's firewall blocks port 8010 from the university Wi-Fi (`172.24.0.0/18`, DHCP addresses that change). So on the Jetson `turtlebot.base_url` is `http://127.0.0.1:8010`, and no Dell address is written in any code or config. With a travel router and a direct link (section 5.2) it becomes the Dell's address on that link: the API binds to the address of an interface (`_iface`, default `wlp2s0`), looked up each time it starts, or an explicit `_host`. The API is on port **8010** (the click-to-go page of `noise_nav_web.py` stays on 8000, on the Dell's localhost). |
 | Format | JSON only (`Content-Type: application/json`), UTF-8. A request body is one JSON object, at most 16 KB. |
-| Auth | Every request carries the header `X-Robot-Token: <secret>`. The secret is the environment variable `ROBOT_LINK_TOKEN` on both machines; it is never written to a config file or the repository. A missing or wrong token is `401`, and the Dell refuses to start without one. **Why this matters on a shared network:** anyone on the Wi-Fi can open a connection to port 8010, and `POST /api/goal` makes a robot with wheels drive. The token is the only thing that stops them, so use a long random one (`openssl rand -hex 16`) and change it if it ever leaks. It is sent in clear text over plain HTTP, so on a shared network someone capturing packets could read it: another reason to use the direct cable for demos. |
+| Auth | Every request carries the header `X-Robot-Token: <secret>`. The secret is the environment variable `ROBOT_LINK_TOKEN` on both machines; it is never written to a config file or the repository. A missing or wrong token is `401`, and the Dell refuses to start without one. **Why this matters on a shared network:** anyone on the network the API listens on can open a connection to port 8010, and `POST /api/goal` makes a robot with wheels drive. The token is the only thing that stops them, so use a long random one (`openssl rand -hex 16`) and change it if it ever leaks. It is sent in clear text over plain HTTP, so on a shared network someone capturing packets could read it. Through the ssh tunnel it travels inside ssh, so it is encrypted, and with the API bound to `127.0.0.1` only the tunnel (or someone logged in to the Dell) can connect at all. |
 | Frame and units | Every pose is in the RTAB-Map **`map`** frame: metres and radians (yaw `0` along +x, counter-clockwise positive, `-π..π`). The same numbers are in `data/shelves.csv` (`map_x, map_y, map_yaw`) and `data/floorplan.yaml`; `tools/teach_poses.py` records them from the live pose. |
 | Time | UNIX seconds as a float (`time.time()`). The two clocks only need to agree within about a second: on the Wi-Fi both already follow internet time (`systemd-timesyncd`). On the direct cable, where there is no internet, chrony with the Jetson as the source does it (section 5.2). |
 | Timeouts | The Jetson waits **1 s** for each request. The Dell must answer every endpoint well inside that, and never block on ROS: answer from the latest values it holds. |
@@ -133,7 +135,7 @@ Request: `{"m_s": 0.3}` → `{"ok": true, "applied": 0.25}`. The Jetson sends th
 - **Link status**: *connected* (the last request worked), *degraded* (some requests failed in the last 3 s), *lost* (3 s without any reply). Entering *lost* publishes `LinkDown`; the first reply after that publishes `LinkUp`.
 - **A goal** gets a new `goal_id` each time it is sent. The outcome is read from `nav.status` of `/api/state` for that id and published once: `NavArrived`, `NavFailed` (with the `reason`) or `NavCancelled`. While `active`, `NavProgress` carries `distance_left`.
 - A goal the Jetson sent but the Dell never confirmed is resent (same id) until it is accepted, the link is lost or another goal replaces it.
-- When nothing answers at all the link goes *lost* with the reason `base unreachable at <url>: check the Dell's IP (its Wi-Fi address can change; see turtlebot.base_url) and that robot_link_api is running there`.
+- When nothing answers at all the link goes *lost* with the reason `base unreachable at <url>: check that the ssh tunnel is running (scripts/robot_link_tunnel.sh) or the Dell's IP (turtlebot.base_url), and that robot_link_api is running there`.
 - **Never sent**: a goal outside the floor plan's bounds, or further from the base than `turtlebot.max_goal_distance_m`. It is rejected on the Jetson, logged, and counted as failed.
 
 ## 4. Behaviour you can test without hardware
@@ -142,8 +144,8 @@ Request: `{"m_s": 0.3}` → `{"ok": true, "applied": 0.25}`. The Jetson sends th
 python tools/fake_base.py --port 8010 --token $ROBOT_LINK_TOKEN          # the Dell stand-in
 python -m robot sim --base turtlebot --base-url http://127.0.0.1:8010    # the robot using it
 python -m pytest tests/test_robot_link_contract.py                       # the contract, against the fake
-python -m pytest tests/test_robot_link_contract.py --target http://172.24.2.122:8010   # ...against the real Dell (read-only checks)
-python -m pytest tests/test_robot_link_contract.py --target http://172.24.2.122:8010 --drive   # ...and the goals: the base MOVES
+python -m pytest tests/test_robot_link_contract.py --target http://127.0.0.1:8010   # ...against the real Dell through the tunnel (read-only checks)
+python -m pytest tests/test_robot_link_contract.py --target http://127.0.0.1:8010 --drive   # ...and the goals: the base MOVES
 (cd turtlebot && ROBOT_LINK_TOKEN=x python3 -m robot_link.dev_server --port 8010)   # the Dell's real server over a simulated base, no ROS
 ```
 
@@ -152,33 +154,42 @@ the heartbeat, speaking and max_speed, and goal / cancel only when `--drive` is 
 
 ## 5. Network, clock and secret
 
-### 5.1 Today: the university Wi-Fi (nothing to configure)
+Two ways to connect the computers. Use the tunnel now; the direct link is for when a travel router (or a cable) is available.
 
-Both computers are on `172.24.0.0/18` and reach each other. The Dell's address comes from DHCP and can change when it reconnects or reboots,
-so it is never written in code:
+| | **5.1 Now: ssh tunnel** | **5.2 Later: travel router + direct link** |
+|---|---|---|
+| Needs | nothing on the Dell beyond ssh (port 22 is open) | a travel router both computers join, or a cable (+ a USB-Ethernet adapter for the Dell); `sudo` once on each |
+| Dell API listens on | `127.0.0.1:8010` (`run_robot_link.sh --local`) | the link's address (`_iface:=` / `_host:=`) |
+| `turtlebot.base_url` | `http://127.0.0.1:8010` | `http://<the Dell's address on the link>:8010` |
+| Who can reach port 8010 | only the tunnel and users logged in to the Dell | everyone on that network (the token is the only barrier) |
+| Firewall | untouched | a `ufw` rule for the Jetson: `sudo ufw allow from <jetson address> to any port 8010 proto tcp` |
+| Weak point | the tunnel drops with the Wi-Fi: the robot stops after 3 s and the tunnel restarts by itself (about 7 s) | none shared with other users; no DHCP surprises on a fixed-address link |
+
+### 5.1 Now: an ssh tunnel (nothing opened in the firewall)
+
+The Dell's `ufw` allows ssh and blocks port 8010 from the Wi-Fi, so the API stays closed to the network and the Jetson goes through ssh:
 
 ```bash
-# on the Dell: the address robot_link_api will bind to (and does, at every start); this is what turtlebot.base_url needs
-python3 ~/lbr-dell/turtlebot/nodes/robot_link_api.py --print-address            # e.g. 172.24.2.122 (the wlp2s0 interface)
+# on the Dell: the API listens on 127.0.0.1 only (this is also what the whole stack's script does with --local)
+cd ~/lbr-dell/turtlebot && ./run_robot_link.sh --local                  # or alone: python3 nodes/robot_link_api.py _host:=127.0.0.1
 
-# on the Jetson: put it in config/robot.yaml
-#   turtlebot:
-#     base_url: http://172.24.2.122:8010
-getent hosts <dell-hostname>.local        # a name would survive an address change, but mDNS does not resolve here today
+# on the Jetson: keep the tunnel up (it restarts ssh a second after it ends; ssh gives up on a dead link within about 6 s)
+scripts/robot_link_tunnel.sh                                            # = ssh -N -o ServerAliveInterval=2 -o ServerAliveCountMax=2 \
+                                                                        #       -o ExitOnForwardFailure=yes -L 8010:127.0.0.1:8010 dell   in a loop
+# turtlebot.base_url in config/robot.yaml is already  http://127.0.0.1:8010
 ```
 
-If the address changes while the API runs, it moves to the new one by itself within 10 s and logs it; the Jetson's link then reads *lost*
-with "base unreachable ... check the Dell's IP" until `turtlebot.base_url` is updated. The Dell's own interface (`_iface`, default `wlp2s0`) or an
-explicit address (`_host`) are command-line parameters of the node (section 7).
+The tunnel needs key-based ssh to the `dell` host in `~/.ssh/config` (`ssh-copy-id dell`), so that it can restart with no one typing a
+password; it uses `BatchMode`, so a missing key makes it fail and retry instead of waiting for a password. The Dell's own address
+does not matter any more (DHCP can change it; only `ssh dell` has to work). While the tunnel is down the Jetson's link reads *lost*
+and the Dell stops the base by itself after 3 s without a heartbeat (section 2, `/api/heartbeat`), so a dropped tunnel is safe, only inconvenient.
+Other users of the Jetson can reach `127.0.0.1:8010` there, so the token still matters.
 
 **Clocks:** both machines follow internet time through `systemd-timesyncd` already; that is far closer than the 1 s the link needs. Nothing to do.
 
-**Port 8010 on a shared network:** anyone on the Wi-Fi can reach it; only the token stops them (section 1, Auth). The Dell has no firewall rules for it
-(`ufw` is not managed from here); do not use this setup in a public place.
+### 5.2 Later: a travel router plus a direct link, or a cable (needs `sudo` once)
 
-### 5.2 For demos: a direct Ethernet cable (recommended; needs `sudo` once)
-
-No one else is on the cable, nothing depends on DHCP and the Wi-Fi's quality, and nothing can be sniffed. The Dell (a laptop) may need a USB-Ethernet
+The Dell's address on the Wi-Fi is DHCP and the Wi-Fi is shared. With a travel router that only these two computers join, or a cable, no one else is on the link, nothing depends on DHCP and the Wi-Fi's quality, and nothing can be sniffed. The Dell (a laptop) may need a USB-Ethernet
 adapter: it has no wired interface today. Interface names differ per machine: find them with `nmcli device status` (the wired one is `ethernet`,
 e.g. `eno1` on the Dell, `enP8p1s0` on a Jetson). Below `JETSON_IFACE` and `DELL_IFACE` stand for them.
 
@@ -204,7 +215,7 @@ sudo ufw allow from 192.168.50.1 to any port 8010 proto tcp             # only i
 ```
 
 `ipv4.never-default yes` keeps the cable from becoming the default route: each machine keeps using Wi-Fi for the internet.
-Then start the API on the cable's address (`_iface:=DELL_IFACE`, or `_host:=192.168.50.2`) and set `turtlebot.base_url: http://192.168.50.2:8010` on the Jetson.
+Then start the API on the link's address (`_iface:=DELL_IFACE`, or `_host:=192.168.50.2`; no `--local`), allow the Jetson in the Dell's firewall (`sudo ufw allow from 192.168.50.1 to any port 8010 proto tcp`; a cable or the router gives fixed, known addresses) and set `turtlebot.base_url: http://192.168.50.2:8010` on the Jetson. The tunnel is then not needed. On a Wi-Fi link, the Dell's address is printed by `python3 ~/lbr-dell/turtlebot/nodes/robot_link_api.py --print-address`.
 
 **Clocks on the cable (chrony, the Jetson is the time source).** With no internet the clocks drift apart; timestamps and the 3 s watchdog need them to agree to well under a second.
 
@@ -236,11 +247,12 @@ printf 'export ROBOT_LINK_TOKEN=%s\n' '<that value>' > ~/lbr-dell/turtlebot/.rob
 ### 5.4 Test it, in this order
 
 ```bash
-ping -c 3 172.24.2.122                                        # from the Jetson: reachable (on the cable: 192.168.50.2)
-curl -s -H "X-Robot-Token: $ROBOT_LINK_TOKEN" http://172.24.2.122:8010/api/health      # from the Jetson
-curl -s -H "X-Robot-Token: $ROBOT_LINK_TOKEN" http://172.24.2.122:8010/api/state
-curl -s -o /dev/null -w '%{http_code}\n' http://172.24.2.122:8010/api/health           # no token: 401
-chronyc tracking                                              # cable only, on the Dell: "System time" within 0.05 seconds of NTP time
+scripts/robot_link_tunnel.sh &                                # the tunnel (a direct link: ping -c 3 <the Dell's address> instead)
+curl -s -H "X-Robot-Token: $ROBOT_LINK_TOKEN" http://127.0.0.1:8010/api/health         # from the Jetson
+curl -s -H "X-Robot-Token: $ROBOT_LINK_TOKEN" http://127.0.0.1:8010/api/state
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/api/health              # no token: 401
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Robot-Token: wrong' http://127.0.0.1:8010/api/health   # wrong token: 401
+chronyc tracking                                              # direct cable only, on the Dell: "System time" within 0.05 seconds of NTP time
 ```
 
 The robot also compares the Dell's `time` with its own on every health check and logs a warning if they differ by more than 1 s.

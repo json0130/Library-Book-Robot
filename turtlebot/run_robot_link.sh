@@ -9,6 +9,8 @@
 #     ./run_robot_link.sh vslam_map2       uses ~/vslam_map2.db
 #     ./run_robot_link.sh --check          only look: is another ROS stack or script running? Starts nothing.
 #     ./run_robot_link.sh --dry-run        print what would be started, start nothing
+#     ./run_robot_link.sh --local          robot_link_api listens on 127.0.0.1 only (_host:=127.0.0.1): reachable from the Jetson only through
+#                                          the ssh tunnel (scripts/robot_link_tunnel.sh on the Jetson), not from the rest of the Wi-Fi
 #
 # Needs: ROBOT_LINK_TOKEN (the shared secret, same as on the Jetson). Put it in .robot_link_env in this folder
 #        (one line: export ROBOT_LINK_TOKEN=...; chmod 600 .robot_link_env) or export it first.
@@ -21,12 +23,13 @@
 
 set -m
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHECK=0; DRY=0; MAP_NAME=vslam_map
+CHECK=0; DRY=0; LOCAL=0; MAP_NAME=vslam_map
 for arg in "$@"; do
     case "$arg" in
         --check) CHECK=1 ;;
         --dry-run) DRY=1 ;;
-        -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --local) LOCAL=1 ;;
+        -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
         -*) echo "unknown option $arg (see --help)"; exit 2 ;;
         *) MAP_NAME="$arg" ;;
     esac
@@ -190,15 +193,22 @@ start noise_web python3 "$REPO/nodes/noise_nav_web.py" _save_png:="$DATA/noise_n
 
 # ---- 6. the link to the Jetson ----
 say "5/6 Starting robot_link_api (the link to the Jetson) ..."
-ADDR=$(python3 "$REPO/nodes/robot_link_api.py" --print-address)
-start robot_link_api python3 "$REPO/nodes/robot_link_api.py"
+LINK_ARGS=()
+if [ $LOCAL -eq 1 ]; then LINK_ARGS=(_host:=127.0.0.1); fi
+ADDR=$(python3 "$REPO/nodes/robot_link_api.py" "${LINK_ARGS[@]}" --print-address)
+start robot_link_api python3 "$REPO/nodes/robot_link_api.py" "${LINK_ARGS[@]}"
 if [ $DRY -eq 0 ]; then
     sleep 3
     if ! kill -0 "${PIDS[-1]}" 2>/dev/null; then warn "robot_link_api stopped. See $LOG/robot_link_api.log"; stop_all; fi
 fi
 say "6/6 Ready."
-say "    On the Jetson:  turtlebot.base_url: http://${ADDR:-<wifi address>}:8010   (config/robot.yaml)"
-say "    Click-to-go page (from your PC):  ssh -L 8000:localhost:8000 $(whoami)@${ADDR:-<wifi address>}   then  http://localhost:8000"
+if [ $LOCAL -eq 1 ]; then
+    say "    Listening on 127.0.0.1:8010 only. On the Jetson:  scripts/robot_link_tunnel.sh   and   turtlebot.base_url: http://127.0.0.1:8010"
+    say "    Click-to-go page (from your PC):  ssh -L 8000:localhost:8000 $(whoami)@<the Dell's Wi-Fi address>   then  http://localhost:8000"
+else
+    say "    On the Jetson:  turtlebot.base_url: http://${ADDR:-<wifi address>}:8010   (config/robot.yaml)"
+    say "    Click-to-go page (from your PC):  ssh -L 8000:localhost:8000 $(whoami)@${ADDR:-<wifi address>}   then  http://localhost:8000"
+fi
 say "    The robot drives when it is sent a goal. Emergency stop: the red Stop button on the page, or the power switch."
 say "    Press Ctrl-C HERE to stop everything this script started."
 [ $DRY -eq 1 ] && exit 0
