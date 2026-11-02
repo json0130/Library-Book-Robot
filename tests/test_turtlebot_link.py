@@ -9,7 +9,8 @@ import time
 import unittest
 
 from robot.config import load_config
-from robot.drivers.turtlebot_link import (ApiError, Command, Http, LinkConfigError, LinkError, LinkSettings, TurtleBotLink)
+from robot.drivers.turtlebot_link import (ApiError, Command, Http, LinkConfigError, LinkError, LinkSettings, TurtleBotLink,
+                                          Unreachable)
 from robot.events import (LinkDown, LinkUp, NavArrived, NavCancelled, NavFailed, NavProgress, NoiseReading, PoseUpdated)
 from tools.fake_base import FakeBase, FakeBaseServer
 
@@ -89,7 +90,7 @@ class SettingsTest(unittest.TestCase):
         s = LinkSettings.from_config(cfg, env={"ROBOT_LINK_TOKEN": "x"}, base_url="http://10.0.0.5:9/")
         self.assertEqual((s.base_url, s.timeout_s, s.poll_hz, s.heartbeat_hz, s.lost_after_s, s.retries),
                          ("http://10.0.0.5:9", 1.0, 2.0, 1.0, 3.0, 2))
-        self.assertEqual(cfg.turtlebot["base_url"], "http://192.168.50.2:8010")
+        self.assertRegex(cfg.turtlebot["base_url"], r"^http://[\w.\-]+:8010$")             # an address in the config, not in the code
         self.assertEqual(cfg.navigation["backend"], "sim")                    # the default stays the simulator
 
 
@@ -120,6 +121,36 @@ class HeartbeatAndStatusTest(unittest.TestCase):
         clock.advance(0.5)
         link.heartbeat_once()
         self.assertEqual((link.status, kinds(link)), ("connected", ["LinkUp", "LinkDown", "LinkUp"]))
+
+    def test_link_down_says_to_check_the_dells_ip_when_nothing_answers_at_all(self):
+        link, http, clock = make_link({"ok": True})
+        link.heartbeat_once()
+        http.push(Unreachable("base unreachable at http://base: [Errno 111] Connection refused"))
+        clock.advance(3.5)
+        link.heartbeat_once()
+        down = [e for e in link.events if isinstance(e, LinkDown)]
+        self.assertEqual(len(down), 1)
+        self.assertIn("base unreachable at http://base", down[0].reason)
+        self.assertIn("check the Dell's IP", down[0].reason)
+        self.assertIn("robot_link_api", down[0].reason)
+
+    def test_link_down_for_another_reason_has_no_ip_advice(self):
+        link, http, clock = make_link({"ok": True})
+        link.heartbeat_once()
+        http.push(LinkError("the reply is not JSON"))
+        clock.advance(3.5)
+        link.heartbeat_once()
+        self.assertNotIn("Dell's IP", [e for e in link.events if isinstance(e, LinkDown)][0].reason)
+
+    def test_a_closed_port_raises_unreachable_with_the_address_in_the_message(self):
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        from robot.drivers.turtlebot_link import Http
+        with self.assertRaises(Unreachable) as e:
+            Http(f"http://127.0.0.1:{port}", "t", 0.5).get("/api/health")
+        self.assertIn(f"http://127.0.0.1:{port}", str(e.exception))
 
     def test_a_link_that_goes_quiet_is_lost_without_another_reply(self):
         link, _, clock = make_link({"ok": True})

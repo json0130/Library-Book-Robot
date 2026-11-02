@@ -24,6 +24,7 @@ Linux) over SSH. Nothing needs to be installed on the PC.
 - [Watching from your PC](#watching-from-your-pc)
 - [Part 1 - Make the map](#part-1---make-the-map)
 - [Part 2 - Noise map with click-to-go navigation](#part-2---noise-map-with-click-to-go-navigation)
+- [Link to the Jetson](#link-to-the-jetson)
 - [Output files](#output-files)
 - [Settings you can change](#settings-you-can-change)
 - [Troubleshooting](#troubleshooting)
@@ -108,11 +109,13 @@ Linux) over SSH. Nothing needs to be installed on the PC.
 ## Repository layout
 
 ```
-turtlebot-noise-mapping/
+turtlebot/                     (a folder of the Library-Book-Robot repository)
 ├── run_vslam_mapping.sh       Part 1 - one command starts everything for mapping
 ├── run_vslam_noise_nav.sh     Part 2 - one command starts everything for noise mapping
+├── run_robot_link.sh          Part 2 plus the link to the Jetson (robot_link_api); see "Link to the Jetson"
 ├── check_devices.sh           shows what is plugged in where (LiDAR, base, camera, mics)
 ├── setup_mics.py              one-time setup: which USB mic is left / right
+├── calibrate_noise.py         one-time setup: turn the mics' dBFS into dB with a phone sound meter
 ├── config/
 │   ├── vslam.launch           camera + RTAB-Map + LiDAR + move_base
 │   └── hokuyo_costmap.yaml    navigation settings
@@ -121,7 +124,10 @@ turtlebot-noise-mapping/
 │   ├── map_cleaner.py
 │   ├── scan_filter.py
 │   ├── noise_logger.py
-│   └── noise_nav_web.py
+│   ├── noise_nav_web.py
+│   └── robot_link_api.py      the HTTP API for the Jetson (port 8010)
+├── robot_link/                the API's logic in plain Python 3.8 (no ROS), tested in tests/
+├── tests/                     python3 -m unittest discover -s tests
 ├── docs/images/               screenshots from simulated tests
 └── extras/                    earlier experiments (LiDAR-only SLAM, first noise maps)
 ```
@@ -348,6 +354,10 @@ them live while driving.
    runs ahead, its old readings are dropped.
 6. **Without `mic_config.json`:** reads the camera's stereo mic instead.
 
+When run next to the Jetson link it also listens to `/robot_speaking` and `/odom` and leaves the robot's own noise out of the CSV (see "Link to the
+Jetson"; `_skip_when_busy:=false` turns it off). If `~/noise_calibration.json` exists it adds three CSV columns (`sound_dB`, `left_sound_dB`,
+`right_sound_dB`: real dB) and publishes `/noise_reading_db`; `/noise_reading` itself stays in dBFS.
+
 ### `nodes/noise_nav_web.py` - the click-to-go noise map page
 
 The main program for Part 2. It's a small web server, built into Python, plus a
@@ -422,15 +432,20 @@ rospack find map_server; rospack find turtlebot_navigation; rospack find move_ba
 
 ### 2. Get the code
 
-Clone the GitHub repository onto the robot's laptop, then go into the folder
-that contains this README (`turtlebot-noise-mapping`):
+Clone the repository onto the robot's laptop (its URL is in the project's
+GitHub page; `git remote -v` in your own copy shows it), then go into the
+`turtlebot` folder, the one that contains this README:
 
 ```bash
 cd ~
-git clone https://github.com/<your-username>/<your-repo>.git
-cd <your-repo>/turtlebot-noise-mapping
+git clone <repository-url> lbr-dell
+cd lbr-dell/turtlebot
 chmod +x *.sh *.py nodes/*.py
 ```
+
+(The folder's name does not matter. The scripts only use the files next to
+them, never the copies that may sit in your home folder from before the
+repository existed.)
 
 All the commands below are run from this folder. The scripts find their other
 files relative to where they are, so the folder can live anywhere.
@@ -447,14 +462,20 @@ echo $TURTLEBOT_3D_SENSOR        # should print: astra
 If it doesn't, add `export TURTLEBOT_3D_SENSOR=astra` to the end of `~/.bashrc`
 and open a new terminal.
 
-### 4. LiDAR permission (optional, makes it permanent)
+### 4. LiDAR permission (do this once)
 
-The run script gives the LiDAR permission each time (it asks for the robot's
-password). To never be asked again:
+The LiDAR's serial port belongs to the group `dialout`. Add yourself to it once
+and log out and back in; that is permanent:
 
 ```bash
-sudo usermod -a -G dialout $USER     # then log out and back in
+sudo usermod -aG dialout $USER       # then log out and back in
 ```
+
+`run_vslam_mapping.sh` and `run_vslam_noise_nav.sh` give the port permission with
+`sudo chmod` on every run instead (they ask for the password). `run_robot_link.sh`
+never uses `sudo`: if the LiDAR is not usable it prints the two commands above and
+stops. `sudo chmod a+rw /dev/ttyACM0` also works, but only until the LiDAR is
+plugged in again.
 
 ### 5. Check the devices
 
@@ -601,6 +622,83 @@ scp robot@<robot-ip>:~/noise_nav_map.png .
 scp robot@<robot-ip>:~/noise_nav_log.csv .
 scp robot@<robot-ip>:~/vslam_map.png .
 ```
+
+---
+
+## Link to the Jetson
+
+The robot's brain (dialogue, screen, voice) runs on a Jetson. It tells this laptop where to drive and asks what the microphones hear, over
+HTTP. **The rules both sides keep are in `docs/robot_link.md` of the repository** (the contract); this section is how to run the Dell's side.
+
+What runs: `nodes/robot_link_api.py` (port 8010) next to everything from Part 2. It answers `GET /api/health`, `GET /api/state` and takes
+`POST /api/goal`, `/api/cancel`, `/api/speaking`, `/api/heartbeat`, `/api/max_speed`, each with the header `X-Robot-Token`. The goals go to the same
+`move_base` the click-to-go page uses. **If the Jetson's heartbeat stops for 3 s while it has a goal, the base stops** (so does closing the
+program or pulling the network). A goal clicked on the web page wins over the Jetson's; the Jetson is told `manual_override`.
+
+**One-time set-up**
+
+1. Choose a secret and put it on both machines (never in the repository):
+   ```bash
+   openssl rand -hex 16                        # on the Jetson, or here; keep the output
+   printf 'export ROBOT_LINK_TOKEN=%s\n' '<the secret>' > .robot_link_env && chmod 600 .robot_link_env     # here, in this folder
+   ```
+   On the Jetson the same value goes in the environment of the robot (`export ROBOT_LINK_TOKEN=...`). The API refuses to start without it.
+2. Microphones calibrated (until then the Jetson ignores the noise): start the stack, then `python3 calibrate_noise.py` (see below).
+3. Tell the Jetson the Dell's address: `turtlebot.base_url` in the Jetson's `config/robot.yaml`. The address is looked up from the Wi-Fi interface
+   (`wlp2s0`) each time the API starts and printed in its log; `python3 nodes/robot_link_api.py --print-address` shows it without starting
+   anything. It is a DHCP address, so it may change after a reboot.
+
+**Run it** (from this folder, with nothing else running):
+
+```bash
+./run_robot_link.sh --check       # only looks: is another ROS stack or run script already running? Starts nothing.
+./run_robot_link.sh --dry-run     # prints what it would start
+./run_robot_link.sh               # starts the base, camera, LiDAR, RTAB-Map, move_base, noise logger, web page and the API
+```
+
+It starts the same things as `run_vslam_noise_nav.sh` plus the API, but:
+- it **refuses to start** (and says what it found) if a `roscore`, the Kobuki driver or one of the other `run_*.sh` scripts is already running, and it never stops
+  anything it did not start;
+- it reads the files in this folder, and keeps its own output in `run_logs/` and `run_data/` here: it works on a **copy** of the map
+  (`run_data/vslam_map.db`, refreshed when `~/vslam_map.db` is newer) and writes its noise log and noise map there, so the files in your home
+  folder are never changed;
+- it never uses `sudo` (see "LiDAR permission" above).
+
+**The robot drives as soon as it is sent a goal.** Have someone at the power switch, and the area clear.
+
+**Calibrating the noise** (needs the stack running, the robot standing still, and a phone with a sound-meter app):
+
+```bash
+python3 calibrate_noise.py --check     # gain and automatic gain control (AGC) of both microphones; prints the commands to fix them
+python3 calibrate_noise.py             # three sound levels: you make a steady sound, type what the phone shows; saves ~/noise_calibration.json
+```
+
+The gain must not change afterwards. The microphones are at 100 % capture volume today, which can clip loud sounds; lower it once
+(`amixer -c <card> sset 'Mic' 70%`), then calibrate. The API and the noise logger pick the new file up within seconds. Without it the API says
+`dBFS, calibrated: false`.
+
+**Quiet while the robot is noisy.** `noise_logger.py` writes no CSV row, and `noise_nav_web.py` paints no circle, while the Jetson is speaking
+(`/robot_speaking`), while the wheels are turning (`/odom`) and for a second afterwards. `_skip_when_busy:=false` turns that off. The topics
+`/noise_reading` are still published; the API marks those readings `robot_noise` for the Jetson.
+
+**How fresh must the localisation be?** `python3 measure_localisation.py` listens for a minute (it only listens) and tells how often RTAB-Map
+publishes `/rtabmap/localization_pose` standing still and while moving, and suggests `_loc_max_age_s` for `robot_link_api.py` from that (see the
+rule for `localised` in `docs/robot_link.md`). Keep the robot still for the first half, then move it.
+
+**Tests** (no ROS needed, Python 3.8): `python3 -m unittest discover -s tests`. To see the API work without the robot:
+`ROBOT_LINK_TOKEN=x python3 -m robot_link.dev_server --port 8010` (a simulated base behind the real server), and from the repository root
+`python -m pytest tests/test_robot_link_contract.py --target http://127.0.0.1:8010 --drive`.
+
+**Troubleshooting**
+
+| Problem | Likely cause | What to do |
+|---|---|---|
+| `Another ROS stack is already running` | a roscore / the other run script is up | stop it in its own window, then start again |
+| `ROBOT_LINK_TOKEN is not set` | no `.robot_link_env` | step 1 above |
+| `has no IPv4 address` | the Wi-Fi is not connected | connect it, or `_host:=<address>` |
+| Jetson says "base unreachable" | the Dell's address changed, or the API is not running | `--print-address`, update `turtlebot.base_url`; `run_logs/robot_link_api.log` |
+| `/api/health` says `ros_ok: false` | the stack is not up, or `/rtabmap/rtabmap` / `move_base` / `/odom` are silent | `run_logs/*.log` |
+| goals refused `not_localised` | RTAB-Map has not found the robot on the map | turn slowly on the spot, or "Set robot position" on the page |
 
 ---
 

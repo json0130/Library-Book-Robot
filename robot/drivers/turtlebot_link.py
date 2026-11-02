@@ -57,6 +57,10 @@ class LinkError(Exception):
     """The base could not be reached, or answered something that is not the contract (a timeout, a refused connection, bad JSON)."""
 
 
+class Unreachable(LinkError):
+    """No connection at all (refused, no route, timed out): the Dell is off, the cable or Wi-Fi is down, or its address changed."""
+
+
 class ApiError(LinkError):
     """The base answered with an error status (docs/robot_link.md section 1). `status` is the HTTP status, `error` its code."""
 
@@ -115,8 +119,10 @@ class Http:
             except (ValueError, OSError):
                 err = {}
             raise ApiError(exc.code, str(err.get("error", "")), str(err.get("detail", ""))) from None
-        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:     # refused, unreachable, timed out, reset, malformed reply
-            raise LinkError(str(getattr(exc, "reason", exc))) from None
+        except (urllib.error.URLError, OSError) as exc:                           # refused, no route, timed out, reset
+            raise Unreachable(f"base unreachable at {self.base_url}: {getattr(exc, 'reason', exc)}") from None
+        except (ValueError, http.client.HTTPException) as exc:                    # a malformed reply
+            raise LinkError(str(exc)) from None
         try:
             parsed = json.loads(raw or b"{}")
         except ValueError:
@@ -171,6 +177,7 @@ class TurtleBotLink:
         self.lock = threading.RLock()
         self.last_ok: Optional[float] = None
         self.failures = 0                       # failed requests since the last good one
+        self.unreachable = False                # the last failure was "no connection" (the Dell's address may have changed)
         self.incompatible = ""                  # the base's api_version is not ours: the reason, else ""
         self._up = False                        # the last of LinkUp / LinkDown published was LinkUp
         self.pose: dict = {}                    # the base's latest pose, nav and noise, as it sent them
@@ -223,11 +230,12 @@ class TurtleBotLink:
     # ---- bookkeeping of replies ----
     def _ok(self) -> None:
         with self.lock:
-            self.last_ok, self.failures = self.clock(), 0
+            self.last_ok, self.failures, self.unreachable = self.clock(), 0, False
         self.evaluate()
 
     def _failed(self, why) -> None:
         with self.lock:
+            self.unreachable = isinstance(why, Unreachable)
             self.failures += 1
             first = self.failures == 1
         if first:
@@ -248,6 +256,9 @@ class TurtleBotLink:
                 self._up = True
         if went_down:
             reason = self.incompatible or f"no reply for {self.settings.lost_after_s:g} s"
+            if self.unreachable and not self.incompatible:
+                reason += (f" - base unreachable at {self.settings.base_url}: check the Dell's IP (its Wi-Fi address can change; "
+                           "see turtlebot.base_url) and that robot_link_api is running there")
             log.warning("[link] LOST (%s)", reason)
             self._emit(LinkDown(reason))
         elif came_up:

@@ -9,3 +9,8 @@ mic_config.json
 *.wav
 __pycache__/
 *.pyc
+
+# the Dell side of the link (this folder)
+.robot_link_env
+run_data/
+*.db.part

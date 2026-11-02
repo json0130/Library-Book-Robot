@@ -1,7 +1,7 @@
 """The Jetson-Dell link contract (docs/robot_link.md, api_version 1), as a test that any server can be held to.
 
     python -m pytest tests/test_robot_link_contract.py                    # against tools/fake_base.py (started here)
-    ROBOT_LINK_TOKEN=... python -m pytest tests/test_robot_link_contract.py --target http://192.168.50.2:8010
+    ROBOT_LINK_TOKEN=... python -m pytest tests/test_robot_link_contract.py --target http://172.24.2.122:8010
     ... --target URL --drive                                              # also the tests that make the base move
 
 Plain HTTP with urllib, nothing of the robot's own client: it checks what is on the wire. Against a real base the tests that

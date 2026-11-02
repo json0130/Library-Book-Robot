@@ -489,12 +489,31 @@ def main():
     from std_msgs.msg import Float32MultiArray
     got_reading = {'yes': False}
 
+    # No painted circle while the robot makes noise itself (speaking, or moving): that is not the room. _skip_when_busy:=false
+    # paints everything as before.
+    activity = None
+    if rospy.get_param('~skip_when_busy', True):
+        try:
+            import os as _os
+            import sys as _sys
+            _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+            from robot_link.activity import RobotActivity
+            from std_msgs.msg import Bool
+            from nav_msgs.msg import Odometry
+            activity = RobotActivity()
+            rospy.Subscriber('/robot_speaking', Bool, lambda m: activity.set_speaking(m.data))
+            rospy.Subscriber('/odom', Odometry, lambda m: activity.on_odom(m.twist.twist.linear.x, m.twist.twist.angular.z))
+        except ImportError:
+            rospy.logwarn('robot_link not found: the noise map also paints the robot\'s own noise')
+
     def reading_cb(m):
         got_reading['yes'] = True
+        if activity and activity.reading_is_robot_noise():
+            return
         core.add_noise(m.data[0], left=m.data[1], right=m.data[2])
 
     def level_cb(m):                    # older noise_logger without /noise_reading
-        if not got_reading['yes']:
+        if not got_reading['yes'] and not (activity and activity.reading_is_robot_noise()):
             core.add_noise(m.data)
     rospy.Subscriber('/noise_reading', Float32MultiArray, reading_cb)
     rospy.Subscriber('/noise_level', Float32, level_cb)

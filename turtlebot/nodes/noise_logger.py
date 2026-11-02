@@ -16,6 +16,12 @@
 #   /noise_balance  left minus right (dB): positive = louder on the LEFT,
 #                                          negative = louder on the RIGHT
 #   /noise_reading  all four at once: [overall, left, right, balance]
+#   /noise_reading_db  the same four in dB (sound level), only when ~/noise_calibration.json exists
+#                      (made by calibrate_noise.py); /noise_reading stays in dBFS
+#
+# The robot's own noise is left out of the CSV: no row is written while /robot_speaking is true (the Jetson is talking), while
+# the base is moving (/odom), or for 1 s after either (the half second measured plus 0.5 s). The topics are still published.
+# Turn this off with _skip_when_busy:=false.
 #
 # Run:  python3 noise_logger.py
 # Options:  _file:=my_run.csv     (change output file name)
@@ -24,6 +30,8 @@
 #           _level:=peak          (default) loudest 50 ms in each half second -
 #                                 catches claps and short sounds
 #           _level:=average       average over each half second (steady noise)
+#           _skip_when_busy:=false  also log while the robot speaks or moves
+#           _calibration:=~/noise_calibration.json
 
 import audioop
 import csv
@@ -35,9 +43,18 @@ import subprocess
 import threading
 import time
 
+import sys
+
 import rospy
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32, Float32MultiArray
+from std_msgs.msg import Bool, Float32, Float32MultiArray
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from robot_link import calibration
+    from robot_link.activity import RobotActivity
+except ImportError:                                   # a copy of this file on its own: works as before, without the extras
+    calibration = RobotActivity = None
 
 RATE = 16000        # samples per second
 CHUNK_SEC = 0.5     # measure loudness every 0.5 seconds
@@ -45,6 +62,7 @@ FRAME_SEC = 0.05    # peak mode: loudest 50 ms piece of each half second
 CONFIG = os.path.expanduser('~/mic_config.json')
 
 pos = [0.0, 0.0]
+activity = RobotActivity() if RobotActivity else None
 
 
 def to_db(rms):
@@ -77,6 +95,8 @@ def chunk_level(data, mode):
 def odom_cb(msg):
     pos[0] = msg.pose.pose.position.x
     pos[1] = msg.pose.pose.position.y
+    if activity:
+        activity.on_odom(msg.twist.twist.linear.x, msg.twist.twist.angular.z)
 
 
 class MicStream:
@@ -160,7 +180,13 @@ def main():
         mode = 'peak'
     rospy.loginfo('Measuring %s loudness', mode)
 
+    skip_busy = str(rospy.get_param('~skip_when_busy', True)).lower() in ('true', '1', 'yes') and activity is not None
     rospy.Subscriber('/odom', Odometry, odom_cb)
+    if activity:
+        rospy.Subscriber('/robot_speaking', Bool, lambda m: activity.set_speaking(m.data))
+    reloader = calibration.Reloader(os.path.expanduser(rospy.get_param('~calibration', calibration.DEFAULT_PATH))) \
+        if calibration else None
+    pub_db = rospy.Publisher('/noise_reading_db', Float32MultiArray, queue_size=10)
     pub_all = rospy.Publisher('/noise_level', Float32, queue_size=10)
     pub_l = rospy.Publisher('/noise_left', Float32, queue_size=10)
     pub_r = rospy.Publisher('/noise_right', Float32, queue_size=10)
@@ -191,9 +217,12 @@ def main():
     rospy.loginfo('Logging noise to %s  (Ctrl-C to stop)', out_file)
     with open(out_file, 'w', newline='') as f:
         writer = csv.writer(f)
+        cal0 = reloader.poll() if reloader else None
+        # the dB columns are only there when a calibration existed at the start (a restart picks up a new one)
         writer.writerow(['time_s', 'x_m', 'y_m', 'noise_dB',
-                         'left_dB', 'right_dB', 'balance_dB'])
+                         'left_dB', 'right_dB', 'balance_dB'] + (['sound_dB', 'left_sound_dB', 'right_sound_dB'] if cal0 else []))
         t0 = time.time()
+        skipped = 0
         try:
             for rms_l, rms_r in source:
                 db_l = to_db(rms_l) - offset          # correct for mic sensitivity
@@ -209,9 +238,19 @@ def main():
                 pub_bal.publish(balance)
                 pub_all4.publish(Float32MultiArray(data=[db_all, db_l, db_r, balance]))
 
+                cal = reloader.poll() if reloader else None
+                sound = cal.apply(db_l, db_r) if cal else None
+                if sound:
+                    pub_db.publish(Float32MultiArray(data=[sound['overall'], sound['left'], sound['right'], sound['balance']]))
+
+                if skip_busy and activity.reading_is_robot_noise():
+                    skipped += 1                          # the robot's own noise says nothing about the room
+                    rospy.loginfo_throttle(10, 'robot is speaking or moving: reading not logged (%d so far)', skipped)
+                    continue
                 writer.writerow([round(time.time() - t0, 2),
                                  round(pos[0], 3), round(pos[1], 3), round(db_all, 1),
-                                 round(db_l, 1), round(db_r, 1), round(balance, 1)])
+                                 round(db_l, 1), round(db_r, 1), round(balance, 1)]
+                                + (([sound['overall'], sound['left'], sound['right']] if sound else ['', '', '']) if cal0 else []))
                 f.flush()
 
                 side = 'LEFT' if balance > side_db else ('RIGHT' if balance < -side_db else 'centre')
