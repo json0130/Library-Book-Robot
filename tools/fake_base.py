@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # allow `python tools/fake_base.py`
+sys.path.append(str(Path(__file__).resolve().parent.parent / "turtlebot"))   # the Dell's map picture code (standard library only)
 
 log = logging.getLogger("fake_base")
 
@@ -186,6 +187,33 @@ class FakeBase:
             self._reading = (slot, body)
             return body
 
+    def make_map(self):
+        """The floor plan's rectangle as an occupancy grid (a wall round the edge, a metre of unknown outside): what the Dell's /map would be."""
+        from robot_link import rules
+        floor = self.plan.floor(self.level) if self.plan is not None and self.level is not None else None
+        width_m, height_m = (floor.width, floor.height) if floor is not None else (8.0, 6.0)
+        res, pad = 0.05, 20
+        w, h = int(width_m / res) + 2 * pad, int(height_m / res) + 2 * pad
+        data = [-1] * (w * h)
+        for cy in range(pad, h - pad):
+            for cx in range(pad, w - pad):
+                edge = cx in (pad, w - pad - 1) or cy in (pad, h - pad - 1)
+                data[cy * w + cx] = 100 if edge else 0
+        return rules.GridView(w, h, res, -pad * res, -pad * res, tuple(data))
+
+    def map_info(self, have: Optional[int] = None) -> dict:
+        import base64
+        from robot_link import mapimage
+        if getattr(self, "_map_image", None) is None:
+            self._map_image = mapimage.render(self.make_map())
+        image = self._map_image
+        body = {"ok": True, "available": True, "frame": "map", "version": image["version"], "resolution": image["resolution"],
+                "width": image["width"], "height": image["height"], "origin": {"x": image["origin_x"], "y": image["origin_y"]},
+                "time": round(self.wall(), 3), "changed": have != image["version"]}
+        if body["changed"]:
+            body["png_base64"] = base64.b64encode(image["png"]).decode("ascii")
+        return body
+
     # ---- the API ----
     def health(self) -> dict:
         self.update()
@@ -299,7 +327,11 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if self.headers.get("X-Robot-Token") != self.base.token:
             return self.error(401, "unauthorised", "missing or wrong X-Robot-Token")
-        gets = {"/api/health": self.base.health, "/api/state": self.base.state}
+        have = None
+        for part in self.path.partition("?")[2].split("&"):
+            if part.startswith("have="):
+                have = int(part[5:]) if part[5:].lstrip("-").isdigit() else None
+        gets = {"/api/health": self.base.health, "/api/state": self.base.state, "/api/map": lambda: self.base.map_info(have)}
         posts = {"/api/goal", "/api/cancel", "/api/speaking", "/api/heartbeat", "/api/max_speed"}
         if path not in gets and path not in posts:
             return self.error(404, "not_found", path)

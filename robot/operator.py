@@ -15,12 +15,18 @@ the robot picks up through robot/display_link.py), so there is one implementatio
     reset [all]           back to IDLE with nothing in progress; `all` also empties the storage
     screen <view> [isbn | section]   force a screen view with sample data (face book_card book_list directions
                           options status); `screen face` goes back to the face
+    drive <x> <y> [yaw]   (with a real base) send the base to this point of its map, in metres (yaw in radians; by default
+                          it faces the way it travelled). The operator page's map does this when you click and press Go.
+                          Refused while the dialogue is on a trip of its own, when the base is not localised, or when
+                          the point is outside the map or in a wall.
+    stop                  (with a real base) cancel the goal: the base stops. Always allowed.
 
 Events made here carry source="operator", which the session log shows with every state transition.
 """
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Callable, Optional
 
@@ -29,7 +35,7 @@ from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged
                           UserChoice, UserUtterance)
 from robot.services.isbn import to_isbn13
 
-COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen")
+COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen", "drive", "stop")
 PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 ZONES = ("quiet", "common")
 GROUP_SIZES = {"alone": 1, "group": 3}
@@ -44,6 +50,7 @@ class Operator:
         self.group_size = 1
         self.person_ids: tuple = ()                 # who the camera tells apart (person 1...), () when typed
         self.noise_db: Optional[float] = None
+        self.note_id = 0
 
     # ---- the context the sim and the operator page set ----
     async def context_changed(self) -> None:
@@ -84,6 +91,66 @@ class Operator:
         await self.app.bus.publish(BookPlaced(source="operator"))
         if self.app.scanner is not None:
             await self.app.scanner.wait()
+
+    # ---- the base ----
+    def tell(self, text: str) -> None:
+        """Say it in the terminal and also show it on the operator page (state.operator_note), so a refusal is not lost."""
+        self.say(text)
+        self.note_id += 1
+        self.app.operator_note = {"id": self.note_id, "text": text.strip()}
+        self.app.show_state()
+
+    def drive(self, arg: str) -> bool:
+        """drive <x> <y> [yaw]: see the module docstring. False (with the reason said) when nothing was sent."""
+        link, nav = self.app.link, self.app.actuators.nav
+        if link is None:
+            self.tell("  there is no base: start with --base turtlebot (the Dell on the TurtleBot)")
+            return False
+        if not (self.app.cfg.turtlebot or {}).get("operator_drive", True):
+            self.tell("  driving from the operator page is switched off (turtlebot.operator_drive: false)")
+            return False
+        try:
+            numbers = [float(a) for a in arg.replace(",", " ").split()]
+            if not 2 <= len(numbers) <= 3 or not all(math.isfinite(n) for n in numbers):
+                raise ValueError
+        except ValueError:
+            self.tell("  usage: drive <x> <y> [yaw]   (metres in the base's map, yaw in radians)")
+            return False
+        x, y = numbers[0], numbers[1]
+        if self.app.dialogue.nav_goal_id is not None:
+            self.tell(f"  the robot is on a trip of its own ({self.app.dialogue.state}); `stop` it first")
+            return False
+        if not link.available():
+            self.tell(f"  the base is not reachable (link {link.status}); not sending")
+            return False
+        if link.localised is False:
+            self.tell("  the base does not know where it is (not localised); not sending")
+            return False
+        pose = link.pose or {}
+        if len(numbers) == 3:
+            yaw = numbers[2]
+        elif "x" in pose and math.hypot(x - pose["x"], y - pose["y"]) > 0.05:
+            yaw = math.atan2(y - pose["y"], x - pose["x"])              # face the way it travels
+        else:
+            yaw = float(pose.get("yaw", 0.0))
+        try:
+            nav.check_goal(x, y, yaw, in_plan=False)                     # a point of the base's own map, not of the floor plan
+        except Exception as exc:                                         # GoalRejected: not a pose / too far
+            self.tell(f"  not sent: {exc}")
+            return False
+        goal_id = nav.go_to_pose(x, y, yaw, in_plan=False)
+        self.tell(f"  driving to ({x:.2f}, {y:.2f}), facing {yaw:.2f} rad - goal {goal_id}. `stop` cancels.")
+        return True
+
+    def stop(self) -> bool:
+        link, nav = self.app.link, self.app.actuators.nav
+        if link is None:
+            self.tell("  there is no base to stop")
+            return False
+        nav.stop()
+        link.cancel()
+        self.tell("  stop sent: the base cancels its goal and halts")
+        return True
 
     # ---- the commands ----
     def describe(self) -> str:
@@ -154,6 +221,10 @@ class Operator:
                 self.say(f"  {exc}")
                 return False
             self.say(f"  screen: {update.view}")
+        elif command == "drive":
+            return self.drive(arg)
+        elif command == "stop":
+            return self.stop()
         elif command == "reset":
             await d.reset(everything=arg.lower() == "all")
             self.say("  reset: IDLE" + (", storage emptied" if arg.lower() == "all" else ""))

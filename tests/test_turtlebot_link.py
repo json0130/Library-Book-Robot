@@ -39,7 +39,7 @@ class ScriptedHttp:
             raise item
         return item
 
-    def get(self, path):
+    def get(self, path, timeout_s=None):
         return self._next("GET", path, None)
 
     def post(self, path, body):
@@ -47,6 +47,10 @@ class ScriptedHttp:
 
     def paths(self):
         return [p for _, p, _ in self.calls]
+
+
+MAP_REPLY = {"ok": True, "available": True, "frame": "map", "version": 77, "resolution": 0.05, "width": 4, "height": 3,
+             "origin": {"x": -1.0, "y": -2.0}, "changed": True, "png_base64": "iVBORw0KGgo="}
 
 
 class Clock:
@@ -515,6 +519,34 @@ class WithTheFakeBaseTest(unittest.TestCase):
         model.link_dropped = False
         self.assertTrue(self.wait_for(lambda: kinds(link).count("LinkUp") == 2, 5), kinds(link))
         self.assertEqual(link.status, "connected")
+
+
+class FetchMapTest(unittest.TestCase):
+    def test_a_map_comes_back_with_its_picture_and_the_version_is_remembered(self):
+        link, http, _ = make_link(MAP_REPLY)
+        got = link.fetch_map()
+        self.assertEqual((got["version"], got["resolution"], got["origin"], got["changed"]), (77, 0.05, {"x": -1.0, "y": -2.0}, True))
+        self.assertEqual(got["png"], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(http.paths(), ["/api/map"])
+
+    def test_the_next_ask_names_the_version_it_has_and_gets_no_picture_if_unchanged(self):
+        link, http, _ = make_link(MAP_REPLY, {**MAP_REPLY, "changed": False, "png_base64": None})
+        link.fetch_map()
+        again = link.fetch_map()
+        self.assertEqual(http.paths(), ["/api/map", "/api/map?have=77"])
+        self.assertFalse(again["changed"])
+        self.assertNotIn("png", again)
+
+    def test_no_map_an_old_dell_or_no_connection_is_none_and_does_not_touch_the_link_status(self):
+        for answer in ({"ok": True, "available": False}, ApiError(404, "not_found"), Unreachable("no route"), {"ok": True, "available": True}):
+            link, http, _ = make_link(answer)
+            self.assertIsNone(link.fetch_map(), answer)
+            self.assertEqual(link.failures, 0)
+
+    def test_a_picture_that_is_not_base64_is_refused(self):
+        link, _, _ = make_link({**MAP_REPLY, "png_base64": "not base64!"})
+        self.assertIsNone(link.fetch_map())
+
 
 
 if __name__ == "__main__":

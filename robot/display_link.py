@@ -64,7 +64,7 @@ class DisplayLink:
         elif kind == "operator" and isinstance(item.get("command"), str):
             log.info("[operator] %s %s", item["command"], item.get("arg", ""))
             if not await self.operator.run(item["command"], str(item.get("arg", ""))):
-                log.info("[operator] %r was not understood", item["command"])
+                log.info("[operator] %r was not carried out", item["command"])
         else:
             log.debug("[display] ignored inbox item %r", item)
 

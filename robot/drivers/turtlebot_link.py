@@ -23,6 +23,7 @@ HTTP client and clock, so the tests drive them without threads.
 from __future__ import annotations
 
 import asyncio
+import base64
 import http.client
 import itertools
 import json
@@ -50,6 +51,7 @@ POSE_EVERY_S = 5.0                  # ...or at least this often
 PROGRESS_STEP_M = 0.05              # a NavProgress when the distance left changed by this much
 RESEND_EVERY_S = 1.0                # an unconfirmed goal is sent again this often
 CLOCK_SKEW_WARN_S = 1.0
+MAP_TIMEOUT_S = 5.0                 # GET /api/map carries a picture: allowed longer than the 1 s of a state poll
 TRANSIENT_REASONS = ("no_heartbeat",)      # a refusal that goes away by itself: tried again
 
 
@@ -105,13 +107,13 @@ class Http:
     def __init__(self, base_url: str, token: str, timeout_s: float = 1.0):
         self.base_url, self.token, self.timeout_s = base_url.rstrip("/"), token, float(timeout_s)
 
-    def request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
+    def request(self, method: str, path: str, body: Optional[dict] = None, timeout_s: Optional[float] = None) -> dict:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(self.base_url + path, data=data, method=method,
                                      headers={"X-Robot-Token": self.token, "Accept": "application/json",
                                               **({"Content-Type": "application/json"} if data is not None else {})})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+            with urllib.request.urlopen(req, timeout=timeout_s or self.timeout_s) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             try:
@@ -131,8 +133,8 @@ class Http:
             raise LinkError("the reply is not a JSON object")
         return parsed
 
-    def get(self, path: str) -> dict:
-        return self.request("GET", path)
+    def get(self, path: str, timeout_s: Optional[float] = None) -> dict:
+        return self.request("GET", path, None, timeout_s)
 
     def post(self, path: str, body: dict) -> dict:
         return self.request("POST", path, body)
@@ -193,6 +195,7 @@ class TurtleBotLink:
         self._speaking = False
         self._max_speed: Optional[float] = None
         self._max_speed_supported = True
+        self._map_version: Optional[int] = None             # the map version the operator page already has
         self._commands: "queue.Queue[Optional[Command]]" = queue.Queue()
         self._stop = threading.Event()
         self._threads: list = []
@@ -592,6 +595,34 @@ class TurtleBotLink:
         await asyncio.get_running_loop().run_in_executor(None, self.stop_threads)
 
     # ---- for the operator page ----
+    def fetch_map(self) -> Optional[dict]:
+        """The Dell's map for the operator page (GET /api/map; blocking, run it in a thread). Returns None when there is
+        no map, the base does not offer one (404: an older Dell), or it cannot be reached; else
+        {"changed": bool, "version", "resolution", "width", "height", "origin": {"x", "y"}, "frame"} plus "png" (bytes) when
+        it changed since the last call. It takes longer than a state poll (a picture), so it has its own, longer timeout, and it
+        does not count towards the link's status."""
+        path = "/api/map" if self._map_version is None else f"/api/map?have={self._map_version}"
+        try:
+            reply = self.http.get(path, MAP_TIMEOUT_S)
+        except ApiError as exc:
+            if exc.status == 404:
+                log.info("[link] the base has no /api/map (an older robot_link_api): no map page")
+            return None
+        except LinkError:
+            return None
+        if not reply.get("ok") or not reply.get("available"):
+            return None
+        try:
+            out = {k: reply[k] for k in ("version", "resolution", "width", "height", "origin", "frame")}
+            out["changed"] = bool(reply.get("changed", True))
+            if out["changed"]:
+                out["png"] = base64.b64decode(reply["png_base64"], validate=True)
+        except (KeyError, ValueError, TypeError):
+            log.warning("[link] /api/map answered something that is not a map")
+            return None
+        self._map_version = out["version"]
+        return out
+
     def info(self) -> dict:
         """What the operator page shows about the link (plain data)."""
         with self.lock:

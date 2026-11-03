@@ -159,6 +159,25 @@ def test_readings_are_fresh_and_a_reading_keeps_its_time_until_the_next(api):
     assert len(seen) >= 2, "no new reading in 3 s: the contract says about every 0.5 s"
 
 
+def test_the_map_is_a_png_in_the_map_frame_and_the_version_saves_the_download(api):
+    """GET /api/map is optional for a base (404 = none): when there is one it must hold together."""
+    import base64
+    assert api.get("/api/map", token=None)[0] == 401
+    status, body = api.get("/api/map", timeout=6)
+    if status == 404:
+        pytest.skip("this base has no /api/map")
+    assert status == 200 and body["ok"] is True
+    if not body["available"]:
+        pytest.skip("the base has no map yet")
+    assert body["frame"] == "map" and body["changed"] is True
+    assert body["resolution"] > 0 and body["width"] > 0 and body["height"] > 0
+    assert math.isfinite(body["origin"]["x"]) and math.isfinite(body["origin"]["y"])
+    assert base64.b64decode(body["png_base64"]).startswith(b"\x89PNG\r\n\x1a\n")
+    again = api.get("/api/map?have=%d" % body["version"], timeout=6)[1]
+    assert again["version"] == body["version"] and again["changed"] is False and "png_base64" not in again
+    assert api.post("/api/map", {})[0] == 405
+
+
 # ---------------------------------------------------------------------------------------------- the rules for every request
 def test_a_missing_or_wrong_token_is_401_with_the_error_body(api):
     for token in (None, "wrong-token"):

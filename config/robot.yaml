@@ -138,6 +138,11 @@ turtlebot:                # the link to the Dell on the TurtleBot (robot/drivers
   retries: 2              # extra tries of a command (goal, cancel, speaking, max_speed); they are idempotent
   max_goal_distance_m: 40 # a goal further than this from the base is never sent
   floor: null             # the floor the base's map covers (a goal on another floor is never sent); null = any floor of the plan
+  operator_drive: true    # the operator page's map (Go / Stop) and the commands `drive x y [yaw]` / `stop` may drive the base. false: view only.
+                          # The page is reachable from other computers when the display server listens on 0.0.0.0 (display.host): turn this off then,
+                          # or keep that server on 127.0.0.1.
+  map_every_s: 5          # how often the map is refreshed from the base (only a changed map is sent: GET /api/map?have=<version>)
+  state_every_s: 1        # how often the operator page is sent the base's pose, link and drive again (only when one changed): the robot dot on the map
 
 dialogue:
   greet_cooldown_s: 120   # say hello at most once per visit and once per this many seconds (a person leaving the camera's view and returning isn't greeted again)

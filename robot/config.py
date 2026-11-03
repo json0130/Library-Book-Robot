@@ -69,6 +69,9 @@ TURTLEBOT_DEFAULTS = {              # the link to the base; the shared secret is
     "retries": 2,                   # extra tries of an idempotent command (goal, cancel, speaking, max_speed)
     "max_goal_distance_m": 40.0,    # a goal further than this from the base is never sent
     "floor": None,                  # the floor the base's map covers; a goal on another floor is never sent (None: any floor of the plan)
+    "operator_drive": True,         # the /operator page and the terminal may send the base to a map point (`drive x y`, the map's Go button)
+    "map_every_s": 5.0,             # how often the map page asks the base for a changed map (GET /api/map)
+    "state_every_s": 1.0,           # how often the operator page is sent the base's pose again, when it changed
 }
 
 NOISE_DEFAULTS = {                  # config/zones.yaml `noise:`; the instantaneous override below it is the sim's `noise <dB>`

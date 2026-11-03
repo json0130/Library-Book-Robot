@@ -337,7 +337,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         speech = Speech.from_config(cfg)
     assistant = build_assistant(cfg) if use_llm else None
     speaker = cfg.robot.get("devices", {}).get("speaker") or "default"
-    counter = window = counter_task = watch_task = ticker = link_task = feed_task = warm_task = fake_base = app = None
+    counter = window = counter_task = watch_task = ticker = link_task = feed_task = map_task = state_task = warm_task = fake_base = app = None
     try:
         link = None
         if base == "sim":
@@ -397,6 +397,11 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         shown = cfg.display
         link_task = asyncio.create_task(DisplayLink(app.bus, sim.op, shown["host"], int(shown["port"]),
                                                     float(shown["poll_s"])).run())
+        if app.link is not None:                            # the base's map for the operator page, with Go / Stop
+            from robot.map_feed import MapFeed, StatePush
+            map_task = asyncio.create_task(MapFeed(app.link, shown["host"], int(shown["port"]),
+                                                   float(cfg.turtlebot["map_every_s"])).run())
+            state_task = asyncio.create_task(StatePush(app, float(cfg.turtlebot["state_every_s"])).run())
         if use_faces:
             from robot.perception.people import EngagementDetector, PeopleCounter
             from robot.services.vision import Vision
@@ -459,7 +464,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             await sim.settle(settle_s)
         return 0
     finally:
-        for task in (counter_task, watch_task, ticker, link_task, feed_task, warm_task, locals().get("guide_task")):
+        for task in (counter_task, watch_task, ticker, link_task, feed_task, map_task, state_task, warm_task, locals().get("guide_task")):
             if task is not None:
                 task.cancel()
         if app is not None:

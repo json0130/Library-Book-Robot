@@ -42,6 +42,14 @@
   #screen, #log { color: var(--muted); font-size: .85rem; }
   #log { font-family: ui-monospace, monospace; max-height: 16rem; overflow: auto; white-space: pre-wrap; }
   #screen { margin-top: 6px; }
+  /* the base's map: click a place, drag to turn the arrow, press Go */
+  #basemap { width: 100%; display: block; background: #2b3036; border: 1px solid var(--line); border-radius: 8px; touch-action: none;
+             cursor: crosshair; }
+  #maptarget { font: .85rem ui-monospace, monospace; color: var(--muted); margin: 6px 0; min-height: 1.3em; }
+  #mapnote { color: var(--muted); font-size: .8rem; margin-top: 4px; }
+  button#mapgo { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button#mapgo:disabled { background: var(--bg); color: var(--muted); border-color: var(--line); cursor: not-allowed; }
+  button#mapstop { background: #c0392b; color: #fff; border-color: #c0392b; font-weight: 700; }
   #map { display: grid; gap: 8px; }
   .group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
   .group > .gname { font: 600 .7rem ui-monospace, monospace; color: var(--muted); min-width: 5.5rem; }
@@ -105,6 +113,13 @@
       <h2>Base (the TurtleBot) <span id="baseurl"></span></h2>
       <dl id="base"></dl>
       <ul id="skipped"></ul>
+    </section>
+    <section id="mapbox" hidden>
+      <h2>Base map (from the TurtleBot) - click where it should go</h2>
+      <canvas id="basemap" width="600" height="400"></canvas>
+      <div id="maptarget">Click on the map to pick a place. Drag to turn the arrow (the way the robot should face when it gets there).</div>
+      <div class="row"><button id="mapgo" disabled>Go there</button><button id="mapstop">STOP</button><button id="mapclear">Clear</button></div>
+      <div id="mapnote"></div>
     </section>
     <section>
       <h2>Zone (a style setting, not a state)</h2>
@@ -261,6 +276,101 @@ function showBase(s) {
     return li;
   }));
 }
+
+// ---- the base's map: shows /map.png, the robot and the picked target; Go sends `drive x y [yaw]`, STOP sends `stop` ----
+const BM = { meta: null, img: null, target: null, drag: false, link: {}, noteId: 0, scale: 1 };
+const mapCanvas = $("basemap"), mctx = mapCanvas.getContext("2d");
+function mapToPx(x, y) { const m = BM.meta; return [(x - m.origin.x) / m.resolution * BM.scale, (m.height - (y - m.origin.y) / m.resolution) * BM.scale]; }
+function pxToMap(px, py) { const m = BM.meta; return [m.origin.x + px / BM.scale * m.resolution, m.origin.y + (m.height - py / BM.scale) * m.resolution]; }
+function arrow(x, y, yaw, len, color) {
+  const [px, py] = mapToPx(x, y), ex = px + Math.cos(yaw) * len, ey = py - Math.sin(yaw) * len, a = Math.atan2(ey - py, ex - px);
+  mctx.strokeStyle = mctx.fillStyle = color; mctx.lineWidth = 2;
+  mctx.beginPath(); mctx.moveTo(px, py); mctx.lineTo(ex, ey); mctx.stroke();
+  mctx.beginPath(); mctx.moveTo(ex, ey); mctx.lineTo(ex - 8 * Math.cos(a - .45), ey - 8 * Math.sin(a - .45));
+  mctx.lineTo(ex - 8 * Math.cos(a + .45), ey - 8 * Math.sin(a + .45)); mctx.closePath(); mctx.fill();
+}
+function drawMap() {
+  const m = BM.meta, wrap = mapCanvas.parentElement, w = Math.max(200, wrap.clientWidth - 28);
+  if (!m || !BM.img || !BM.img.complete) { mctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height); return; }
+  BM.scale = w / m.width;
+  const dpr = window.devicePixelRatio || 1, h = Math.round(m.height * BM.scale);
+  if (mapCanvas.width !== Math.round(w * dpr) || mapCanvas.height !== Math.round(h * dpr)) {
+    mapCanvas.width = Math.round(w * dpr); mapCanvas.height = Math.round(h * dpr);
+    mapCanvas.style.width = w + "px"; mapCanvas.style.height = h + "px";
+  }
+  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mctx.imageSmoothingEnabled = false;
+  mctx.drawImage(BM.img, 0, 0, w, h);
+  const pose = BM.link.pose, t = BM.target;
+  if (t && pose && pose.x != null) {
+    const [rx, ry] = mapToPx(pose.x, pose.y), [tx, ty] = mapToPx(t.x, t.y);
+    mctx.setLineDash([5, 5]); mctx.strokeStyle = "#e0a030"; mctx.lineWidth = 1.5;
+    mctx.beginPath(); mctx.moveTo(rx, ry); mctx.lineTo(tx, ty); mctx.stroke(); mctx.setLineDash([]);
+  }
+  if (t) {
+    const [tx, ty] = mapToPx(t.x, t.y);
+    mctx.strokeStyle = "#e0a030"; mctx.lineWidth = 3;
+    mctx.beginPath(); mctx.moveTo(tx - 7, ty - 7); mctx.lineTo(tx + 7, ty + 7); mctx.moveTo(tx + 7, ty - 7); mctx.lineTo(tx - 7, ty + 7); mctx.stroke();
+    if (t.yaw != null) arrow(t.x, t.y, t.yaw, 26, "#e0a030");
+  }
+  if (pose && pose.x != null) {
+    const [rx, ry] = mapToPx(pose.x, pose.y);
+    mctx.fillStyle = BM.link.localised ? "#2ecc71" : "#e74c3c"; mctx.strokeStyle = "#000"; mctx.lineWidth = 1.5;
+    mctx.beginPath(); mctx.arc(rx, ry, 7, 0, 7); mctx.fill(); mctx.stroke();
+    arrow(pose.x, pose.y, pose.yaw || 0, 20, "#fff");
+  }
+}
+function mapButtons() {
+  const l = BM.link, ok = l.status === "connected" && l.localised !== false && l.driving !== false, t = BM.target;
+  $("mapgo").disabled = !(t && ok && BM.meta);
+  $("mapgo").title = ok ? "" : "the base is not connected or not localised";
+  const pose = l.pose || {};
+  $("maptarget").textContent = !BM.meta ? "" : !t ? "Click on the map to pick a place. Drag to turn the arrow (the way the robot should face when it gets there)."
+    : `Target x ${t.x.toFixed(2)}  y ${t.y.toFixed(2)}` + (t.yaw != null ? `  facing ${t.yaw.toFixed(2)} rad` : "  (faces the way it travels)")
+      + (pose.x != null ? `  ·  ${Math.hypot(t.x - pose.x, t.y - pose.y).toFixed(1)} m from the robot` : "");
+}
+async function loadMap() {
+  try {
+    const m = await (await fetch("/map.json")).json();
+    if (!m.available) { BM.meta = null; $("mapnote").textContent = "No map from the base yet (the link must be connected and the Dell's map running)."; drawMap(); return; }
+    $("mapnote").textContent = `${m.width} x ${m.height} cells, ${m.resolution} m per cell, map version ${m.version}`;
+    if (!BM.meta || BM.meta.version !== m.version) {
+      BM.meta = m; const img = new Image();
+      img.onload = () => { BM.img = img; drawMap(); mapButtons(); };
+      img.src = "/map.png?v=" + m.version;
+    }
+  } catch (_) {}
+}
+function mapPointer(ev) { const r = mapCanvas.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+mapCanvas.addEventListener("pointerdown", ev => {
+  if (!BM.meta) return;
+  const [px, py] = mapPointer(ev), [x, y] = pxToMap(px, py);
+  BM.target = { x, y, yaw: null, px, py }; BM.drag = true; mapCanvas.setPointerCapture(ev.pointerId); drawMap(); mapButtons();
+});
+mapCanvas.addEventListener("pointermove", ev => {
+  if (!BM.drag || !BM.target) return;
+  const [px, py] = mapPointer(ev);
+  if (Math.hypot(px - BM.target.px, py - BM.target.py) > 10) BM.target.yaw = Math.atan2(-(py - BM.target.py), px - BM.target.px);
+  drawMap(); mapButtons();
+});
+mapCanvas.addEventListener("pointerup", () => { BM.drag = false; });
+$("mapgo").onclick = () => {
+  const t = BM.target; if (!t) return;
+  send("drive", `${t.x.toFixed(2)} ${t.y.toFixed(2)}` + (t.yaw != null ? ` ${t.yaw.toFixed(2)}` : ""));
+};
+$("mapstop").onclick = () => send("stop");
+$("mapclear").onclick = () => { BM.target = null; drawMap(); mapButtons(); };
+window.addEventListener("resize", drawMap);
+window.addEventListener("keydown", ev => { if (ev.key === "Escape") send("stop"); });      // Esc is a stop, too
+function showMap2(s) {
+  const l = s.link || {};
+  $("mapbox").hidden = l.backend !== "turtlebot";
+  if ($("mapbox").hidden) return;
+  BM.link = l;
+  if (s.operator_note && s.operator_note.id !== BM.noteId) { BM.noteId = s.operator_note.id; note(s.operator_note.text); $("mapnote").textContent = s.operator_note.text; }
+  drawMap(); mapButtons();
+}
+loadMap(); setInterval(loadMap, 4000);
 function showState(s) {
   $("path").textContent = s.state || "–";
   $("meta").textContent = `zone ${s.zone} (${s.social})${s.fixed ? ", fixed mode" : ""} · ${s.style || ""}`;
@@ -271,6 +381,7 @@ function showState(s) {
   showBooks(s);
   showMap(s);
   showBase(s);
+  showMap2(s);
   const g = s.guide;                                    // a guided scenario test (python -m robot scenarios live)
   $("guide").hidden = !g;
   if (g) { $("guideno").textContent = `${g.n} of ${g.total} (${g.scenario})`; $("guidetext").textContent = g.text; }

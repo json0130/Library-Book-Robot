@@ -28,6 +28,7 @@ The state machine's screen and the operator controls (see docs/state_machine.md)
 from __future__ import annotations
 
 import argparse
+import base64
 import ipaddress
 import re
 import json
@@ -52,12 +53,14 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
 INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|(?:section|topic):[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
 OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset",
-                     "screen", "next", "abort")
+                     "screen", "next", "abort", "drive", "stop")
+MAX_MAP_BODY = 4 * 1024 * 1024      # the base's map as JSON with a PNG inside (posted by the robot, only from this computer)
 INBOX_KEEP = 200
 REPLAYED = ("screen", "state")          # what a page that connects late is shown straight away
 
 
-REMOTE_GET = ("/operator", "/operator.html", "/events", "/", "/index.html", "/camera.jpg", "/camera.mjpg", "/covers/")     # what another computer may read
+REMOTE_GET = ("/operator", "/operator.html", "/events", "/", "/index.html", "/camera.jpg", "/camera.mjpg", "/covers/",
+              "/map.json", "/map.png")     # what another computer may read
 REMOTE_POST = ("/operator",)                                                    # and the only thing it may send
 
 
@@ -117,6 +120,8 @@ class Hub:
         self.frame: bytes | None = None             # the robot's newest camera picture (JPEG)
         self.frame_n = 0
         self.viewers = 0                            # pages watching the camera stream right now
+        self.map_meta: dict | None = None           # the base's map (robot/map_feed.py): version, resolution, size, origin ...
+        self.map_png: bytes | None = None
 
     def set_frame(self, jpg: bytes) -> None:
         with self.frame_cond:
@@ -221,6 +226,13 @@ def make_handler(hub: Hub):
                     self._send(200, hub.frame, "image/jpeg")
             elif url.path == "/camera.mjpg":
                 self._mjpeg()
+            elif url.path == "/map.json":
+                self._json(200, hub.map_meta or {"available": False})
+            elif url.path == "/map.png":
+                if hub.map_png is None:
+                    self._json(404, {"error": "no map from the base yet"})
+                else:
+                    self._send(200, hub.map_png, "image/png")
             elif url.path == "/ui-version":
                 self._json(200, {"version": ui_version()})
             elif url.path == "/emotion":
@@ -258,6 +270,9 @@ def make_handler(hub: Hub):
                 hub.set_frame(body)
                 self._json(200, {"bytes": length, "viewers": hub.viewers})
                 return
+            if path == "/map":
+                self._map_post()
+                return
             if path not in ("/emotion", "/talk", "/screen", "/state", "/input", "/operator"):
                 self._json(404, {"error": "not found"})
                 return
@@ -282,6 +297,24 @@ def make_handler(hub: Hub):
             hold = data.get("hold_s", data.get("hold"))
             self._emit(lambda: make_event(name if isinstance(name, str) else "",
                                           DEFAULT_HOLD_S if hold is None else hold))
+
+        def _map_post(self) -> None:
+            """The robot hands over the base's map: {"version", "resolution", "width", "height", "origin": {x, y}, "png_base64"}."""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= MAX_MAP_BODY:
+                    raise ValueError
+                data = json.loads(self.rfile.read(length))
+                png = base64.b64decode(data["png_base64"], validate=True)
+                meta = {k: data[k] for k in ("version", "resolution", "width", "height", "origin")}
+                if not png.startswith(b"\x89PNG") or not isinstance(meta["origin"], dict):
+                    raise ValueError
+                meta = {"available": True, "frame": str(data.get("frame", "map")), **meta}
+            except (ValueError, KeyError, TypeError):
+                self._json(400, {"error": "a map needs version, resolution, width, height, origin and png_base64 (a PNG), up to 4 MB"})
+                return
+            hub.map_meta, hub.map_png = meta, png
+            self._json(200, {"version": meta["version"]})
 
         def _state_post(self, path: str, data: dict) -> None:
             """/screen and /state are the robot talking to the pages; /input and /operator are people talking to the robot."""

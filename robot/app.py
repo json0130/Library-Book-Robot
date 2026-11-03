@@ -195,7 +195,8 @@ class App:
                           for b in d.storage.stored()], "style": self.style.summary(),
                 "states": list(d.fsm.spec.leaves()), "tree": d.state_tree(), "leaf": d.leaf,
                 "next": d.next_actions(), "view": self.screen.current.view if self.screen and self.screen.current else "face",
-                "views": list(VIEWS), "guide": getattr(self, "guide_card", None), "link": self.link_info()}
+                "views": list(VIEWS), "guide": getattr(self, "guide_card", None), "link": self.link_info(),
+                "operator_note": getattr(self, "operator_note", None)}
 
     def link_info(self) -> dict:
         """The base link for the operator page: the link, the pose, the drive, the noise, the zone and what was skipped."""

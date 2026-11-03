@@ -317,6 +317,47 @@ class StateAndOperatorEndpointsTest(DisplayServerTest):
             self.assertFalse(allowed(method, path, False), (method, path))
             self.assertTrue(allowed(method, path, True), (method, path))
 
+    def test_the_base_map_is_posted_by_the_robot_and_read_by_the_page(self):
+        import base64
+        from display.server import allowed
+        png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
+        body = {"version": 7, "resolution": 0.05, "width": 4, "height": 3, "origin": {"x": -1.0, "y": -2.0}, "frame": "map",
+                "png_base64": base64.b64encode(png).decode()}
+
+        def post(data, raw=None):
+            req = urllib.request.Request(self.url("/map"), data=raw if raw is not None else json.dumps(data).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            return urllib.request.urlopen(req, timeout=5)
+
+        self.assertEqual(json.load(urllib.request.urlopen(self.url("/map.json"), timeout=5)), {"available": False})
+        with self.assertRaises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(self.url("/map.png"), timeout=5)
+        self.assertEqual(err.exception.code, 404)
+        self.assertEqual(json.load(post(body)), {"version": 7})
+        meta = json.load(urllib.request.urlopen(self.url("/map.json"), timeout=5))
+        self.assertEqual((meta["available"], meta["version"], meta["origin"], meta["frame"]), (True, 7, {"x": -1.0, "y": -2.0}, "map"))
+        self.assertNotIn("png_base64", meta)
+        resp = urllib.request.urlopen(self.url("/map.png"), timeout=5)
+        self.assertEqual((resp.headers["Content-Type"], resp.read()), ("image/png", png))
+        for bad in ({**body, "png_base64": base64.b64encode(b"GIF89a").decode()}, {**body, "png_base64": "!!"},
+                    {k: v for k, v in body.items() if k != "version"}, {**body, "origin": 5}):
+            with self.assertRaises(urllib.error.HTTPError) as err:
+                post(bad)
+            self.assertEqual(err.exception.code, 400, bad)
+        with self.assertRaises(urllib.error.HTTPError):
+            post(None, raw=b"not json")
+        self.assertEqual(json.load(urllib.request.urlopen(self.url("/map.json"), timeout=5))["version"], 7)     # bad posts changed nothing
+        # another computer may look at the map but only the robot's own computer may post one
+        self.assertTrue(allowed("GET", "/map.json", False) and allowed("GET", "/map.png", False))
+        self.assertFalse(allowed("POST", "/map", False))
+        self.assertTrue(allowed("POST", "/map", True))
+
+    def test_drive_and_stop_are_operator_commands(self):
+        for command, arg in (("drive", "1.5 2.0 0.3"), ("stop", "")):
+            req = urllib.request.Request(self.url("/operator"), data=json.dumps({"command": command, "arg": arg}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            self.assertIn("queued", json.load(urllib.request.urlopen(req, timeout=5)))
+
     def test_the_camera_picture_is_posted_by_the_robot_and_streamed_to_the_page(self):
         jpg = b"\xff\xd8\xff\xe0fake-jpeg-data\xff\xd9"
         with self.assertRaises(urllib.error.HTTPError) as cm:                           # nothing yet

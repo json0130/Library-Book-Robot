@@ -70,13 +70,16 @@ class TurtleBotNavigation(Navigation):
             self.speed_limit = mps
             self.link.set_max_speed(mps)
 
-    def check_goal(self, x: float, y: float, yaw: float, floor: Optional[int] = None) -> None:
-        """Raises GoalRejected unless the goal is a real pose inside the floor plan and not absurdly far away."""
+    def check_goal(self, x: float, y: float, yaw: float, floor: Optional[int] = None, in_plan: bool = True) -> None:
+        """Raises GoalRejected unless the goal is a real pose inside the floor plan and not absurdly far away.
+
+        in_plan=False skips the floor-plan test: a point picked on the base's own map (the operator page) is in the base's
+        frame, which is not the plan's, and the base checks it against its map. Everything else is checked as always."""
         if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (x, y, yaw)):
             raise GoalRejected(f"not a pose: ({x}, {y}, {yaw})")
         if self.floor is not None and floor is not None and int(floor) != int(self.floor):
             raise GoalRejected(f"it is on level {floor}, the base drives on level {self.floor}")
-        if self.plan is not None:
+        if self.plan is not None and in_plan:
             level = self.floor if self.floor is not None else floor
             if level is None and self.plan.station is not None:
                 level = self.plan.station.level
@@ -90,11 +93,11 @@ class TurtleBotNavigation(Navigation):
             if far > self.max_goal_distance_m:
                 raise GoalRejected(f"{far:.1f} m from the base, more than the {self.max_goal_distance_m:g} m limit")
 
-    def go_to_pose(self, x: float, y: float, yaw: float, floor: Optional[int] = None) -> Optional[str]:
+    def go_to_pose(self, x: float, y: float, yaw: float, floor: Optional[int] = None, in_plan: bool = True) -> Optional[str]:
         goal_id = self.link.new_goal_id()
         self.current_goal = goal_id
         try:
-            self.check_goal(x, y, yaw, floor)
+            self.check_goal(x, y, yaw, floor, in_plan)
         except GoalRejected as exc:
             log.warning("[nav] goal %s rejected, not sent: %s", goal_id, exc)
             self.link.reject(goal_id, f"rejected: {exc}")

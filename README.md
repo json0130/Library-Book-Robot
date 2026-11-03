@@ -31,7 +31,8 @@ robot/             the robot program: python -m robot check | sim | run
   app.py           wires drivers, core logic and the bus together
   bus.py           in-process asyncio publish/subscribe
   events.py        the events on the bus (ContextChanged, PersonEngaged, BookIdentified, UserChoice, StateTransition, ScreenUpdate, ...)
-  operator.py      operator controls (goto, zone, engage, busy, dropped, pick, book, say, reset): the sim's terminal and the /operator page share it
+  operator.py      operator controls (goto, zone, engage, busy, dropped, pick, book, say, reset, drive, stop): the sim's terminal and the /operator page share it
+  map_feed.py      brings the base's map (GET /api/map) to the operator page, where a click picks where the base drives
   display_link.py  collects button taps and /operator commands from the display server
   config.py        loads config/*.yaml
   perception/      book_reader (the BookReader interface: camera scanner, RFID stub), book_scanner (barcode -> ISBN -> BookIdentified), book_watch (barcode in view -> BookPlaced); people + identity (faces -> person numbers -> ContextChanged; EngagementDetector -> PersonEngaged / PersonNearbyBusy / PersonLeft); noise (the filter for the base's microphones: median, hysteresis)
