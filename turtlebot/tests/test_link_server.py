@@ -71,6 +71,26 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(body["pose"]["frame"], "map")
         self.assertEqual(body["noise"]["unit"], "dBFS")
 
+    def test_map_needs_the_token_and_says_when_there_is_none(self):
+        self.assertEqual(self.call("GET", "/api/map", token=None)[0], 401)
+        self.assertEqual(self.call("GET", "/api/map", token="wrong")[0], 401)
+        status, body, _ = self.call("GET", "/api/map")
+        self.assertEqual((status, body), (200, {"ok": True, "available": False}))
+        self.assertEqual(self.call("POST", "/api/map", {})[0], 405)
+
+    def test_map_have_parameter(self):
+        from robot_link import rules
+        data = tuple([0] * 100)
+        type(self).backend.map_grid = lambda: (1, rules.GridView(10, 10, 0.05, 0.0, 0.0, data))
+        try:
+            status, body, _ = self.call("GET", "/api/map")
+            self.assertEqual((status, body["available"], body["changed"]), (200, True, True))
+            again = self.call("GET", "/api/map?have=%d" % body["version"])[1]
+            self.assertEqual((again["changed"], "png_base64" in again), (False, False))
+            self.assertTrue(self.call("GET", "/api/map?have=abc")[1]["changed"])
+        finally:
+            del type(self).backend.map_grid
+
     # ---- token ----
     def test_missing_wrong_and_empty_tokens_are_401_with_the_error_body(self):
         for token in (None, "nope", "", TOKEN + "x", TOKEN[:-1]):

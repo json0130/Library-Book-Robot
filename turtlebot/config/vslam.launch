@@ -27,6 +27,8 @@
   <arg name="localization"  default="false"/>
   <arg name="navigation"    default="false"/>
   <arg name="database_path" default="$(env HOME)/vslam_map.db"/>
+  <!-- the navigation settings beside this file; $(dirname) is worked out HERE, not inside the included move_base.launch.xml -->
+  <arg name="costmap_params" default="$(dirname)/hokuyo_costmap.yaml"/>
   <arg name="rtabmap_pkg"   default="rtabmap_slam"/>
   <arg name="use_lidar"     default="true"/>
   <!-- does RTAB-Map itself use the LiDAR? (move_base always does when use_lidar is on) -->
@@ -60,8 +62,19 @@
         args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
   </group>
 
-  <!-- ===== Camera (Orbbec, RGB + depth) ===== -->
-  <include file="$(find turtlebot_bringup)/launch/3dsensor.launch"/>
+  <!-- ===== Camera (Orbbec, RGB + depth) =====
+       RTAB-Map reads only the colour picture and the registered depth (rgb_topic, depth_topic). The 3dsensor launch also makes
+       point clouds, disparity pictures, an IR picture and a laser scan from the depth at 30 Hz: nobody here uses them (move_base
+       takes the Hokuyo's scan) and on this 4-core laptop they starve the camera driver, which then drops USB packets (thousands
+       of "Depth frame is corrupt") and RTAB-Map finds matches with 0 inliers. camera_extras:=true brings them back. -->
+  <arg name="camera_extras" default="false"/>
+  <include file="$(find turtlebot_bringup)/launch/3dsensor.launch">
+    <arg name="ir_processing"                   value="$(arg camera_extras)"/>
+    <arg name="depth_processing"                value="$(arg camera_extras)"/>
+    <arg name="disparity_processing"            value="$(arg camera_extras)"/>
+    <arg name="disparity_registered_processing" value="$(arg camera_extras)"/>
+    <arg name="scan_processing"                 value="$(arg camera_extras)"/>
+  </include>
 
   <!-- ===== RTAB-Map visual SLAM ===== -->
   <group ns="rtabmap">
@@ -131,6 +144,6 @@
   <include if="$(arg navigation)"
            file="$(find turtlebot_navigation)/launch/includes/move_base.launch.xml">
     <arg name="laser_topic"       value="$(arg scan_topic)"/>
-    <arg name="custom_param_file" value="$(dirname)/hokuyo_costmap.yaml"/>
+    <arg name="custom_param_file" value="$(arg costmap_params)"/>
   </include>
 </launch>

@@ -16,6 +16,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from robot_link import rules  # noqa: E402
+
 
 def percentile(values, q):
     values = sorted(values)
@@ -49,7 +51,7 @@ def suggest_loc_max_age(stats, floor_s=3.0):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(description="How often does RTAB-Map publish /rtabmap/localization_pose, standing still and moving?")
     p.add_argument("--seconds", type=float, default=60.0)
     args = p.parse_args(argv)
     import rospy
@@ -58,7 +60,15 @@ def main(argv=None):
     rospy.init_node("measure_localisation", anonymous=True, disable_signals=True)
     events = []
     rospy.Subscriber("/odom", Odometry, lambda m: events.append((time.time(), "odom", m.twist.twist.linear.x, m.twist.twist.angular.z)), queue_size=5)
-    rospy.Subscriber("/rtabmap/localization_pose", PoseWithCovarianceStamped, lambda m: events.append((time.time(), "loc", 0.0, 0.0)), queue_size=5)
+    lost = []
+
+    def on_pose(m):
+        if rules.pose_is_trusted(m.pose.covariance, 1.0):
+            events.append((time.time(), "loc", 0.0, 0.0))
+        else:
+            lost.append(time.time())                 # RTAB-Map has lost track and sends the old pose with covariance 9999
+
+    rospy.Subscriber("/rtabmap/localization_pose", PoseWithCovarianceStamped, on_pose, queue_size=5)
     print("Listening for %g s. Keep the robot still for the first half, then move it." % args.seconds)
     end = time.time() + args.seconds
     try:
@@ -68,6 +78,9 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     print()
+    if lost:
+        print("  !! %d of the %d poses came with covariance 9999: RTAB-Map had LOST the robot's position (not counted below)."
+              % (len(lost), len(lost) + sum(1 for e in events if e[1] == "loc")))
     stats = summarise(events)
     for key in ("still", "moving"):
         s = stats[key]

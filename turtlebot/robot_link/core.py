@@ -9,6 +9,7 @@ The HTTP server (server.py) calls `health`, `state`, `handle_goal`, `handle_canc
 Goal states (`nav.status`): idle, active, succeeded, failed, cancelled. A finished goal stays reported until another goal arrives.
 """
 
+import base64
 import logging
 import math
 import threading
@@ -17,7 +18,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, fields
 from typing import Callable, Dict, List, Optional, Tuple
 
-from robot_link import API_VERSION, calibration, rules
+from robot_link import API_VERSION, calibration, mapimage, rules
 from robot_link.activity import RobotActivity
 
 log = logging.getLogger("robot_link")
@@ -46,6 +47,7 @@ class Backend:
     def stop_base(self) -> None: raise NotImplementedError                  # zero velocity
     def set_speaking(self, speaking: bool) -> None: pass                    # publish /robot_speaking
     def set_max_speed(self, m_s: float) -> float: raise Unsupported()       # returns what was applied
+    def map_grid(self): return None                                         # (sequence number, rules.GridView) of the newest map, or None
 
 
 @dataclass
@@ -55,6 +57,7 @@ class Settings:
     min_speed: float = 0.05                     # m/s: the least (below this DWA would not move)
     tf_max_age_s: float = 1.0                   # map -> base_footprint older than this: no pose
     loc_max_age_s: float = 5.0                  # /rtabmap/localization_pose older than this counts only if the robot stood still
+    loc_max_covariance: float = 1.0             # a /rtabmap/localization_pose with a larger x, y or yaw variance is "lost" (RTAB-Map sends 9999)
     still_dist_m: float = 0.05                  # "stood still" = less than this ...
     still_turn_deg: float = 5.0                 # ... and this much turning in the wheel odometry since that localisation
     odom_max_age_s: float = 1.0
@@ -65,6 +68,7 @@ class Settings:
     plan_max_age_s: float = 3.0
     speaking_stale_s: float = 30.0
     robot_noise_grace_s: float = 0.5
+    map_render_min_s: float = 10.0              # GET /api/map draws a changed map at most this often
 
     @classmethod
     def from_mapping(cls, values: Dict[str, object]) -> "Settings":
@@ -91,12 +95,18 @@ class LinkCore:
         self.loc_at: Optional[float] = None                                    # when /rtabmap/localization_pose last came
         self.loc_odom: Optional[Tuple[float, float, float]] = None             # the wheel odometry pose at that moment
         self.loc_count = 0
+        self.loc_lost = 0                                                      # poses RTAB-Map sent while it had lost track
         self.plan: List[Tuple[float, float]] = []
         self.plan_at: Optional[float] = None
         self.reading: Optional[dict] = None                                    # raw dBFS reading: overall, left, right, t, robot_noise
         self._speaking_published = False
         self._ros_down_since: Optional[float] = None
         self._unlocalised_since: Optional[float] = None
+        self.map_lock = threading.Lock()                                       # GET /api/map only; never held with self.lock
+        self.map_cache: Optional[dict] = None
+        self.map_seq: Optional[int] = None
+        self.map_drawn = 0.0
+        self.map_frame = "map"
 
     def configure(self, settings: Settings) -> None:
         with self.lock:
@@ -120,10 +130,14 @@ class LinkCore:
             self.odom = (x, y, yaw, now)
         self.activity.on_odom(vx, wz, now)
 
-    def on_localization_pose(self) -> None:
-        """/rtabmap/localization_pose arrived: RTAB-Map found the robot on the map. Remember where the wheels say we are."""
+    def on_localization_pose(self, trusted: bool = True) -> None:
+        """/rtabmap/localization_pose arrived: RTAB-Map found the robot on the map. Remember where the wheels say we are.
+        trusted=False (its covariance says RTAB-Map has lost track): the base is not localised until it finds itself again."""
         now = self.clock()
         with self.lock:
+            if not trusted:
+                self.loc_at, self.loc_odom, self.loc_lost = None, None, self.loc_lost + 1
+                return
             self.loc_at, self.loc_count = now, self.loc_count + 1
             self.loc_odom = self.odom[:3] if self.odom is not None else None
 
@@ -343,12 +357,40 @@ class LinkCore:
             self._tick(now)
             return {"pose": self._pose_block(now), "nav": self._nav_block(now), "noise": self._noise_block(now), "time": round(now, 3)}
 
+    def map_info(self, have: Optional[int] = None) -> dict:
+        """GET /api/map: the occupancy map as a PNG with where it is in the `map` frame. `have` is the version the client already
+        has: if it is still the newest, only {"version", "changed": false} comes back. The picture is drawn at most every
+        `map_render_min_s` seconds and never holds the core's lock, so a slow request cannot delay the watchdog."""
+        now = self.clock()
+        with self.map_lock:
+            seen = self.b.map_grid()
+            if seen is None:
+                return {"ok": True, "available": False}
+            seq, grid = seen
+            due = self.map_cache is None or (seq != self.map_seq and now - self.map_drawn >= self.s.map_render_min_s)
+            if due:
+                image = mapimage.render(grid)
+                self.map_seq, self.map_drawn = seq, now
+                if image is None:
+                    return {"ok": True, "available": False}
+                self.map_cache = image
+            image = self.map_cache
+            body = {"ok": True, "available": True, "frame": self.map_frame, "version": image["version"],
+                    "resolution": image["resolution"], "width": image["width"], "height": image["height"],
+                    "origin": {"x": image["origin_x"], "y": image["origin_y"]}, "time": round(now, 3)}
+            if have is not None and have == image["version"]:
+                body["changed"] = False
+            else:
+                body["changed"] = True
+                body["png_base64"] = base64.b64encode(image["png"]).decode("ascii")
+            return body
+
     def debug(self) -> dict:
         """For the node's log line: what the localisation rule sees."""
         with self.lock:
             now = self.clock()
             return {"tf_age": self._tf_age(now), "loc_age": None if self.loc_at is None else round(now - self.loc_at, 2),
-                    "still": self._still(now), "localised": self._localised(now), "loc_count": self.loc_count,
+                    "still": self._still(now), "localised": self._localised(now), "loc_count": self.loc_count, "loc_lost": self.loc_lost,
                     "heartbeat_age": None if self.last_heartbeat is None else round(now - self.last_heartbeat, 2),
                     "speaking": self.activity.speaking(now), "moving": self.activity.moving(now),
                     "goal": None if self.goal is None else dict(self.goal)}

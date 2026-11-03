@@ -20,7 +20,7 @@ MAX_BODY = 16 * 1024
 DRAIN_LIMIT = 1024 * 1024               # an over-long body is read and dropped (up to this) so the 413 reaches the client
 SOCKET_TIMEOUT_S = 5.0
 
-GETS = {"/api/health", "/api/state"}
+GETS = {"/api/health", "/api/state", "/api/map"}
 POSTS = {"/api/goal", "/api/cancel", "/api/speaking", "/api/heartbeat", "/api/max_speed"}
 
 
@@ -100,11 +100,24 @@ class Handler(BaseHTTPRequestHandler):
         core = self.server.core
         core.tick()
         if method == "GET":
+            if path == "/api/map":
+                return self.reply(200, core.map_info(self.query_int("have")))
             return self.reply(200, core.health() if path == "/api/health" else core.state())
         body = self.read_json()
         if body is None:
             return
         self.post(path, body, core)
+
+    def query_int(self, name: str) -> Optional[int]:
+        """?name=123 from the URL, None if absent or not a whole number."""
+        for part in self.path.partition("?")[2].split("&"):
+            key, _, value = part.partition("=")
+            if key == name:
+                try:
+                    return int(value)
+                except ValueError:
+                    return None
+        return None
 
     def read_json(self) -> Optional[dict]:
         try:

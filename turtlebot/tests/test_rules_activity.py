@@ -32,6 +32,20 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(L(0.1, 9.0, True, 1.0, 5.0))            # old localisation, stood still
         self.assertTrue(L(1.0, 5.0, False, 1.0, 5.0))           # exactly at the limits
 
+    def test_a_pose_with_covariance_9999_is_not_a_fix(self):
+        def cov(x, y, yaw):
+            c = [0.0] * 36
+            c[0], c[7], c[35] = x, y, yaw
+            return c
+        T = rules.pose_is_trusted
+        self.assertTrue(T(cov(0.001, 0.002, 0.01), 1.0))
+        self.assertTrue(T(cov(1.0, 1.0, 1.0), 1.0))              # at the limit
+        self.assertFalse(T(cov(9999.0, 9999.0, 9999.0), 1.0))    # RTAB-Map: lost
+        self.assertFalse(T(cov(0.001, 0.001, 9999.0), 1.0))      # any one of them
+        self.assertFalse(T(cov(float("nan"), 0.0, 0.0), 1.0))
+        self.assertFalse(T([], 1.0))
+        self.assertFalse(T(None, 1.0))
+
     def test_battery(self):
         self.assertEqual(rules.battery_fraction(16.5), 1.0)
         self.assertEqual(rules.battery_fraction(13.2), 0.0)

@@ -25,6 +25,16 @@ def has_moved(a: Optional[Tuple[float, float, float]], b: Optional[Tuple[float, 
     return math.hypot(b[0] - a[0], b[1] - a[1]) > max_dist_m or abs(wrap_pi(b[2] - a[2])) > max_turn_rad
 
 
+def pose_is_trusted(covariance, limit: float) -> bool:
+    """Is a /rtabmap/localization_pose a real fix? RTAB-Map republishes the last pose with covariance 9999 when it has lost
+    track, so a pose counts only when its x, y and yaw variances (covariance[0], [7], [35]) are all finite and at most `limit`."""
+    try:
+        values = [float(covariance[i]) for i in (0, 7, 35)]
+    except (TypeError, ValueError, IndexError):
+        return False
+    return all(v == v and 0.0 <= v <= limit for v in values)
+
+
 def is_localised(tf_age_s: Optional[float], loc_age_s: Optional[float], still: bool,
                  tf_max_age_s: float, loc_max_age_s: float) -> bool:
     """Does the base know where it is on the map?

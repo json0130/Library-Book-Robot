@@ -134,6 +134,26 @@ class ScriptTest(unittest.TestCase):
         finally:
             shutil.rmtree(home)
 
+    def test_arguments_are_cleared_before_sourcing_ros(self):
+        """`source` passes the script's arguments to catkin's setup.sh, where --local means "ignore the rest of the environment"."""
+        with open(SCRIPT) as f:
+            lines = [l.strip() for l in f if not l.lstrip().startswith("#")]
+        first_source = next(i for i, l in enumerate(lines) if "source /opt/ros/noetic/setup.bash" in l)
+        self.assertIn("set --", lines[:first_source])
+
+    def test_topic_waits_retry_instead_of_asking_once(self):
+        """`rostopic echo -n 1 T/header` fails at once if T is not advertised yet: a start-up wait must poll."""
+        with open(SCRIPT) as f:
+            code = [l for l in f if not l.lstrip().startswith("#")]
+        once = [l.strip() for l in code if "rostopic echo -n 1" in l and "timeout 4" not in l]
+        self.assertEqual(once, [])
+
+    def test_the_camera_type_is_set_not_defaulted(self):
+        with open(SCRIPT) as f:
+            text = f.read()
+        self.assertIn("export TURTLEBOT_BASE=kobuki TURTLEBOT_3D_SENSOR=astra", text)
+        self.assertNotIn("TURTLEBOT_3D_SENSOR:-", text)
+
     def test_the_script_has_no_sudo_in_it(self):
         with open(SCRIPT) as f:
             code = [line for line in f if not line.lstrip().startswith("#")]

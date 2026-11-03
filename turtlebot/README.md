@@ -635,6 +635,8 @@ What runs: `nodes/robot_link_api.py` (port 8010) next to everything from Part 2.
 `move_base` the click-to-go page uses. **If the Jetson's heartbeat stops for 3 s while it has a goal, the base stops** (so does closing the
 program or pulling the network). A goal clicked on the web page wins over the Jetson's; the Jetson is told `manual_override`.
 
+The API also serves the map the click-to-go page uses (`GET /api/map`, from `/map_clean`, else `/map`), so the Jetson can show it and send you to a clicked point. Read-only; it never moves the robot.
+
 **One-time set-up**
 
 1. Choose a secret and put it on both machines (never in the repository):

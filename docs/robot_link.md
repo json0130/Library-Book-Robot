@@ -60,7 +60,7 @@ A request that was understood but **refused for a reason the robot has to act on
 - `ros_ok`: `move_base` is publishing its status (< 3 s old), the base is publishing odometry (< 2 s old) and the RTAB-Map node is registered with the ROS master. While `false` every goal is refused with `503`. It is `false` too when ROS is not running at all (the server then still answers).
 - `localised`: the base knows where it is on the map. **The rule** (all of it must hold):
   1. the `map` -> `base_footprint` transform is fresh (younger than `tf_max_age_s`, 1 s); without it there is no pose at all;
-  2. RTAB-Map has localised at least once since the API started (`/rtabmap/localization_pose` has arrived);
+  2. RTAB-Map has localised at least once since the API started (a `/rtabmap/localization_pose` has arrived **with a real fix**: RTAB-Map republishes its last pose with covariance 9999 when it has lost track, and any pose whose x, y or yaw variance is above `loc_max_covariance`, 1.0, counts as lost and makes the base not localised until a good one comes);
   3. the last `/rtabmap/localization_pose` is younger than `loc_max_age_s`, **or** the wheel odometry shows the robot has not moved more than 5 cm or turned more than 5 degrees since that localisation (a robot that stands still is not lost, and RTAB-Map may well stay quiet then).
   While a goal is active and the base has been not localised for `lost_localisation_after_s` (5 s), the goal is stopped and fails with `lost_localisation`.
 - `battery`: 0..1 from the Kobuki's battery voltage (`/mobile_base/sensors/core`, linear between 13.2 V and 16.5 V: a rough guide, the voltage sags under load), or `null` if unknown.
@@ -129,6 +129,20 @@ A cable pulled out, the Jetson crashing or rebooting, or a stalled network there
 
 Request: `{"m_s": 0.3}` → `{"ok": true, "applied": 0.25}`. The Jetson sends the interaction style's speed limit whenever the style changes (0.3 / 0.5 / 0.6 m/s). The Dell applies `min(m_s, its own limit)` to the DWA planner's `max_vel_x` (dynamic_reconfigure on `/move_base/DWAPlannerROS`; the limit is `_max_speed_limit`, 0.25 m/s as in `turtlebot/config/hokuyo_costmap.yaml`; the velocity smoother's 0.8 m/s is not touched) and reports what it applied. It never goes below 0.05 m/s. `404` means this base cannot do it (the local planner is not DWA, or it is switched off): the Jetson then never asks again. `503` means `move_base` is not running right now: the Jetson asks again when the link comes back. The original `max_vel_x` is put back when the API stops.
 
+### `GET /api/map` (optional)
+
+The base's occupancy map, so the Jetson's operator page can draw it and let a person pick where to go. `404` means this Dell has no map endpoint; the Jetson then shows no map page and everything else works.
+
+`GET /api/map` → 
+```json
+{"ok": true, "available": true, "frame": "map", "version": 2574221569, "resolution": 0.05, "width": 140, "height": 100,
+ "origin": {"x": -0.5, "y": -0.5}, "time": 1793587063.9, "changed": true, "png_base64": "iVBORw0KGgo..."}
+```
+- `png_base64` is an 8-bit greyscale PNG, `width` x `height` cells, `resolution` metres per cell. Grey 205 is unknown, 254 free, 160 uncertain, 0 an obstacle. **Row 0 of the picture is the top, the largest y.** Rows and columns that are all unknown are cut off, so `origin` is where the picture's **bottom-left corner** is in the `map` frame: a map point (x, y) is at pixel column `(x - origin.x) / resolution` and row `height - (y - origin.y) / resolution`.
+- `version` identifies the picture (a hash of it). `GET /api/map?have=<version>` answers `{"ok": true, "available": true, "version": N, "changed": false, ...}` with no `png_base64` when the client already has the newest, so polling every few seconds costs almost nothing.
+- `{"ok": true, "available": false}` while there is no map yet.
+- Where it comes from: `/map_clean` (the cleaned map the click-to-go page shows) while that is being published, else `/map` (`_map_topics`). A changed map is drawn at most every 10 s (`_map_render_min_s`) and never delays the heartbeat watchdog; the first picture of a big map takes a fraction of a second, so the Jetson allows this call 5 s instead of the usual 1 s and does not count it towards the link's status.
+
 ## 3. What the Jetson does with it
 
 - Starts the link in the background (it never blocks the robot's event loop): a heartbeat every 1 s and a state poll every 0.5 s on one thread, and commands (goal, cancel, speaking, max_speed) on another, in order, with up to 2 retries (they are idempotent). `GET /api/health` is read every 5 s.
@@ -136,6 +150,7 @@ Request: `{"m_s": 0.3}` → `{"ok": true, "applied": 0.25}`. The Jetson sends th
 - **A goal** gets a new `goal_id` each time it is sent. The outcome is read from `nav.status` of `/api/state` for that id and published once: `NavArrived`, `NavFailed` (with the `reason`) or `NavCancelled`. While `active`, `NavProgress` carries `distance_left`.
 - A goal the Jetson sent but the Dell never confirmed is resent (same id) until it is accepted, the link is lost or another goal replaces it.
 - When nothing answers at all the link goes *lost* with the reason `base unreachable at <url>: check that the ssh tunnel is running (scripts/robot_link_tunnel.sh) or the Dell's IP (turtlebot.base_url), and that robot_link_api is running there`.
+- **The map page**: every `turtlebot.map_every_s` (5 s) the robot reads `GET /api/map?have=<version>` and, when the map changed, hands it to the display server (`robot/map_feed.py`), which shows it on the operator page at `/operator` next to the live pose. A click on the map picks a point (dragging turns the arrow); **Go there** sends the operator command `drive x y [yaw]` and **STOP** (or Esc) sends `stop`. `drive` is refused with the reason shown on the page while the dialogue is on a trip of its own, when the link is down or the base is not localised, or when the point is outside the map or in a wall (`turtlebot.max_goal_distance_m`, the floor plan, and the Dell's own checks all apply). `turtlebot.operator_drive: false` makes the page view-only.
 - **Never sent**: a goal outside the floor plan's bounds, or further from the base than `turtlebot.max_goal_distance_m`. It is rejected on the Jetson, logged, and counted as failed.
 
 ## 4. Behaviour you can test without hardware
@@ -278,7 +293,7 @@ The robot also compares the Dell's `time` with its own on every health check and
 | File | |
 |---|---|
 | `nodes/robot_link_api.py` | the node: HTTP on port 8010, connected to ROS in a thread (the server answers even with no ROS master) |
-| `robot_link/` | the logic in plain Python 3.8 with no ROS (`core.py` the API's behaviour, `server.py` HTTP, `rules.py`, `activity.py`, `calibration.py`, `netaddr.py`); `dev_server.py` serves it over a simulated base |
+| `robot_link/` | the logic in plain Python 3.8 with no ROS (`core.py` the API's behaviour, `server.py` HTTP, `rules.py`, `activity.py`, `calibration.py`, `netaddr.py`, `mapimage.py` the map as a PNG); `dev_server.py` serves it over a simulated base |
 | `calibrate_noise.py` | gain / AGC check and the guided 3-level calibration against a phone |
 | `measure_localisation.py` | listens to `/rtabmap/localization_pose` standing still and moving, suggests `_loc_max_age_s` |
 | `run_robot_link.sh` | starts the whole stack including the API; refuses if another ROS stack is running |

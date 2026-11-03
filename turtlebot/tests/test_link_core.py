@@ -94,6 +94,18 @@ class LocalisedRuleTest(unittest.TestCase):
         drive_clock(core, clock, 20, step=1.0)
         self.assertTrue(core.localised())
 
+    def test_a_pose_rtabmap_sent_while_lost_means_not_localised(self):
+        core, _, clock = make_core()
+        drive_clock(core, clock, 10, step=0.5)
+        self.assertTrue(core.localised())
+        core.on_localization_pose(trusted=False)              # covariance 9999: RTAB-Map has lost the robot
+        self.assertFalse(core.localised(), "standing still does not make a lost robot found")
+        drive_clock(core, clock, 20, step=1.0)
+        self.assertFalse(core.localised())
+        self.assertEqual(core.debug()["loc_lost"], 1)
+        core.on_localization_pose(trusted=True)               # it finds the place again
+        self.assertTrue(core.localised())
+
     def test_stale_odometry_never_counts_as_still(self):
         core, _, clock = make_core()
         for _ in range(100):                                  # the transform stays fresh, the odometry stops arriving

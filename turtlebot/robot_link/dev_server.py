@@ -34,6 +34,18 @@ class SimBackend(Backend):
 
     def ros_ok(self): return True
     def battery(self): return 0.8
+    def map_grid(self):
+        """A 6 x 4 m room with a box in it (origin -0.5, -0.5), so the Jetson's map page has something to show."""
+        if getattr(self, "_grid", None) is None:
+            w, h, res = 140, 100, 0.05
+            data = [-1] * (w * h)
+            for cy in range(5, h - 5):
+                for cx in range(5, w - 5):
+                    wall = cx in (5, w - 6) or cy in (5, h - 6) or (60 <= cx < 80 and 40 <= cy < 55)
+                    data[cy * w + cx] = 100 if wall else 0
+            from robot_link import rules
+            self._grid = rules.GridView(w, h, res, -0.5, -0.5, tuple(data))
+        return 1, self._grid
     def send_goal(self, goal_id, x, y, yaw):
         with self.lock:
             self.goal = (goal_id, x, y, yaw)

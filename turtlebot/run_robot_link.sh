@@ -54,6 +54,17 @@ stop_all() {
 }
 trap stop_all INT TERM
 
+# wait_topic SECONDS TOPIC: true once TOPIC has delivered a message. `rostopic echo TOPIC/field` fails at once when the topic has not
+# been advertised yet (a node still starting), so ask again every few seconds instead of once with a long timeout.
+wait_topic() {
+    local limit=$1 topic=$2 end=$(( SECONDS + $1 ))
+    while [ $SECONDS -lt $end ]; do
+        timeout 4 rostopic echo -n 1 "$topic" > /dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
 start() {
     local name=$1; shift
     if [ $DRY -eq 1 ]; then echo "    would start $name: $*"; return; fi
@@ -63,9 +74,14 @@ start() {
 
 # ---- 0. only one ROS stack at a time ----
 # a non-interactive shell (ssh, nohup) has not read ~/.bashrc
+# `source` hands our own arguments on to the setup files, and catkin's setup.sh passes them to _setup_util.py, where `--local` means
+# "forget everything else in the environment" (so /opt/ros/noetic vanished and roslaunch could not find turtlebot_bringup).
+# We have read our options already: clear them before sourcing anything.
+set --
 command -v roslaunch > /dev/null || source /opt/ros/noetic/setup.bash
 [ -f ~/turtlebot2/devel/setup.bash ] && source ~/turtlebot2/devel/setup.bash
-export TURTLEBOT_BASE=${TURTLEBOT_BASE:-kobuki} TURTLEBOT_3D_SENSOR=${TURTLEBOT_3D_SENSOR:-astra}
+# set outright, as ~/.bashrc does: sourcing the workspace sets TURTLEBOT_3D_SENSOR=asus_xtion_pro, which starts the wrong camera driver
+export TURTLEBOT_BASE=kobuki TURTLEBOT_3D_SENSOR=astra
 export ROS_MASTER_URI=${ROS_MASTER_URI:-http://localhost:11311} ROS_HOSTNAME=${ROS_HOSTNAME:-localhost}   # ROS stays on this computer
 
 # PIDs of processes whose command line matches a pattern, without this script and its parents.
@@ -161,7 +177,7 @@ say "1/6 Starting robot base (minimal.launch) ..."
 start minimal roslaunch turtlebot_bringup minimal.launch
 if [ $DRY -eq 0 ]; then
     until rostopic list > /dev/null 2>&1; do sleep 1; done
-    if ! timeout 20 rostopic echo -n 1 /odom/header > /dev/null 2>&1; then
+    if ! wait_topic 20 /odom/header > /dev/null 2>&1; then
         warn "No /odom from the robot base. Is the base switched ON and its USB plugged in?"; stop_all
     fi
 fi
@@ -174,18 +190,18 @@ start vslam roslaunch "$REPO/config/vslam.launch" localization:=true navigation:
 start scan_filter python3 "$REPO/nodes/scan_filter.py"
 start map_cleaner python3 "$REPO/nodes/map_cleaner.py"
 if [ $DRY -eq 0 ]; then
-    if ! timeout 20 rostopic echo -n 1 /hokuyo_scan/header > /dev/null 2>&1; then warn "No LiDAR data. See $LOG/vslam.log"; stop_all; fi
-    if ! timeout 30 rostopic echo -n 1 /camera/rgb/camera_info/header > /dev/null 2>&1; then warn "No camera images. See $LOG/vslam.log"; stop_all; fi
-    if ! timeout 60 rostopic echo -n 1 /map/info > /dev/null 2>&1; then warn "RTAB-Map did not load the map. See $LOG/vslam.log"; stop_all; fi
-    if ! timeout 30 rostopic echo -n 1 /map_clean/info > /dev/null 2>&1; then warn "Map cleaner is not working. See $LOG/map_cleaner.log"; stop_all; fi
-    if ! timeout 30 rostopic echo -n 1 /move_base/status/header > /dev/null 2>&1; then warn "move_base did not start. See $LOG/vslam.log"; stop_all; fi
+    if ! wait_topic 60 /hokuyo_scan/header > /dev/null 2>&1; then warn "No LiDAR data. See $LOG/vslam.log"; stop_all; fi
+    if ! wait_topic 60 /camera/rgb/camera_info/header > /dev/null 2>&1; then warn "No camera images. See $LOG/vslam.log"; stop_all; fi
+    if ! wait_topic 120 /map/info > /dev/null 2>&1; then warn "RTAB-Map did not load the map. See $LOG/vslam.log"; stop_all; fi
+    if ! wait_topic 120 /map_clean/info > /dev/null 2>&1; then warn "Map cleaner is not working. See $LOG/map_cleaner.log"; stop_all; fi
+    if ! wait_topic 90 /move_base/status/header > /dev/null 2>&1; then warn "move_base did not start. See $LOG/vslam.log"; stop_all; fi
 fi
 say "    camera + LiDAR + navigation OK"
 
 # ---- 4. noise logger (its own files, not the ones in the home folder) ----
 say "3/6 Starting noise logger ..."
 start noise_logger python3 "$REPO/nodes/noise_logger.py" _file:="$DATA/noise_log.csv"
-[ $DRY -eq 0 ] && { timeout 15 rostopic echo -n 1 /noise_level > /dev/null 2>&1 || warn "No noise readings yet - see $LOG/noise_logger.log"; }
+[ $DRY -eq 0 ] && { wait_topic 15 /noise_level > /dev/null 2>&1 || warn "No noise readings yet - see $LOG/noise_logger.log"; }
 
 # ---- 5. click-to-go page ----
 say "4/6 Starting the click-to-go web page ..."

@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 import unittest
 
 from support import Clock  # noqa: F401  (puts turtlebot/ on the path)
@@ -21,6 +24,18 @@ class MeasureTest(unittest.TestCase):
         s = m.summarise([])
         self.assertEqual((s["still"]["n"], s["moving"]["n"]), (0, 0))
         self.assertIsNone(s["moving"]["median"])
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+class CommandLineTest(unittest.TestCase):
+    def test_command_line_parses(self):
+        """--help used to crash (the description came from a module docstring that was not there)."""
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "measure_localisation.py"), "--help"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--seconds", r.stdout)
 
 
 if __name__ == "__main__":

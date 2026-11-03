@@ -110,6 +110,8 @@ class RosBackend(Backend):
         self.status_at = self.odom_at = self.battery_at = 0.0
         self.volts = None
         self.grid = None
+        self.grid_seq = 0
+        self.map_rank, self.map_at = 99, 0.0            # which map topic the grid came from (0 = the first in _map_topics) and when
         self.epoch = 0
         self.epoch_lock = threading.Lock()
         self.jobs = queue.Queue()
@@ -172,14 +174,14 @@ class RosBackend(Backend):
             self.core.configure(Settings.from_mapping(dict(self.p.settings.__dict__, **values)))
         p = self.p
         rospy.Subscriber(p["odom_topic"], Odometry, self._odom, queue_size=5)
-        rospy.Subscriber(p["localization_topic"], PoseWithCovarianceStamped, lambda m: self.core.on_localization_pose(), queue_size=5)
+        rospy.Subscriber(p["localization_topic"], PoseWithCovarianceStamped, self._localization, queue_size=5)
         rospy.Subscriber(p["plan_topic"], Path, lambda m: self.core.on_plan([(s.pose.position.x, s.pose.position.y) for s in m.poses]),
                          queue_size=2)
         rospy.Subscriber(p["noise_topic"], Float32MultiArray, self._noise, queue_size=5)
         rospy.Subscriber(p["battery_topic"], SensorState, self._battery, queue_size=2)
         rospy.Subscriber("/move_base/status", GoalStatusArray, lambda m: setattr(self, "status_at", time.time()), queue_size=2)
-        for topic in p["map_topics"].split(","):
-            rospy.Subscriber(topic.strip(), OccupancyGrid, self._map, queue_size=1)
+        for rank, topic in enumerate(p["map_topics"].split(",")):
+            rospy.Subscriber(topic.strip(), OccupancyGrid, self._map, callback_args=rank, queue_size=1)
         self.speaking_pub = rospy.Publisher(p["speaking_topic"], Bool, queue_size=1, latch=True)
         self.speaking_pub.publish(Bool(data=False))
         self.zero_pubs = [rospy.Publisher(t.strip(), Twist, queue_size=1) for t in p["zero_topics"].split(",") if t.strip()]
@@ -192,6 +194,14 @@ class RosBackend(Backend):
         rospy.on_shutdown(self.restore_speed)
 
     # ------------------------------------------------------------------ what ROS says
+    def _localization(self, m):
+        trusted = rules.pose_is_trusted(m.pose.covariance, self.core.s.loc_max_covariance)
+        if trusted != getattr(self, "_loc_trusted", None):
+            log.info("RTAB-Map %s (localization_pose covariance x %.4g, yaw %.4g)", "has found the robot on the map" if trusted
+                     else "has lost track of the robot: the base reports not localised", m.pose.covariance[0], m.pose.covariance[35])
+            self._loc_trusted = trusted
+        self.core.on_localization_pose(trusted)
+
     def _odom(self, m):
         self.odom_at = time.time()
         o = m.pose.pose.orientation
@@ -205,9 +215,14 @@ class RosBackend(Backend):
     def _battery(self, m):
         self.volts, self.battery_at = m.battery / 10.0, time.time()        # Kobuki: tenths of a volt
 
-    def _map(self, m):
+    def _map(self, m, rank=0):
+        now = time.time()
+        if rank > self.map_rank and now - self.map_at < 30.0:           # the cleaned map is alive: do not flip back to the raw one
+            return
+        self.map_rank, self.map_at = rank, now
         i = m.info
         self.grid = rules.GridView(i.width, i.height, i.resolution, i.origin.position.x, i.origin.position.y, m.data)
+        self.grid_seq += 1
 
     def _tf_loop(self):
         rospy = self.rospy
@@ -237,6 +252,10 @@ class RosBackend(Backend):
         if self.volts is None or time.time() - self.battery_at > 30:
             return None
         return rules.battery_fraction(self.volts, self.p["battery_empty_v"], self.p["battery_full_v"])
+
+    def map_grid(self):
+        grid = self.grid
+        return None if grid is None else (self.grid_seq, grid)
 
     def outside_map(self, x, y):
         return self.grid is not None and self.grid.refuses(x, y)
