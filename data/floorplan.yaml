@@ -1,22 +1,29 @@
 # SAMPLE floor plan for development and testing (docs/catalog.md explains the format).
 # Coordinates are metres in the same map frame as data/shelves.csv (map_x, map_y), one frame per floor; x grows
-# to the right of the plan and y downwards. Every rectangle and landmark below is a PLACEHOLDER laid out around the
+# to the right of the plan and y downwards (a floor with a `base_map` is the exception: it is drawn as the robot's map,
+# so y grows UP there, and its x0 / y0 give the floor's lowest x and y, which can be negative). Every rectangle and landmark below is a PLACEHOLDER laid out around the
 # sample shelves until the real building is surveyed. The sample shelves are on levels 1, 2 and 3, so the plan has
 # three floors (every shelf's section must be a rectangle on its floor; tools/catalog_check.py checks that).
 
 floors:
   - level: 1
     name: Ground floor
-    width: 12
-    height: 8
+    # The robot's own map of the lab (display/ui/maps/lab.json, made with tools/map_to_plan.py from the TurtleBot's saved
+    # map) is drawn under this floor, in the map frame: x to the right, y UP, so x0/y0 are the lowest x and y. The sections
+    # and landmarks below are placeholders placed on that map until the real shelves are surveyed (tools/teach_poses.py).
+    x0: -7.3
+    y0: -2.2
+    width: 10.6
+    height: 8.3
+    base_map: lab
     sections:
-      - {name: Fiction, x: 0.5, y: 0.5, w: 4.0, h: 3.0}
+      - {name: Fiction, x: -2.2, y: 0.4, w: 2.0, h: 1.2}
     landmarks:
-      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
-      - {kind: help_desk, name: Help desk, x: 7.5, y: 6.0}
-      - {kind: entrance, name: Entrance, x: 6.0, y: 7.8}
-      - {kind: exit, name: Exit, x: 4.8, y: 7.8}
-      - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
+      - {kind: lift, name: Lift, x: -5.0, y: 1.5}
+      - {kind: help_desk, name: Help desk, x: 1.0, y: 2.3}
+      - {kind: entrance, name: Entrance, x: 1.0, y: 0.0}
+      - {kind: exit, name: Exit, x: 0.0, y: 0.5}
+      - {kind: toilets, name: Toilets, x: -5.5, y: 1.0}
 
   - level: 2
     name: Level 2
@@ -42,6 +49,6 @@ floors:
 
 station:                  # where the robot waits for visitors (its "you are here" when it is not driving)
   level: 1
-  x: 9.0
-  y: 5.5
-  yaw: 3.14
+  x: -4.0
+  y: 2.5
+  yaw: 0.0

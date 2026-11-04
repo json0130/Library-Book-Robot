@@ -27,6 +27,7 @@ import urllib.parse
 from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional
 
+from robot.services.routing import length as routing_length
 from robot.events import (ThinkingEnded, ThinkingStarted, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, LocationResolved,
                           NavigationRequested, RecommendationsReady, ReturningProgress, ScreenUpdate, StateEntered,
                           StoringBook, UserChoice, UserUtterance)
@@ -82,6 +83,9 @@ class DirectionsPayload(_Payload):
     width: float
     height: float
     sections: list = field(default_factory=list)     # [{"name", "x", "y", "w", "h", "highlight"}]
+    x0: float = 0.0                         # the floor spans x0..x0+width, y0..y0+height in the map frame
+    y0: float = 0.0
+    base_map: str = ""                      # a picture of the robot's own map to draw under the plan (display/ui/maps/<name>.json)
     landmarks: list = field(default_factory=list)    # [{"kind", "name", "x", "y"}]
     robot: Optional[dict] = None            # {"x", "y"} when the robot is on this floor
     start: Optional[dict] = None            # where the drawn path starts {"x", "y", "label"}
@@ -185,8 +189,13 @@ def directions(plan, kind: str, title: str, level: int, robot: Optional[tuple], 
         steps.append(f"Go up to Level {level}" if level > robot[0] else f"Go down to Level {level}")
     path = []
     if start is not None and target is not None:
-        path = l_path((start["x"], start["y"]), target)
-        distance += l_length((start["x"], start["y"]), target)
+        way = plan.route(level, (start["x"], start["y"]), target)
+        if way:                                           # round the walls of the robot's own map
+            path = [list(p) for p in way]
+            distance += routing_length(way)
+        else:
+            path = l_path((start["x"], start["y"]), target)
+            distance += l_length((start["x"], start["y"]), target)
     if kind == "floor":
         names = ", ".join(s.name for s in floor.sections) or "no sections yet"
         steps.append(f"{floor.name}: {names}")
@@ -197,6 +206,7 @@ def directions(plan, kind: str, title: str, level: int, robot: Optional[tuple], 
     highlight = {section.lower()} if section else ({s.name.lower() for s in floor.sections} if kind == "floor" else set())
     return DirectionsPayload(
         kind=kind, title=title, level=level, floor_name=floor.name, width=floor.width, height=floor.height,
+        x0=floor.x0, y0=floor.y0, base_map=floor.base_map,
         sections=[{"name": s.name, "x": s.x, "y": s.y, "w": s.w, "h": s.h, "highlight": s.name.lower() in highlight}
                   for s in floor.sections],
         landmarks=[{"kind": m.kind, "name": m.name, "x": m.x, "y": m.y} for m in floor.landmarks],

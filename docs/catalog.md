@@ -170,8 +170,11 @@ per floor, x to the right and y down the plan. The sample has three floors becau
 floors:
   - level: 3                 # the floor number used in shelves.csv
     name: Level 3            # shown on the screen
-    width: 12                # the floor's size in metres
+    width: 12                # the floor's size in metres ...
     height: 8
+    x0: 0                    # ... and its lowest x and y in the map frame (optional, 0): a survey's origin is where the robot
+    y0: 0                    #     started, so a real floor is often at negative coordinates and spans x0..x0+width
+    base_map: lab            # optional: the robot's own map drawn under the plan (see "The robot's own map" below)
     sections:                # one rectangle per section: x, y = top-left corner, w, h = size (metres)
       - {name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7}
       - {name: History, x: 5.1, y: 0.3, w: 1.9, h: 2.7}
@@ -189,7 +192,7 @@ station:                     # where the robot waits for visitors: its "you are 
   zone most of that section's shelves have in `shelves.csv`. Only used when the robot drives with a real base and
   `zone_from_pose: true` in `config/zones.yaml` (the zone follows the section the base stands in).
 - **With the real base, these numbers are the base's.** Poses are in the RTAB-Map `map` frame, which is the frame of these two
-  files, so a floor's `0..width` x `0..height` must contain the area the base maps. `python tools/teach_poses.py` records
+  files, so a floor's `x0..x0+width` x `y0..y0+height` (from 0 unless the floor says otherwise) must contain the area the base maps. `python tools/teach_poses.py` records
   shelves, section corners, landmarks and the station from the live pose (it backs the files up and keeps their comments);
   see [robot_link.md](robot_link.md).
 - Give every floor a `lift` landmark: directions to another floor start with "Take the lift to Level N" and draw the
@@ -198,10 +201,32 @@ station:                     # where the robot waits for visitors: its "you are 
   ask "where is the toilet / help desk / exit / entrance": put one on every floor that has one (the robot names the nearest to
   its station first and the other floors after it). The sample plan's positions are placeholders like the rest of it. A kind
   with no landmark makes the robot say it has no such place on its map and send the visitor to the help desk.
-- The path is **approximate** (straight or L-shaped, first along x then y); it does not avoid shelves or walls.
+- The path is **approximate**. On a floor with a `base_map` it is a route round the walls of the robot's own map (below); on any other
+  floor it is straight or L-shaped, first along x then y, and does not avoid shelves or walls.
 - `tools/catalog_check.py` loads the plan and reports, as errors, a rectangle outside its floor, a section name used
   twice, a landmark of an unknown kind, a shelf whose section is not on its floor, and a shelf whose `map_x`/`map_y`
   lies outside its section's rectangle.
+
+### The robot's own map
+
+A floor can name a picture of the map the robot drew (`base_map: lab`), which the visitor screen draws under the sections and
+the route, so the plan matches what the TurtleBot saw. Make it from the `.pgm` and `.yaml` that `map_saver` wrote (the
+Dell's `~/vslam_map.yaml` is the lab):
+
+```bash
+python tools/map_to_plan.py ~/vslam_map.yaml lab        # writes display/ui/maps/lab.json (numpy and scipy, no ROS)
+```
+
+The picture is in the map frame (metres, **y up**, like every pose), so a floor with a `base_map` is drawn as the map is, not
+mirrored: sections are rectangles `x, y` (the lowest corner) `w, h` in that frame, `x0` / `y0` give the floor's own lowest
+corner, and the floor must cover the picture (`bounds` in the JSON). The converter closes speckle in the occupancy grid,
+drops specks of noise and writes the floor and the walls as two SVG paths, plus a coarse grid of where a person can walk (0.2 m
+from any wall). `directions` routes over that grid (`robot/services/routing.py`, A* with the corners pulled tight) so the
+line follows the corridor; the endpoints are always the true start and target, joined to the nearest ground when one stands in a
+shelf. Other floors keep drawing the plain plan. Re-run the converter when the robot maps again, and move the sections and
+landmarks with `tools/teach_poses.py`: **the sample level 1 is placed on the lab map with placeholder positions** (the shelf,
+section, landmarks and station are still invented, only the map under them is real). A shelf's pose must be on ground the
+robot can stand on, and `tests/test_routing.py` checks the station and shelf 1-FIC-A are.
 
 ## Covers
 

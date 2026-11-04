@@ -56,8 +56,9 @@ class Settings:
     max_speed_limit: float = 0.25               # m/s: the most /api/max_speed will ever apply (the DWA limit in hokuyo_costmap.yaml)
     min_speed: float = 0.05                     # m/s: the least (below this DWA would not move)
     tf_max_age_s: float = 1.0                   # map -> base_footprint older than this: no pose
-    loc_max_age_s: float = 5.0                  # /rtabmap/localization_pose older than this counts only if the robot stood still
-    loc_max_covariance: float = 1.0             # a /rtabmap/localization_pose with a larger x, y or yaw variance is "lost" (RTAB-Map sends 9999)
+    loc_max_age_s: float = 5.0                  # a localisation older than this counts only if the robot stood still
+    loc_max_covariance: float = 1.0             # a localisation with a larger x, y or yaw variance is "lost" (RTAB-Map sends 9999);
+                                                # robot_link_api sets 0.1 for AMCL (LOCALISERS there; tune it in the comparison runs)
     still_dist_m: float = 0.05                  # "stood still" = less than this ...
     still_turn_deg: float = 5.0                 # ... and this much turning in the wheel odometry since that localisation
     odom_max_age_s: float = 1.0
@@ -131,8 +132,9 @@ class LinkCore:
         self.activity.on_odom(vx, wz, now)
 
     def on_localization_pose(self, trusted: bool = True) -> None:
-        """/rtabmap/localization_pose arrived: RTAB-Map found the robot on the map. Remember where the wheels say we are.
-        trusted=False (its covariance says RTAB-Map has lost track): the base is not localised until it finds itself again."""
+        """A localisation arrived (/rtabmap/localization_pose or /amcl_pose): the robot was found on the map. Remember where the
+        wheels say we are. trusted=False (its covariance says the localiser has lost track): the base is not localised until it
+        finds itself again."""
         now = self.clock()
         with self.lock:
             if not trusted:

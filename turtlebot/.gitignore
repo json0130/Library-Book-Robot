@@ -14,3 +14,7 @@ __pycache__/
 .robot_link_env
 run_data/
 *.db.part
+
+# LiDAR maps made by run_lidar_mapping.sh (map_saver output: <name>.pgm, <name>.yaml, a .png and .bak-* copies)
+maps/*
+!maps/README.md

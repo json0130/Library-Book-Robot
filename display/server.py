@@ -47,16 +47,19 @@ KEEPALIVE_S = 15.0
 MAX_BODY = 512 * 1024        # a 2-minute talk envelope is about 25 KB
 DEFAULT_TALK_S = 3.0
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
-                 ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+                 ".png": "image/png", ".json": "application/json", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 
 
 INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|(?:section|topic):[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
 OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset",
-                     "screen", "next", "abort", "drive", "stop")
+                     "screen", "next", "abort", "drive", "stop", "theme", "look")
 MAX_MAP_BODY = 4 * 1024 * 1024      # the base's map as JSON with a PNG inside (posted by the robot, only from this computer)
 INBOX_KEEP = 200
-REPLAYED = ("screen", "state")          # what a page that connects late is shown straight away
+REPLAYED = ("screen", "state", "theme", "look")          # what a page that connects late is shown straight away
+# How the screen looks is the display's own business, not the robot's: the operator page sets it here and every open page
+# (the kiosk, the preview in the operator page) follows. look: 1 the original screen, 2 the second look (ui2.css, views2.js).
+DISPLAY_SETTINGS = {"theme": ("dark", "light"), "look": ("1", "2")}
 
 
 REMOTE_GET = ("/operator", "/operator.html", "/events", "/", "/index.html", "/camera.jpg", "/camera.mjpg", "/covers/",
@@ -336,6 +339,13 @@ def make_handler(hub: Hub):
                 if command not in OPERATOR_COMMANDS or not isinstance(arg, str) or len(arg) > 500:
                     self._json(400, {"error": f"command must be one of {', '.join(OPERATOR_COMMANDS)}"})
                     return
+                if command in DISPLAY_SETTINGS:
+                    value = arg.strip().lower()
+                    if value not in DISPLAY_SETTINGS[command]:
+                        self._json(400, {"error": f"{command} must be one of {', '.join(DISPLAY_SETTINGS[command])}"})
+                        return
+                    self._json(200, {command: value, "clients": hub.publish({command: value})})
+                    return
                 self._json(200, {"queued": hub.inbox.add({"type": "operator", "command": command, "arg": arg})["id"]})
 
         def _cover(self, isbn: str, title: str, author: str) -> None:
@@ -455,9 +465,15 @@ def main(argv=None) -> int:
     p.add_argument("--host", default=shown["bind_host"],
                    help=f"address to listen on (default {shown['bind_host']}, display.bind_host in config/robot.yaml; "
                         "0.0.0.0 lets another computer open /operator)")
+    p.add_argument("--theme", choices=DISPLAY_SETTINGS["theme"], help="dark or light colours for the second look to start with "
+                   "(the operator page can change it while it runs)")
+    p.add_argument("--look", choices=DISPLAY_SETTINGS["look"], help="1 the original screen, 2 the second look to start with")
     args = p.parse_args(argv)
 
     hub = Hub()
+    for setting in DISPLAY_SETTINGS:
+        if getattr(args, setting):
+            hub.publish({setting: getattr(args, setting)})
     try:
         server = make_server(hub, args.port, args.host)
     except OSError as e:

@@ -1,0 +1,94 @@
+<!--
+  Navigation on a saved LiDAR map: the Hokuyo LiDAR, the map (map_server), AMCL (works out where the robot is on the map
+  from the LiDAR and the wheels) and move_base (DWA, the settings in hokuyo_costmap.yaml). No camera: the Astra is not
+  started, so it takes no CPU and no USB bandwidth.
+
+  Usually started by run_robot_link.sh (its amcl option), which also starts minimal.launch, scan_filter.py (AMCL and move_base read
+  its /hokuyo_scan_filtered), map_cleaner.py (the planner reads its /map_clean) and then sends the station pose to
+  /initialpose. The map comes from run_lidar_mapping.sh.
+
+  Run:  roslaunch config/amcl_nav.launch map_file:=/home/robot/lbr-dell/turtlebot/maps/lidar_map.yaml
+  Options:
+    port:=/dev/ttyACM1  laser_x:=0.0  laser_z:=0.3  laser_yaw:=3.14159   (LiDAR settings, as in vslam.launch)
+
+  Compared with extras/lidar_slam/noise_navigation.launch (the earlier try, where AMCL often lost track): the map is made
+  from the same filtered scan AMCL reads, the start pose is sent from the station instead of assuming (0, 0, 0), the
+  map cleaner runs (the costmap waits for /map_clean), and AMCL is set for the URG-04LX (about 5.5 m, not 12 m) and
+  updates more often. The AMCL values below are a starting point: tune them in the comparison runs (step 4).
+-->
+<launch>
+  <arg name="map_file"       default="$(dirname)/../maps/lidar_map.yaml"/>
+  <arg name="costmap_params" default="$(dirname)/hokuyo_costmap.yaml"/>
+  <arg name="scan_topic"     default="/hokuyo_scan_filtered"/>
+
+  <arg name="port"      default="/dev/ttyACM0"/>
+  <arg name="laser_x"   default="0.0"/>
+  <arg name="laser_y"   default="0.0"/>
+  <arg name="laser_z"   default="0.3"/>
+  <arg name="laser_yaw" default="0.0"/>
+
+  <!-- ===== LiDAR ===== -->
+  <node pkg="urg_node" type="urg_node" name="hokuyo" output="screen">
+    <param name="serial_port" value="$(arg port)"/>
+    <param name="frame_id"    value="laser"/>
+    <remap from="scan" to="hokuyo_scan"/>
+  </node>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="laser_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
+
+  <!-- ===== The saved map (latched on /map; map_cleaner.py turns it into /map_clean) ===== -->
+  <node pkg="map_server" type="map_server" name="map_server" args="$(arg map_file)"/>
+
+  <!-- ===== AMCL ===== -->
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <remap from="scan" to="$(arg scan_topic)"/>
+    <param name="use_map_topic"   value="false"/>
+    <param name="odom_frame_id"   value="odom"/>
+    <param name="base_frame_id"   value="base_footprint"/>
+    <param name="global_frame_id" value="map"/>
+    <!-- this 4-core Celeron is often busy: allow late transforms, as the TurtleBot settings do -->
+    <param name="transform_tolerance" value="1.0"/>
+
+    <!-- particles: fewer than the TurtleBot default (500 - 2000), the start pose is known -->
+    <param name="min_particles" value="300"/>
+    <param name="max_particles" value="1500"/>
+    <param name="kld_err"       value="0.05"/>
+    <param name="kld_z"         value="0.99"/>
+    <param name="resample_interval" value="1"/>
+    <!-- no random particles: with a known start they only make the pose jump -->
+    <param name="recovery_alpha_slow" value="0.0"/>
+    <param name="recovery_alpha_fast" value="0.0"/>
+
+    <!-- update after 10 cm or about 9 degrees (default 25 cm / 11 degrees), so /amcl_pose comes about once a second while driving -->
+    <param name="update_min_d" value="0.10"/>
+    <param name="update_min_a" value="0.15"/>
+
+    <!-- the Hokuyo URG-04LX: reliable to about 5.5 m; scan_filter.py already drops returns closer than 0.25 m -->
+    <param name="laser_model_type"          value="likelihood_field"/>
+    <param name="laser_min_range"           value="0.25"/>
+    <param name="laser_max_range"           value="5.5"/>
+    <param name="laser_max_beams"           value="90"/>
+    <param name="laser_z_hit"               value="0.5"/>
+    <param name="laser_z_rand"              value="0.5"/>
+    <param name="laser_sigma_hit"           value="0.2"/>
+    <param name="laser_likelihood_max_dist" value="2.0"/>
+
+    <!-- wheel odometry (the Kobuki's gyro makes turns good): the TurtleBot values -->
+    <param name="odom_model_type" value="diff"/>
+    <param name="odom_alpha1" value="0.2"/>
+    <param name="odom_alpha2" value="0.2"/>
+    <param name="odom_alpha3" value="0.2"/>
+    <param name="odom_alpha4" value="0.2"/>
+
+    <!-- only used if nothing is sent to /initialpose: run_robot_link.sh sends the station pose -->
+    <param name="initial_pose_x" value="0.0"/>
+    <param name="initial_pose_y" value="0.0"/>
+    <param name="initial_pose_a" value="0.0"/>
+  </node>
+
+  <!-- ===== Path planning + obstacle avoidance with the LiDAR (the same move_base as with RTAB-Map) ===== -->
+  <include file="$(find turtlebot_navigation)/launch/includes/move_base.launch.xml">
+    <arg name="laser_topic"       value="$(arg scan_topic)"/>
+    <arg name="custom_param_file" value="$(arg costmap_params)"/>
+  </include>
+</launch>

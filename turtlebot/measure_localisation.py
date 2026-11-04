@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-# How often does RTAB-Map publish /rtabmap/localization_pose, standing still and while moving?
+# How often does the localiser place the robot on the map, standing still and while moving? RTAB-Map publishes
+# /rtabmap/localization_pose, AMCL /amcl_pose (--localiser amcl).
 # The answer sets robot_link_api's `_loc_max_age_s` (how old the last localisation may be before a MOVING robot counts as lost).
 #
 # Needs the stack running (run_robot_link.sh, or run_vslam_noise_nav.sh). It only listens: it sends nothing and moves nothing.
 # Stand the robot still for the first half of the time; then move it (push it by hand, or drive it with the click-to-go page /
 # keyboard teleop - someone at the power switch) for the second half.
 #
-# Run:  python3 measure_localisation.py            (60 s)
+# Run:  python3 measure_localisation.py            (60 s, RTAB-Map)
 #       python3 measure_localisation.py --seconds 120
+#       python3 measure_localisation.py --localiser amcl          (the stack started with run_robot_link.sh --amcl)
+#       python3 measure_localisation.py --localiser amcl --max-covariance 0.2   what if the link's limit were 0.2?
 
 import argparse
 import os
@@ -17,6 +20,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from robot_link import rules  # noqa: E402
+
+
+LOCALISERS = {"rtabmap": ("/rtabmap/localization_pose", 1.0), "amcl": ("/amcl_pose", 0.1)}   # as in nodes/robot_link_api.py
 
 
 def percentile(values, q):
@@ -51,9 +57,14 @@ def suggest_loc_max_age(stats, floor_s=3.0):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="How often does RTAB-Map publish /rtabmap/localization_pose, standing still and moving?")
+    p = argparse.ArgumentParser(description="How often does the localiser place the robot on the map, standing still and moving?")
     p.add_argument("--seconds", type=float, default=60.0)
+    p.add_argument("--localiser", choices=sorted(LOCALISERS), default="rtabmap")
+    p.add_argument("--max-covariance", type=float, help="the link's _loc_max_covariance (default: the localiser's)")
     args = p.parse_args(argv)
+    topic, limit = LOCALISERS[args.localiser]
+    if args.max_covariance is not None:
+        limit = args.max_covariance
     import rospy
     from geometry_msgs.msg import PoseWithCovarianceStamped
     from nav_msgs.msg import Odometry
@@ -63,13 +74,16 @@ def main(argv=None):
     lost = []
 
     def on_pose(m):
-        if rules.pose_is_trusted(m.pose.covariance, 1.0):
+        spread.append(max(m.pose.covariance[0], m.pose.covariance[7]))
+        if rules.pose_is_trusted(m.pose.covariance, limit):
             events.append((time.time(), "loc", 0.0, 0.0))
         else:
-            lost.append(time.time())                 # RTAB-Map has lost track and sends the old pose with covariance 9999
+            lost.append(time.time())                 # RTAB-Map sends 9999 when it has lost track; AMCL's covariance grows
 
-    rospy.Subscriber("/rtabmap/localization_pose", PoseWithCovarianceStamped, on_pose, queue_size=5)
-    print("Listening for %g s. Keep the robot still for the first half, then move it." % args.seconds)
+    spread = []
+    rospy.Subscriber(topic, PoseWithCovarianceStamped, on_pose, queue_size=5)
+    print("Listening to %s for %g s (covariance limit %g). Keep the robot still for the first half, then move it."
+          % (topic, args.seconds, limit))
     end = time.time() + args.seconds
     try:
         while time.time() < end:
@@ -79,8 +93,11 @@ def main(argv=None):
         pass
     print()
     if lost:
-        print("  !! %d of the %d poses came with covariance 9999: RTAB-Map had LOST the robot's position (not counted below)."
-              % (len(lost), len(lost) + sum(1 for e in events if e[1] == "loc")))
+        print("  !! %d of the %d poses had a covariance above %g: the base would report NOT localised (not counted below)."
+              % (len(lost), len(lost) + sum(1 for e in events if e[1] == "loc"), limit))
+    if spread:
+        print("  x/y variance: median %.4g, 95%% under %.4g, largest %.4g (m^2)"
+              % (percentile(spread, 0.5), percentile(spread, 0.95), max(spread)))
     stats = summarise(events)
     for key in ("still", "moving"):
         s = stats[key]

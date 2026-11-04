@@ -1,8 +1,8 @@
 # The Jetson–Dell link (`api_version` 1)
 
 The robot has two computers. The **Jetson** is the brain: dialogue, screen, voice, the book logic. The **Dell laptop** rides on
-the TurtleBot 2 and runs ROS Noetic: the Kobuki base, the Astra camera, the Hokuyo LiDAR, RTAB-Map, `move_base` and
-`noise_logger` (everything in `turtlebot/`). This page is the contract between them. The Jetson side is
+the TurtleBot 2 and runs ROS Noetic: the Kobuki base, the Hokuyo LiDAR, the localiser (AMCL on a LiDAR map, or RTAB-Map with the Astra
+camera: section 6.1), `move_base` and `noise_logger` (everything in `turtlebot/`). This page is the contract between them. The Jetson side is
 `robot/drivers/turtlebot_link.py`; the Dell side is `turtlebot/nodes/robot_link_api.py` (section 7), a small HTTP server that behaves as written here.
 `tools/fake_base.py` is a working stand-in for the Dell, and `tests/test_robot_link_contract.py` is the test that tells you
 whether a server keeps the contract.
@@ -23,7 +23,7 @@ whether a server keeps the contract.
 | Transport | HTTP/1.1. **Today the API listens on the Dell's `127.0.0.1:8010` only and the Jetson reaches it through an ssh tunnel** (`scripts/robot_link_tunnel.sh`; section 5.1), because the Dell's firewall blocks port 8010 from the university Wi-Fi (`172.24.0.0/18`, DHCP addresses that change). So on the Jetson `turtlebot.base_url` is `http://127.0.0.1:8010`, and no Dell address is written in any code or config. With a travel router and a direct link (section 5.2) it becomes the Dell's address on that link: the API binds to the address of an interface (`_iface`, default `wlp2s0`), looked up each time it starts, or an explicit `_host`. The API is on port **8010** (the click-to-go page of `noise_nav_web.py` stays on 8000, on the Dell's localhost). |
 | Format | JSON only (`Content-Type: application/json`), UTF-8. A request body is one JSON object, at most 16 KB. |
 | Auth | Every request carries the header `X-Robot-Token: <secret>`. The secret is the environment variable `ROBOT_LINK_TOKEN` on both machines; it is never written to a config file or the repository. A missing or wrong token is `401`, and the Dell refuses to start without one. **Why this matters on a shared network:** anyone on the network the API listens on can open a connection to port 8010, and `POST /api/goal` makes a robot with wheels drive. The token is the only thing that stops them, so use a long random one (`openssl rand -hex 16`) and change it if it ever leaks. It is sent in clear text over plain HTTP, so on a shared network someone capturing packets could read it. Through the ssh tunnel it travels inside ssh, so it is encrypted, and with the API bound to `127.0.0.1` only the tunnel (or someone logged in to the Dell) can connect at all. |
-| Frame and units | Every pose is in the RTAB-Map **`map`** frame: metres and radians (yaw `0` along +x, counter-clockwise positive, `-π..π`). The same numbers are in `data/shelves.csv` (`map_x, map_y, map_yaw`) and `data/floorplan.yaml`; `tools/teach_poses.py` records them from the live pose. |
+| Frame and units | Every pose is in the **`map`** frame of the map the Dell is running on: metres and radians (yaw `0` along +x, counter-clockwise positive, `-π..π`). The same numbers are in `data/shelves.csv` (`map_x, map_y, map_yaw`) and `data/floorplan.yaml`; `tools/teach_poses.py` records them from the live pose. **The LiDAR map and the RTAB-Map map have different `map` frames** (each starts where its mapping run started), so those files belong to one map: after switching maps, teach the poses again (section 6.1). |
 | Time | UNIX seconds as a float (`time.time()`). The two clocks only need to agree within about a second: on the Wi-Fi both already follow internet time (`systemd-timesyncd`). On the direct cable, where there is no internet, chrony with the Jetson as the source does it (section 5.2). |
 | Timeouts | The Jetson waits **1 s** for each request. The Dell must answer every endpoint well inside that, and never block on ROS: answer from the latest values it holds. |
 | Versioning | `/api/health` says `api_version`. The Jetson refuses to drive a base that reports another version than the one it was written for. New optional fields may be added to a response without a version change; a client ignores fields it does not know. |
@@ -57,11 +57,11 @@ A request that was understood but **refused for a reason the robot has to act on
 {"ok": true, "api_version": 1, "ros_ok": true, "localised": true, "battery": 0.82, "time": 1761730000.12}
 ```
 
-- `ros_ok`: `move_base` is publishing its status (< 3 s old), the base is publishing odometry (< 2 s old) and the RTAB-Map node is registered with the ROS master. While `false` every goal is refused with `503`. It is `false` too when ROS is not running at all (the server then still answers).
+- `ros_ok`: `move_base` is publishing its status (< 3 s old), the base is publishing odometry (< 2 s old) and the localiser's node (`/amcl`, or `/rtabmap/rtabmap`) is registered with the ROS master. While `false` every goal is refused with `503`. It is `false` too when ROS is not running at all (the server then still answers).
 - `localised`: the base knows where it is on the map. **The rule** (all of it must hold):
   1. the `map` -> `base_footprint` transform is fresh (younger than `tf_max_age_s`, 1 s); without it there is no pose at all;
-  2. RTAB-Map has localised at least once since the API started (a `/rtabmap/localization_pose` has arrived **with a real fix**: RTAB-Map republishes its last pose with covariance 9999 when it has lost track, and any pose whose x, y or yaw variance is above `loc_max_covariance`, 1.0, counts as lost and makes the base not localised until a good one comes);
-  3. the last `/rtabmap/localization_pose` is younger than `loc_max_age_s`, **or** the wheel odometry shows the robot has not moved more than 5 cm or turned more than 5 degrees since that localisation (a robot that stands still is not lost, and RTAB-Map may well stay quiet then).
+  2. the localiser has localised at least once since the API started: a localisation (`/amcl_pose` with AMCL, `/rtabmap/localization_pose` with RTAB-Map) has arrived **with a real fix**. Any pose whose x, y or yaw variance is above `loc_max_covariance` counts as lost and makes the base not localised until a good one comes. RTAB-Map republishes its last pose with covariance 9999 when it has lost track (limit 1.0); AMCL's covariance is the spread of its particles and grows as it loses track (limit 0.1, about 0.3 m or 18 degrees, a first value to be tuned in the comparison runs). The start pose AMCL is given (the station, 0.15 m and 8 degrees) and a "Set robot position" click (0.25 m, 15 degrees) are both below it, so the base counts as localised right after either;
+  3. the last localisation is younger than `loc_max_age_s`, **or** the wheel odometry shows the robot has not moved more than 5 cm or turned more than 5 degrees since that localisation (a robot that stands still is not lost, and both localisers stay quiet then: AMCL only updates after 10 cm or 9 degrees of movement).
   While a goal is active and the base has been not localised for `lost_localisation_after_s` (5 s), the goal is stopped and fails with `lost_localisation`.
 - `battery`: 0..1 from the Kobuki's battery voltage (`/mobile_base/sensors/core`, linear between 13.2 V and 16.5 V: a rough guide, the voltage sags under load), or `null` if unknown.
 - Must answer even when ROS is down (then `ros_ok: false`).
@@ -78,7 +78,7 @@ A request that was understood but **refused for a reason the robot has to act on
 }
 ```
 
-- `pose`: the `map` -> `base_footprint` transform of tf (RTAB-Map's correction on top of the wheel odometry), `t` is the transform's time. While `localised` is `false` the numbers are the last known ones (zeros before the first) and must not be trusted.
+- `pose`: the `map` -> `base_footprint` transform of tf (the localiser's correction on top of the wheel odometry), `t` is the transform's time. While `localised` is `false` the numbers are the last known ones (zeros before the first) and must not be trusted.
 - `nav.status`: `idle` (no goal since the server started), `active`, `succeeded`, `failed`, `cancelled`.
   A finished goal **stays reported** (same `goal_id`, final status) until another goal arrives, so the Jetson cannot miss the outcome by polling between two goals.
   `distance_left` is metres along the plan to the goal (`null` when not `active`, or not known). `reason` is empty unless the goal `failed` or was `cancelled`:
@@ -100,7 +100,7 @@ Response `200`: `{"ok": true, "accepted": true, "goal_id": "g-7f3a-12", "reason"
 - **The same `goal_id` twice is the same goal.** The Dell remembers the last 32 ids. A repeat answers `accepted: true` with `"duplicate": true` and changes nothing, so the Jetson may resend after a lost reply.
 - A **different** `goal_id` while another goal is active replaces it: the old goal ends `cancelled` with reason `superseded`, and the base drives to the new one without stopping in between if it can.
 - Refused (`accepted: false`, still `200`), with `reason`:
-  - `not_localised`: RTAB-Map has no trusted pose. **A base that is not localised never drives**: it would be driving blind. The Jetson treats this as "navigation unavailable" (it waits) and does not count it as a failed shelf.
+  - `not_localised`: the localiser has no trusted pose. **A base that is not localised never drives**: it would be driving blind. The Jetson treats this as "navigation unavailable" (it waits) and does not count it as a failed shelf.
   - `no_heartbeat`: no heartbeat in the last 3 s (see below). The Jetson retries after a moment.
   - `invalid_pose`: not a number, or yaw outside `-π..π` by more than a rounding error.
   - `outside_map`: the point is outside the known map or inside an obstacle that is known and permanent.
@@ -276,7 +276,7 @@ The robot also compares the Dell's `time` with its own on every health check and
 
 | API | ROS / existing code |
 |---|---|
-| `pose` | tf `map` -> `base_footprint` (RTAB-Map publishes `map` -> `odom`, the Kobuki driver `odom` -> `base_footprint`); `localised` is the rule in section 2 |
+| `pose` | tf `map` -> `base_footprint` (AMCL or RTAB-Map publishes `map` -> `odom`, the Kobuki driver `odom` -> `base_footprint`); `localised` is the rule in section 2 |
 | `POST /api/goal` | the `move_base` action client (`MoveBaseGoal` in the `map` frame, after `/move_base/clear_costmaps`, like `send_goal` in `noise_nav_web.py`) |
 | `nav` | the action's result: `SUCCEEDED` -> `succeeded`, `ABORTED`/`REJECTED` -> `failed`, `PREEMPTED`/`RECALLED` not by us -> `cancelled` (`manual_override`); `distance_left` along `/move_base/NavfnROS/plan` (this stack uses Navfn, not GlobalPlanner) to the goal, else in a straight line |
 | `POST /api/cancel`, watchdog | `cancel_goal()` of our own goal (the click-to-go page's goals are not touched) and zero `Twist` on `/navigation_velocity_smoother/raw_cmd_vel` and `/cmd_vel_mux/input/navi` |
@@ -285,6 +285,18 @@ The robot also compares the Dell's `time` with its own on every health check and
 | `POST /api/max_speed` | dynamic_reconfigure `/move_base/DWAPlannerROS`, `max_vel_x` |
 | `battery` | `/mobile_base/sensors/core` (`kobuki_msgs/SensorState.battery`, tenths of a volt) |
 | `outside_map` | `/map_clean` (else `/map`): outside the grid, or a cell that is a known obstacle |
+
+### 6.1 Two localisers
+
+`run_robot_link.sh --amcl` runs **AMCL on a LiDAR map** (`turtlebot/maps/lidar_map.yaml`, made by `run_lidar_mapping.sh`; the camera is not
+started) and sends the station pose from `data/floorplan.yaml` to `/initialpose` once move_base is up (`nodes/set_initial_pose.py`), so the
+robot must start on its station. Without `--amcl` it runs **RTAB-Map** with the camera on `~/vslam_map.db`, as before. The API is the same
+either way; only what `robot_link_api.py` listens to changes (`_localiser:=amcl`, below). Which to use and why: `turtlebot/README.md`,
+"Two ways to localise" (in short: on the Dell's Celeron RTAB-Map found the robot from a standing start about 1 time in 5).
+
+The two maps have different `map` frames. A LiDAR map's (0, 0) is where its mapping run started, the station if it was started there
+(then `station: {x: 0, y: 0, yaw: 0}`); the shelf poses, sections and landmarks in `data/` must be taught again on it
+(`tools/teach_poses.py`) and the visitor screen's map remade (`tools/map_to_plan.py`, which reads `map_saver` output as it is).
 
 `noise_logger.py` publishes dBFS (`20·log10(rms/32768)`, minus the left-microphone offset in `mic_config.json`). Until `calibrate_noise.py` has measured the same sounds against a phone sound meter and saved `~/noise_calibration.json`, the Dell reports `unit: "dBFS"`, `calibrated: false`; the Jetson then follows `noise.uncalibrated` in `config/zones.yaml` (ignore the noise, or compare against `noise.raw_thresholds`).
 
@@ -295,12 +307,17 @@ The robot also compares the Dell's `time` with its own on every health check and
 | `nodes/robot_link_api.py` | the node: HTTP on port 8010, connected to ROS in a thread (the server answers even with no ROS master) |
 | `robot_link/` | the logic in plain Python 3.8 with no ROS (`core.py` the API's behaviour, `server.py` HTTP, `rules.py`, `activity.py`, `calibration.py`, `netaddr.py`, `mapimage.py` the map as a PNG); `dev_server.py` serves it over a simulated base |
 | `calibrate_noise.py` | gain / AGC check and the guided 3-level calibration against a phone |
-| `measure_localisation.py` | listens to `/rtabmap/localization_pose` standing still and moving, suggests `_loc_max_age_s` |
-| `run_robot_link.sh` | starts the whole stack including the API; refuses if another ROS stack is running |
+| `measure_localisation.py` | listens to `/rtabmap/localization_pose` (or `/amcl_pose` with `--localiser amcl`) standing still and moving, suggests `_loc_max_age_s`, shows AMCL's covariance |
+| `run_robot_link.sh` | starts the whole stack including the API; refuses if another ROS stack is running; `--amcl [--map FILE]` for AMCL |
+| `run_lidar_mapping.sh` | makes the LiDAR map (gmapping + keyboard, saved into `turtlebot/maps/`); the robot drives |
+| `config/amcl_nav.launch`, `config/lidar_mapping.launch` | LiDAR + map + AMCL + move_base; LiDAR + gmapping (no camera in either) |
+| `nodes/set_initial_pose.py` | sends the station pose to `/initialpose` and waits for AMCL to take it |
 | `tests/` | `python3 -m unittest discover -s tests` (no ROS needed) |
 
 Node parameters, ROS style on the command line (`python3 nodes/robot_link_api.py _iface:=wlp2s0 _port:=8010`; they work without a ROS master, which is why they are not read from the parameter server):
-`_iface` (default `wlp2s0`), `_host` (overrides `_iface`; `127.0.0.1` for tests), `_port`, `_max_speed_limit` (0.25), `_tf_max_age_s` (1.0), `_loc_max_age_s`, `_still_dist_m` (0.05), `_still_turn_deg` (5), `_lost_localisation_after_s` (5), `_goal_timeout_s` (900),
+`_iface` (default `wlp2s0`), `_host` (overrides `_iface`; `127.0.0.1` for tests), `_port`,
+`_localiser` (`rtabmap`, or `amcl`: sets the next three), `_localization_topic` (`/rtabmap/localization_pose`; `/amcl_pose`), `_localiser_node` (`/rtabmap/rtabmap`; `/amcl`),
+`_loc_max_covariance` (1.0; 0.1 for AMCL, tune it), `_max_speed_limit` (0.25), `_tf_max_age_s` (1.0), `_loc_max_age_s`, `_still_dist_m` (0.05), `_still_turn_deg` (5), `_lost_localisation_after_s` (5), `_goal_timeout_s` (900),
 `_calibration_file`, `_skip_clear_costmaps`. `--print-address` prints the address it would bind to and exits.
 
 The watchdog and every other timer run in a 10 Hz loop and before each request. When a goal is cancelled by us (client, watchdog, lost localisation, shutdown) the node cancels its own `move_base` goal and sends zero velocity for half a second.

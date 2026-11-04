@@ -13,6 +13,7 @@ only, never anything about visitors.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,12 @@ class Floor:
     height: float
     sections: tuple = ()
     landmarks: tuple = ()
+    x0: float = 0.0                       # the floor's lowest x and y in the map frame (a survey's origin is wherever the robot
+    y0: float = 0.0                       # started, so a real floor is often at negative coordinates); it spans x0..x0+width
+    base_map: str = ""                    # the name of a picture of the robot's map (display/ui/maps/<name>.json) drawn under the plan
+
+    def contains(self, x: float, y: float) -> bool:
+        return self.x0 <= x <= self.x0 + self.width and self.y0 <= y <= self.y0 + self.height
 
     def section(self, name: str) -> Optional[Section]:
         wanted = name.strip().lower()
@@ -83,6 +90,20 @@ class FloorPlan:
     floors: dict = field(default_factory=dict)          # level -> Floor, in level order
     station: Optional[Station] = None
     source: str = ""
+    maps_dir: Optional[Path] = None                      # where the base maps are (display/ui/maps); routes follow them when there is one
+    _walk: dict = field(default_factory=dict, repr=False)
+
+    def route(self, level, start: tuple, goal: tuple) -> Optional[list]:
+        """A way from start to goal drawn round the walls of the floor's base map, [(x, y), ...]; None when the floor has no
+        base map (or no way across it): the caller then draws a straight or L-shaped line."""
+        floor = self.floor(level)
+        if floor is None or not floor.base_map or self.maps_dir is None:
+            return None
+        if floor.base_map not in self._walk:
+            from robot.services.routing import Walkable
+            self._walk[floor.base_map] = Walkable.load(self.maps_dir / f"{floor.base_map}.json")
+        walk = self._walk[floor.base_map]
+        return walk.route(start, goal) if walk is not None else None
 
     # ---- looking things up ----
     def floor(self, level) -> Optional[Floor]:
@@ -122,7 +143,9 @@ class FloorPlan:
             raise FloorPlanError(path.name, [f"cannot read it ({exc})"]) from exc
         except yaml.YAMLError as exc:
             raise FloorPlanError(path.name, [f"not valid YAML ({exc})"]) from exc
-        return cls.from_dict(data, path.name)
+        plan = cls.from_dict(data, path.name)
+        plan.maps_dir = path.resolve().parent.parent / "display" / "ui" / "maps"
+        return plan
 
     @classmethod
     def from_dict(cls, data, source: str = "floorplan") -> "FloorPlan":
@@ -158,7 +181,7 @@ class FloorPlan:
                 floor = floors.get(station.level)
                 if floor is None:
                     problems.append(f"station: level {station.level} is not a floor of the plan")
-                elif not (0 <= station.x <= floor.width and 0 <= station.y <= floor.height):
+                elif not floor.contains(station.x, station.y):
                     problems.append(f"station ({station.x:g}, {station.y:g}) is outside level {station.level} "
                                     f"({floor.width:g} x {floor.height:g} m)")
         if problems:
@@ -190,7 +213,12 @@ def _floor(raw, where: str, problems: list) -> Optional[Floor]:
     where = f"level {level}"
     width = _number(raw, "width", where, problems, positive=True)
     height = _number(raw, "height", where, problems, positive=True)
-    if width is None or height is None:
+    x0, y0 = (_number(raw, k, where, problems) if k in raw else 0.0 for k in ("x0", "y0"))
+    if width is None or height is None or x0 is None or y0 is None:
+        return None
+    base_map = str(raw.get("base_map") or "").strip()
+    if base_map and not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", base_map):
+        problems.append(f"{where}: `base_map` is a name (letters, digits, - and _), not {base_map!r}")
         return None
     sections = []
     for j, s in enumerate(raw.get("sections") or [], 1):
@@ -203,7 +231,7 @@ def _floor(raw, where: str, problems: list) -> Optional[Floor]:
         if None in values:
             continue
         x, y, w, h = values
-        if x < 0 or y < 0 or x + w > width + 1e-9 or y + h > height + 1e-9:
+        if x < x0 - 1e-9 or y < y0 - 1e-9 or x + w > x0 + width + 1e-9 or y + h > y0 + height + 1e-9:
             problems.append(f"{here}: the rectangle ({x:g}, {y:g}, {w:g} x {h:g}) is outside the floor "
                             f"({width:g} x {height:g} m)")
             continue
@@ -225,8 +253,8 @@ def _floor(raw, where: str, problems: list) -> Optional[Floor]:
         x, y = _number(m, "x", here, problems), _number(m, "y", here, problems)
         if x is None or y is None:
             continue
-        if not (0 <= x <= width and 0 <= y <= height):
+        if not (x0 <= x <= x0 + width and y0 <= y <= y0 + height):
             problems.append(f"{here}: ({x:g}, {y:g}) is outside the floor")
             continue
         landmarks.append(Landmark(kind, str(m.get("name") or kind.replace("_", " ").title()), x, y))
-    return Floor(level, str(raw.get("name") or f"Level {level}"), width, height, tuple(sections), tuple(landmarks))
+    return Floor(level, str(raw.get("name") or f"Level {level}"), width, height, tuple(sections), tuple(landmarks), x0, y0, base_map)

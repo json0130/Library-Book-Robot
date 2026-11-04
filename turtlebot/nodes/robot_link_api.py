@@ -4,7 +4,7 @@
 # heartbeat going; if the heartbeat stops while a goal is active the base is stopped within 3 s.
 #
 # All the decisions are in robot_link/ (plain Python, tested without ROS). This file only connects them to ROS:
-#   reads   tf map->base_footprint, /rtabmap/localization_pose, /odom, /move_base/NavfnROS/plan, /noise_reading,
+#   reads   tf map->base_footprint, /rtabmap/localization_pose (or /amcl_pose), /odom, /move_base/NavfnROS/plan, /noise_reading,
 #           /mobile_base/sensors/core (battery), /move_base/status, /map_clean (or /map)
 #   writes  move_base goals (action client), /robot_speaking, zero velocity, DWAPlannerROS max_vel_x (dynamic_reconfigure)
 #
@@ -17,6 +17,8 @@
 #   _iface:=wlp2s0     network interface whose IPv4 address is used (the Wi-Fi address comes from DHCP, so it is looked up at start)
 #   _host:=1.2.3.4     bind to exactly this address instead (127.0.0.1 for tests; 0.0.0.0 = every interface - not recommended)
 #   _port:=8010
+#   _localiser:=amcl   what finds the robot on the map: rtabmap (default) or amcl (sets the next three, see LOCALISERS below)
+#   _localization_topic:=/amcl_pose   _localiser_node:=/amcl   _loc_max_covariance:=0.1
 #   _max_speed_limit:=0.25   _loc_max_age_s:=5.0   _tf_max_age_s:=1.0   ...any field of robot_link.core.Settings
 #   _calibration_file:=~/noise_calibration.json   _skip_clear_costmaps:=true
 #   --print-address    print the address it would bind to and exit
@@ -39,13 +41,23 @@ log = logging.getLogger("robot_link")
 
 DEFAULTS = {
     "iface": "wlp2s0", "host": "", "port": 8010, "map_frame": "map", "base_frame": "base_footprint",
-    "plan_topic": "/move_base/NavfnROS/plan", "localization_topic": "/rtabmap/localization_pose", "odom_topic": "/odom",
+    "plan_topic": "/move_base/NavfnROS/plan", "odom_topic": "/odom",
     "noise_topic": "/noise_reading", "speaking_topic": "/robot_speaking", "battery_topic": "/mobile_base/sensors/core",
     "map_topics": "/map_clean,/map", "dwa_name": "/move_base/DWAPlannerROS",
     "zero_topics": "/navigation_velocity_smoother/raw_cmd_vel,/cmd_vel_mux/input/navi",
-    "rtabmap_node": "/rtabmap/rtabmap", "calibration_file": calibration.DEFAULT_PATH,
+    "localiser": "rtabmap", "localization_topic": "", "localiser_node": "", "calibration_file": calibration.DEFAULT_PATH,
     "battery_empty_v": 13.2, "battery_full_v": 16.5, "enable_max_speed": True, "skip_clear_costmaps": False,
     "wait_for_iface_s": 30.0, "log_every_s": 10.0,
+}
+
+# What finds the robot on the map. `_localiser:=amcl` picks the topic, the node the health check looks for and the covariance
+# limit for "localised"; `_localization_topic:=`, `_localiser_node:=` and `_loc_max_covariance:=` still override each one.
+# RTAB-Map sends a real fix with a small covariance and a lost one with 9999, so its limit only has to tell those apart. AMCL's
+# covariance is the spread of its particles and grows as it loses track: 0.1 (about 0.3 m, 18 degrees) is a first guess, to be
+# tuned in the comparison runs. It must stay above what the start pose is sent with (set_initial_pose.py: 0.15 m, 8 degrees).
+LOCALISERS = {
+    "rtabmap": {"localization_topic": "/rtabmap/localization_pose", "localiser_node": "/rtabmap/rtabmap", "loc_max_covariance": 1.0},
+    "amcl": {"localization_topic": "/amcl_pose", "localiser_node": "/amcl", "loc_max_covariance": 0.1},
 }
 
 
@@ -197,8 +209,9 @@ class RosBackend(Backend):
     def _localization(self, m):
         trusted = rules.pose_is_trusted(m.pose.covariance, self.core.s.loc_max_covariance)
         if trusted != getattr(self, "_loc_trusted", None):
-            log.info("RTAB-Map %s (localization_pose covariance x %.4g, yaw %.4g)", "has found the robot on the map" if trusted
-                     else "has lost track of the robot: the base reports not localised", m.pose.covariance[0], m.pose.covariance[35])
+            log.info("%s %s (covariance x %.4g, y %.4g, yaw %.4g; limit %g)", self.p["localiser"],
+                     "has found the robot on the map" if trusted else "has lost track of the robot: the base reports not localised",
+                     m.pose.covariance[0], m.pose.covariance[7], m.pose.covariance[35], self.core.s.loc_max_covariance)
             self._loc_trusted = trusted
         self.core.on_localization_pose(trusted)
 
@@ -235,14 +248,15 @@ class RosBackend(Backend):
             self.core.on_tf(v.x, v.y, rules.yaw_from_quaternion(q.x, q.y, q.z, q.w), t.header.stamp.to_sec())
 
     def _check(self):
-        """ROS is usable: RTAB-Map is running, move_base is publishing its status and the base is publishing odometry."""
+        """ROS is usable: the localiser (RTAB-Map or AMCL) is running, move_base is publishing its status and the base is
+        publishing odometry."""
         try:
             import rosnode
-            rtabmap = self.p["rtabmap_node"] in rosnode.get_node_names()
+            localiser = self.p["localiser_node"] in rosnode.get_node_names()
         except Exception:
             return False
         now = time.time()
-        return rtabmap and now - self.status_at < 3.0 and now - self.odom_at < 2.0
+        return localiser and now - self.status_at < 3.0 and now - self.odom_at < 2.0
 
     # ------------------------------------------------------------------ Backend
     def ros_ok(self):
@@ -364,7 +378,14 @@ class Params(dict):
         super().__init__(DEFAULTS)
         self.cli = parse_private_args(argv)
         self.update({k: v for k, v in self.cli.items() if k in DEFAULTS})
-        self.settings = Settings.from_mapping({k: v for k, v in self.cli.items() if k in Settings().__dict__})
+        profile = LOCALISERS.get(self["localiser"])
+        if profile is None:
+            raise SystemExit("_localiser:=%s is not one of %s" % (self["localiser"], ", ".join(sorted(LOCALISERS))))
+        for key in ("localization_topic", "localiser_node"):
+            self[key] = self[key] or profile[key]
+        values = {k: v for k, v in self.cli.items() if k in Settings().__dict__}
+        values.setdefault("loc_max_covariance", profile["loc_max_covariance"])
+        self.settings = Settings.from_mapping(values)
 
 
 def bind_address(params):

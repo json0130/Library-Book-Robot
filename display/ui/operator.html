@@ -46,7 +46,7 @@
   #basemap { width: 100%; display: block; background: #2b3036; border: 1px solid var(--line); border-radius: 8px; touch-action: none;
              cursor: crosshair; }
   #maptarget { font: .85rem ui-monospace, monospace; color: var(--muted); margin: 6px 0; min-height: 1.3em; }
-  #mapnote { color: var(--muted); font-size: .8rem; margin-top: 4px; }
+  #mapnote, #looknote { color: var(--muted); font-size: .8rem; margin-top: 4px; }
   button#mapgo { background: var(--accent); color: #fff; border-color: var(--accent); }
   button#mapgo:disabled { background: var(--bg); color: var(--muted); border-color: var(--line); cursor: not-allowed; }
   button#mapstop { background: #c0392b; color: #fff; border-color: #c0392b; font-weight: 700; }
@@ -120,6 +120,12 @@
       <div id="maptarget">Click on the map to pick a place. Drag to turn the arrow (the way the robot should face when it gets there).</div>
       <div class="row"><button id="mapgo" disabled>Go there</button><button id="mapstop">STOP</button><button id="mapclear">Clear</button></div>
       <div id="mapnote"></div>
+    </section>
+    <section>
+      <h2>Screen the visitor sees</h2>
+      <div class="row"><button data-look="1">Original</button><button data-look="2">New look</button></div>
+      <div class="row"><button data-theme="dark">Dark</button><button data-theme="light">Light</button></div>
+      <div id="looknote">The theme is for the new look. Every open screen follows at once, and a screen opened later starts with the last choice.</div>
     </section>
     <section>
       <h2>Zone (a style setting, not a state)</h2>
@@ -393,6 +399,12 @@ function showScreen(u) {
   $("screen").textContent = `${u.view || "face"} · ${u.layout} · ${u.title || "(no title)"} — ${u.text || "(no text)"} ${buttons}`;
 }
 document.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => send("zone", b.dataset.zone));
+for (const setting of ["look", "theme"]) {             // how the screen looks: the display server keeps it and tells every open screen
+  document.querySelectorAll(`[data-${setting}]`).forEach(b => b.onclick = () => send(setting, b.dataset[setting]));
+}
+function showSetting(setting, value) {
+  document.querySelectorAll(`[data-${setting}]`).forEach(b => b.classList.toggle("on", b.dataset[setting] === value));
+}
 $("goto").onclick = () => send("goto", $("states").value);
 $("guidenext").onclick = () => send("next");
 $("guideabort").onclick = () => send("abort");
@@ -418,6 +430,8 @@ function connect() {
       const d = JSON.parse(ev.data);
       if (d.state) showState(d.state);
       if (d.screen) showScreen(d.screen);
+      if (d.theme) showSetting("theme", d.theme);
+      if (d.look) showSetting("look", d.look);
     } catch (_) {}
   };
   es.onerror = () => { $("conn").textContent = "disconnected, retrying…"; $("conn").className = ""; };

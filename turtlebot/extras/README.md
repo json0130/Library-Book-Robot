@@ -30,6 +30,12 @@ Why we moved on: AMCL often lost track of where the robot was on this map, so
 the planner failed or the robot spun on the spot. The camera-based
 localization in the main version recognises the room by itself.
 
+Back in the main folder (2026-11): `run_lidar_mapping.sh` and
+`run_robot_link.sh --amcl` bring the LiDAR way back with the likely causes of
+that fixed (map from the filtered scan, start from the station pose, map
+cleaner running, AMCL set for the URG-04LX). See "Two ways to localise" in
+the main README.
+
 ## `early_noise_maps/` - first noise maps (no SLAM)
 
 | File | What it does |

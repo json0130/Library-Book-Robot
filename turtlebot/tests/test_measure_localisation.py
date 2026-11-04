@@ -36,6 +36,17 @@ class CommandLineTest(unittest.TestCase):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("--seconds", r.stdout)
+        self.assertIn("--localiser", r.stdout)
+
+    def test_it_listens_where_the_link_listens_with_the_same_limit(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("robot_link_api", os.path.join(os.path.dirname(HERE), "nodes", "robot_link_api.py"))
+        node = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(node)
+        for name, (topic, limit) in m.LOCALISERS.items():
+            self.assertEqual(topic, node.LOCALISERS[name]["localization_topic"], name)
+            self.assertEqual(limit, node.LOCALISERS[name]["loc_max_covariance"], name)
+        self.assertEqual(set(m.LOCALISERS), set(node.LOCALISERS))
 
 
 if __name__ == "__main__":

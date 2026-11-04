@@ -1,0 +1,207 @@
+/* The second look of the screen (?ui=2). Loaded after the styles of index.html; every rule starts with body.ui2 so it wins.
+   Sizes are in --u, as there: 1 u = 1 px on a 1024 x 600 7-inch screen. It is a touch screen read at arm's length.
+   Type scale (one family, steps of about 1.2): 24 - 28 - 34 - 42 - 52. Spacing: 8 - 12 - 16 - 24 - 32.
+   Colour: the face's cyan means "tap this" and "this is current" and nothing else; amber marks where things are; the rest is
+   one teal-black neutral. Text on every surface is at least 5.9:1. */
+body.ui2 {
+  --ink: #eef7f7; --muted: #9bbcbf; --strong: #fff; --body-text: #d9ebec;
+  --cyan: #2debeb; --on-accent: #00201f; --amber: #ffc27a;
+  --surface: #11262b; --surface-2: #17323a; --wash: rgba(255, 255, 255, .06);
+  --line: rgba(130, 225, 225, .16); --line-strong: rgba(45, 235, 235, .55);
+  --shadow: rgba(0, 0, 0, .4); --shadow-strong: rgba(0, 0, 0, .55); --press-bg: #fff; --press-ink: #000;
+  --map-bg: #050d10; --map-floor: #061317; --map-section: #0e2a30; --map-section-line: #226a71; --map-hi: rgba(45, 235, 235, .26);
+  --map-free: #0f2e34; --map-wall: #3b6c72;
+  --landmark: #1d1710; --lift: #3a2a10;
+  --bg: radial-gradient(120% 95% at 15% 0%, #112a30 0%, #08141a 52%, #030708 100%);
+  --t1: calc(24 * var(--u) * var(--scale)); --t2: calc(28 * var(--u) * var(--scale)); --t3: calc(34 * var(--u) * var(--scale));
+  --t4: calc(42 * var(--u) * var(--scale)); --t5: calc(52 * var(--u) * var(--scale));
+  --s1: calc(8 * var(--u)); --s2: calc(12 * var(--u)); --s3: calc(16 * var(--u)); --s4: calc(24 * var(--u)); --s5: calc(32 * var(--u));
+  --r: calc(24 * var(--u));
+  --ease: cubic-bezier(.16, 1, .3, 1);
+  font-family: "Noto Sans", "Ubuntu Sans", "DejaVu Sans", "Liberation Sans", Arial, sans-serif;
+  background: var(--bg);
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+/* the light theme (the operator page switches it): the same roles in light values; every text pair is at least 5.7:1 */
+html[data-theme="light"] body.ui2 {
+  --ink: #0d2226; --muted: #44605f; --strong: #06181b; --body-text: #1b3337;
+  --cyan: #00696d; --on-accent: #fff; --amber: #8a5200;
+  --surface: #fff; --surface-2: #e3eded; --wash: rgba(8, 56, 60, .06);
+  --line: rgba(10, 60, 64, .16); --line-strong: rgba(0, 105, 109, .6);
+  --shadow: rgba(10, 50, 55, .16); --shadow-strong: rgba(10, 50, 55, .28); --press-bg: #0d2226; --press-ink: #fff;
+  --map-bg: #e6eff0; --map-floor: #fff; --map-section: #e3eded; --map-section-line: #7fa9ab; --map-hi: rgba(0, 105, 109, .2);
+  --map-free: #ffffff; --map-wall: #7ba2a4;
+  --landmark: #fff3df; --lift: #ffe6bd;
+  --bg: radial-gradient(120% 95% at 15% 0%, #fafdfd 0%, #eef4f4 55%, #e2ecec 100%);
+  color-scheme: light;
+}
+html:has(body.ui2) { background: #030708; }
+html[data-theme="light"]:has(body.ui2) { background: #e2ecec; }
+body.ui2.full { background: #000; }                   /* the face alone is on pure black, as it always was */
+body.ui2 ::selection { background: rgba(45, 235, 235, .35); }
+body.ui2 button { touch-action: manipulation; }
+body.ui2 :focus-visible { outline: calc(4 * var(--u)) solid var(--cyan); outline-offset: calc(3 * var(--u)); }
+
+/* the eyes: a small screen of their own in the top-right corner, so the whole width under the title is for the content */
+body.ui2.split canvas { inset: auto; top: var(--s4); right: var(--s4); left: auto; width: calc(172 * var(--u)); height: calc(106 * var(--u));
+                        border-radius: var(--r); border: calc(2 * var(--u)) solid var(--line);
+                        box-shadow: 0 calc(8 * var(--u)) calc(24 * var(--u)) var(--shadow); }
+body.ui2.split #view { padding: 0; }
+
+/* ---------- the page of a content view: the title on top, the content under it ---------- */
+body.ui2 .v2 { height: 100%; display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4) var(--s5) var(--s4);
+               animation: rise .22s var(--ease) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(calc(8 * var(--u))); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { body.ui2 .v2 { animation: none; } }
+body.ui2 .v2 .head { flex: none; padding-right: calc(204 * var(--u)); min-height: calc(106 * var(--u)); display: flex; flex-direction: column;
+                     justify-content: center; gap: var(--s1); }
+body.ui2 #view .v2 h1 { margin: 0; color: var(--strong); font-weight: 700; letter-spacing: -.01em; line-height: 1.12; font-size: var(--t4); text-wrap: balance; }
+body.ui2 #view .v2 h1.long { font-size: var(--t3); line-height: 1.2; }
+body.ui2 #view .v2-options.home h1 { font-size: var(--t5); }
+body.ui2 .v2 .author { font-size: var(--t2); color: var(--muted); }
+body.ui2 .v2 .body { flex: 1; min-height: 0; }
+body.ui2 .ic { width: calc(30 * var(--u)); height: calc(30 * var(--u)); flex: none; }
+body.ui2 .clamp3 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+body.ui2.zone-quiet .clamp3, body.ui2.zone-quiet .pick-author { display: block !important; -webkit-line-clamp: unset !important; overflow: visible !important; }
+
+/* ---------- buttons: one shape for every action ---------- */
+body.ui2 .btn { min-height: calc(76 * var(--u)); padding: 0 var(--s5); border-radius: var(--s4); font-weight: 700; font-size: var(--t2);
+                color: var(--ink); background: var(--surface-2); border: calc(2 * var(--u)) solid var(--line-strong); transition: transform .12s var(--ease); }
+body.ui2 .btn.primary { color: var(--on-accent); background: var(--cyan); border-color: var(--cyan); }
+body.ui2 .btn:active { transform: scale(.97); background: var(--press-bg); color: var(--press-ink); }
+body.ui2 .btn.ghost { min-height: calc(64 * var(--u)); font-size: var(--t1); font-weight: 600; color: var(--muted); background: transparent; border-color: var(--line); }
+body.ui2 .btn.big { min-height: calc(96 * var(--u)); }
+body.ui2 .buttons { gap: var(--s2); margin-top: auto; }
+body.ui2 .v2-card .buttons { flex-direction: column; align-items: stretch; }
+
+/* ---------- chips: facts only ---------- */
+body.ui2 .chips { display: flex; flex-wrap: wrap; gap: var(--s1); }
+body.ui2 .chip { display: inline-flex; align-items: center; gap: var(--s1); padding: calc(6 * var(--u)) var(--s3) calc(6 * var(--u)) var(--s2);
+                 border-radius: 999px; font-size: var(--t1); color: var(--ink); background: var(--wash); border: calc(2 * var(--u)) solid var(--line); }
+body.ui2 .chip .ic { width: calc(26 * var(--u)); height: calc(26 * var(--u)); color: var(--amber); }
+
+/* a message (a quiet zone: what the robot would have said): a tinted panel */
+body.ui2 .v2 .message { margin: 0; padding: var(--s3) var(--s4); border-radius: calc(18 * var(--u)); color: var(--ink);
+                        background: var(--wash); border: calc(2 * var(--u)) solid var(--line);
+                        font-size: var(--t2); line-height: 1.34; text-wrap: pretty; }
+body.ui2 .v2 .message.long { font-size: var(--t1); }
+
+/* ---------- options: the home screen is one list ---------- */
+body.ui2 .v2-options .body { display: flex; flex-direction: column; gap: var(--s3); }
+body.ui2 .choice-list { border-radius: var(--r); background: var(--surface); border: calc(2 * var(--u)) solid var(--line); overflow: hidden;
+                        box-shadow: 0 calc(10 * var(--u)) calc(28 * var(--u)) var(--shadow); }
+body.ui2 .choice { width: 100%; font: inherit; color: var(--ink); text-align: left; cursor: pointer; display: flex; align-items: center; gap: var(--s4);
+                   min-height: calc(128 * var(--u)); padding: var(--s2) var(--s4) var(--s2) var(--s5); background: transparent; border: 0;
+                   transition: background .12s var(--ease); }
+body.ui2 .choice + .choice { border-top: calc(2 * var(--u)) solid var(--line); }
+body.ui2 .choice:active { background: var(--surface-2); }
+body.ui2 .choice .lead { width: calc(40 * var(--u)); height: calc(40 * var(--u)); color: var(--cyan); }
+body.ui2 .choice .go { width: calc(34 * var(--u)); height: calc(34 * var(--u)); color: var(--muted); }
+body.ui2 .choice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(2 * var(--u)); }
+body.ui2 .choice-name { font-size: var(--t3); font-weight: 700; color: var(--strong); line-height: 1.15; }
+body.ui2 .choice-hint { font-size: var(--t1); color: var(--muted); line-height: 1.25; }
+body.ui2 .quiet-actions { display: flex; gap: var(--s2); }
+body.ui2 .choices { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+body.ui2 .choices.many .btn.big { min-height: calc(76 * var(--u)); }
+
+/* ---------- book_card ---------- */
+body.ui2 .v2-card .body { display: grid; grid-template-columns: auto 1fr; grid-template-rows: minmax(0, 1fr); gap: var(--s5); }
+body.ui2 .cover.blank { display: grid; place-items: center; padding: var(--s3); text-align: center; font-weight: 700; font-size: var(--t2); color: var(--strong);
+                        background: var(--surface-2); line-height: 1.2; overflow: hidden; }
+body.ui2 .v2-card .cover { height: 100%; width: auto; aspect-ratio: 2 / 3; max-height: 100%; border-radius: calc(12 * var(--u));
+                           box-shadow: 0 calc(14 * var(--u)) calc(30 * var(--u)) var(--shadow-strong), 0 0 0 calc(2 * var(--u)) var(--line); }
+body.ui2 .v2-card.has-message .cover { height: calc(230 * var(--u)); align-self: start; }
+body.ui2 .v2-card .info { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; min-height: 0; }
+body.ui2 .v2-card .summary { margin: 0; font-size: var(--t2); line-height: 1.36; color: var(--body-text); text-wrap: pretty; }
+
+/* ---------- book_list: the picks stand on the page like books on a shelf ---------- */
+body.ui2 .v2-list .body { display: flex; flex-direction: column; gap: var(--s2); }
+body.ui2 .picks { flex: 1; min-height: 0; display: grid; gap: var(--s4); grid-template-columns: repeat(3, minmax(0, 1fr)); }
+body.ui2 .picks.n1 { grid-template-columns: minmax(0, 620px); } body.ui2 .picks.n2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+body.ui2 .pick { font: inherit; color: var(--ink); cursor: pointer; display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2);
+                 min-width: 0; min-height: 0; padding: 0; text-align: left; background: none; border: 0; transition: opacity .12s var(--ease); }
+body.ui2 .pick:active { opacity: .7; }
+body.ui2 .pick .cover { flex: none; width: calc(150 * var(--u)); height: calc(225 * var(--u)); border-radius: calc(10 * var(--u));
+                        box-shadow: 0 calc(10 * var(--u)) calc(22 * var(--u)) var(--shadow-strong), 0 0 0 calc(2 * var(--u)) var(--line); }
+body.ui2 .v2-list.has-message .pick .cover { width: calc(100 * var(--u)); height: calc(150 * var(--u)); }
+body.ui2 .pick-text { display: flex; flex-direction: column; gap: calc(4 * var(--u)); min-width: 0; width: 100%; }
+body.ui2 .pick .item-title { font-size: var(--t2); font-weight: 700; color: var(--strong); line-height: 1.15; }
+body.ui2 .pick-author { font-size: var(--t1); color: var(--amber); }
+body.ui2 .pick .item-reason { font-size: var(--t1); color: var(--muted); line-height: 1.28; -webkit-line-clamp: 3 !important; }
+body.ui2.zone-quiet .pick .item-reason { -webkit-line-clamp: unset !important; }
+body.ui2 .pick-more { display: inline-flex; align-items: center; gap: calc(4 * var(--u)); margin-top: var(--s1); font-size: var(--t1); font-weight: 600; color: var(--cyan); }
+body.ui2 .pick-more .ic { width: calc(24 * var(--u)); height: calc(24 * var(--u)); }
+body.ui2 .picks.n1 .pick { flex-direction: row; align-items: center; gap: var(--s4); }
+
+/* ---------- directions ---------- */
+body.ui2 .v2-directions .body { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: var(--s4); }
+body.ui2 .map-card { min-width: 0; min-height: 0; padding: var(--s2); border-radius: var(--r); background: var(--map-bg); border: calc(2 * var(--u)) solid var(--line); display: flex; }
+body.ui2 .plan { width: 100%; height: 100%; }
+body.ui2 .plan .floor { fill: var(--map-floor); stroke: none; }
+body.ui2 .plan .section { fill: var(--map-section); stroke: var(--map-section-line); }
+body.ui2 .plan .section.hi { fill: var(--map-hi); stroke: var(--cyan); }
+body.ui2 .plan .section-label { fill: var(--muted); } body.ui2 .plan .section-label.hi { fill: var(--strong); }
+body.ui2 .plan .landmark { fill: var(--landmark); stroke: var(--amber); } body.ui2 .plan .landmark.lift { fill: var(--lift); }
+body.ui2 .plan .landmark-icon { fill: var(--amber); }
+body.ui2 .plan .base-floor { fill: var(--map-free); stroke: var(--map-free); stroke-width: .06; stroke-linejoin: round; }
+body.ui2 .plan .base-walls { fill: var(--map-wall); stroke: var(--map-wall); stroke-width: .05; stroke-linejoin: round; }
+body.ui2 .plan .path { fill: none; stroke: var(--cyan); stroke-width: 0.17; stroke-dasharray: none; stroke-linecap: round; stroke-linejoin: round; }   /* the way to walk */
+body.ui2 .plan .traveller .halo { fill: var(--strong); opacity: .22; } body.ui2 .plan .traveller .arrow { fill: var(--strong); stroke: var(--cyan); stroke-width: .06; stroke-linejoin: round; }
+body.ui2 .plan .target { fill: var(--strong); } body.ui2 .plan .target-ring { stroke: var(--strong); }
+body.ui2 .plan .robot { fill: var(--cyan); stroke: var(--surface); } body.ui2 .plan .robot-label { fill: var(--strong); }
+body.ui2 .v2-directions .side { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; min-height: 0; }
+body.ui2 .route { list-style: none; margin: 0; padding: 0; counter-reset: step; display: flex; flex-direction: column; gap: var(--s2); font-size: var(--t2); line-height: 1.28; }
+body.ui2 .route li { counter-increment: step; position: relative; padding-left: calc(58 * var(--u)); min-height: calc(42 * var(--u)); display: flex; align-items: center; }
+body.ui2 .route li::before { content: counter(step); position: absolute; left: 0; top: 0; width: calc(42 * var(--u)); height: calc(42 * var(--u)); border-radius: 50%;
+                             display: grid; place-items: center; font-weight: 700; font-size: var(--t1); color: var(--on-accent); background: var(--cyan); }
+body.ui2 .distance { display: flex; align-items: center; gap: var(--s1); font-size: var(--t2); color: var(--muted); }
+body.ui2 .distance .ic { color: var(--amber); }
+body.ui2 .distance strong { color: var(--strong); font-size: var(--t3); }
+body.ui2 .v2-directions.has-message .body { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+
+/* ---------- status: returning books ---------- */
+body.ui2 .v2-status .body { display: flex; flex-direction: column; justify-content: center; gap: var(--s3); max-width: calc(760 * var(--u)); }
+body.ui2 .destination { font-size: var(--t5); font-weight: 700; color: var(--strong); line-height: 1.12; letter-spacing: -.01em; }
+body.ui2 .v2-status .detail { font-size: var(--t3); color: var(--muted); line-height: 1.25; }
+body.ui2 .books-left { margin-top: var(--s4); font-size: var(--t3); color: var(--muted); }
+body.ui2 .books-left strong { color: var(--cyan); font-variant-numeric: tabular-nums; }
+
+/* ---------- face with a caption (a quiet zone) ---------- */
+body.ui2 .view-face .caption { background: rgba(8, 22, 26, .92); border: calc(2 * var(--u)) solid var(--line); border-radius: var(--r); }
+
+/* ---------- motion ----------
+   Motion says where to look and what changed: the parts of a page arrive in reading order, and on the directions page the route
+   is drawn from where you are to where you are going, then an arrow walks it. Every rule is under no-preference, so a person
+   who asks their system for less motion gets the page as it stands (and ?still takes it all away for screenshots). */
+@media (prefers-reduced-motion: no-preference) {
+  body.ui2 [data-stagger] > * { animation: rise .36s var(--ease) calc(.1s + var(--i, 0) * .07s) backwards; }
+  body.ui2 .v2-card .cover { animation: settle .5s var(--ease) .08s backwards; }
+  @keyframes settle { from { opacity: 0; transform: translateY(calc(14 * var(--u))) scale(.94); } to { opacity: 1; transform: none; } }
+
+  body.ui2 .books-left.tick strong { display: inline-block; animation: tick .5s var(--ease) backwards; }
+  @keyframes tick { from { opacity: 0; transform: translateY(-.5em); } to { opacity: 1; transform: none; } }
+
+  /* directions: the map arrives, the sections settle in, the route draws, the steps appear as it goes, then the target calls */
+  body.ui2 .map-card { animation: rise .4s var(--ease) backwards; }
+  body.ui2 .plan .basemap { transition: opacity .6s ease; } body.ui2 .plan .basemap:not(.ready) { opacity: 0; }
+  body.ui2 .plan .section { transform-box: fill-box; transform-origin: center; animation: pop .45s var(--ease) calc(.25s + var(--i, 0) * .08s) backwards; }
+  body.ui2 .plan .section-label { animation: fade .4s ease calc(.45s + var(--i, 0) * .08s) backwards; }
+  body.ui2 .plan .landmark, body.ui2 .plan .landmark-icon { transform-box: fill-box; transform-origin: center; animation: pop .4s var(--ease) calc(.45s + var(--i, 0) * .06s) backwards; }
+  body.ui2 .plan .path { animation: draw var(--draw, 1.4s) cubic-bezier(.45, .05, .3, 1) .7s backwards; }
+  body.ui2 .plan .target { transform-box: fill-box; transform-origin: center; animation: pop .4s var(--ease) var(--after, 1.2s) backwards; }
+  body.ui2 .plan .target-ring { transform-box: fill-box; transform-origin: center; animation: ripple 2.2s ease-out var(--after, 1.2s) infinite backwards; }
+  body.ui2 .plan .robot { transform-box: fill-box; transform-origin: center; animation: breathe 2.4s ease-in-out infinite; }
+  body.ui2 .plan .section.hi { animation: pop .45s var(--ease) calc(.25s + var(--i, 0) * .08s) backwards, glow 2.6s ease-in-out calc(1s + var(--i, 0) * .08s) infinite; }
+  body.ui2 .route li { animation: rise .4s var(--ease) calc(.7s + var(--i, 0) * .5s) backwards; }
+  body.ui2 .v2-directions .side > :not(.route) { animation: rise .36s var(--ease) calc(.15s + var(--i, 0) * .07s) backwards; }
+
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pop { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: none; } }
+  @keyframes draw { from { stroke-dasharray: 1; stroke-dashoffset: 1; } to { stroke-dasharray: 1; stroke-dashoffset: 0; } }
+  @keyframes ripple { 0% { opacity: .9; transform: scale(.8); } 70%, 100% { opacity: 0; transform: scale(2.3); } }
+  @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+  @keyframes glow { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
+}
+
+/* screenshots: ?still */
+body.ui2.still *, body.ui2.still .v2 { animation: none !important; transition: none !important; }

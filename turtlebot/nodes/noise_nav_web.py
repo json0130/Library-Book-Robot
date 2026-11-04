@@ -7,8 +7,9 @@
 #     pale yellow = quiet  ->  orange  ->  dark red = loud
 # Walls stay black, unknown areas grey, the robot is the blue dot.
 #
-# Needs running:  minimal.launch, config/vslam.launch (navigation), noise_logger.py
-#                 (run_vslam_noise_nav.sh starts all of these)
+# Needs running:  minimal.launch, config/vslam.launch (navigation) or config/amcl_nav.launch, noise_logger.py
+#                 (run_robot_link.sh / run_vslam_noise_nav.sh start all of these)
+# Option: _localiser:=amcl   the robot is placed on the map by AMCL (/amcl_pose) instead of RTAB-Map (the page's words change)
 #
 # Run:  python3 noise_nav_web.py
 # View: on your PC run  ssh -L 8000:localhost:8000 robot@<robot ip>
@@ -58,7 +59,8 @@ class NoiseNavCore:
         self.last_balance = None
         self.loudest = None        # (x, y, dB)
         self.nav_state = 'Waiting for a click'
-        self.last_loc = None       # time the camera last recognised where we are
+        self.last_loc = None       # time the localiser last placed the robot on the map
+        self.localiser = 'rtabmap' # 'rtabmap' (the camera) or 'amcl' (the LiDAR): only changes the words on the page
         self.view = 'loudest'      # 'loudest' = loudest heard at each spot, 'average' = typical level
 
     # ---------- map ----------
@@ -246,6 +248,7 @@ class NoiseNavCore:
                 'loudest': None if self.loudest is None else round(self.loudest[2], 1),
                 'readings': len(self.readings),
                 'loc_age': None if self.last_loc is None else round(time.time() - self.last_loc, 1),
+                'localiser': self.localiser,
                 'lo': None if not rng else round(rng[0], 1),
                 'hi': None if not rng else round(rng[1], 1),
                 'view': self.view,
@@ -359,7 +362,12 @@ function refresh(){const n=new Image();n.onload=()=>{img.src=n.src;};n.src='/map
   $('cnt').textContent=s.readings;$('lo').textContent=s.lo==null?'quiet':s.lo+' dB';$('hi').textContent=s.hi==null?'loud':s.hi+' dB';
   $('pos').textContent=s.robot?('x '+s.robot[0]+'  y '+s.robot[1]):'-';
   const L=$('loc'),H=$('lochint'),C=$('loccard');
-  if(s.loc_age==null){L.textContent='\u2717 Camera has not recognised the place yet';L.style.color='#dc2626';
+  if(s.localiser=='amcl'){
+   if(s.loc_age==null){L.textContent='\u2717 No position on the map yet';L.style.color='#dc2626';
+    H.textContent='AMCL starts from the station pose. If the robot is not on its station, use Set robot position.';C.style.outline='2px solid #dc2626';}
+   else{L.textContent='\u2713 LiDAR knows where I am (updated '+Math.round(s.loc_age)+' s ago)';L.style.color='#16a34a';
+    H.textContent=s.loc_age<30?'':'AMCL updates the position while the robot moves.';C.style.outline='';}}
+  else if(s.loc_age==null){L.textContent='\u2717 Camera has not recognised the place yet';L.style.color='#dc2626';
    H.textContent='Turn the robot slowly on the spot (teleop) so the camera sees a mapped area, or use Set robot position.';C.style.outline='2px solid #dc2626';}
   else if(s.loc_age<30){L.textContent='\u2713 Camera knows where I am ('+Math.round(s.loc_age)+' s ago)';L.style.color='#16a34a';H.textContent='';C.style.outline='';}
   else{L.textContent='~ Last recognised '+Math.round(s.loc_age)+' s ago';L.style.color='#d97706';
@@ -518,13 +526,15 @@ def main():
     rospy.Subscriber('/noise_reading', Float32MultiArray, reading_cb)
     rospy.Subscriber('/noise_level', Float32, level_cb)
     rospy.Subscriber(plan_topic, Path, plan_cb)
-    # RTAB-Map (visual SLAM) publishes this whenever the camera recognises a place
+    # RTAB-Map (visual SLAM) publishes this whenever the camera recognises a place; AMCL (_localiser:=amcl) after each update
     from geometry_msgs.msg import PoseWithCovarianceStamped as _PWC
 
     def loc_cb(msg):
         with core.lock:
             core.last_loc = time.time()
-    rospy.Subscriber(rospy.get_param('~localization_topic', '/rtabmap/localization_pose'),
+    amcl = rospy.get_param('~localiser', 'rtabmap') == 'amcl'
+    core.localiser = 'amcl' if amcl else 'rtabmap'
+    rospy.Subscriber(rospy.get_param('~localization_topic', '/amcl_pose' if amcl else '/rtabmap/localization_pose'),
                      _PWC, loc_cb)
     pose_pub = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=1, latch=True)
 
@@ -589,7 +599,9 @@ def main():
         p.pose.pose.position.y = y
         p.pose.pose.orientation.z = math.sin(yaw / 2)
         p.pose.pose.orientation.w = math.cos(yaw / 2)
-        p.pose.covariance[0] = p.pose.covariance[7] = 0.25
+        # how sure a click is: 0.25 m and 15 degrees. RTAB-Map ignores it; AMCL spreads its particles by it, and the link counts
+        # the robot as localised only below its covariance limit (0.1 for AMCL), so this must stay under that.
+        p.pose.covariance[0] = p.pose.covariance[7] = 0.0625
         p.pose.covariance[35] = 0.07
         pose_pub.publish(p)
         rospy.loginfo('Initial pose set: x=%.2f y=%.2f yaw=%.2f', x, y, yaw)

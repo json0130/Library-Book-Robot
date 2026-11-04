@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Robot face</title>
+<script>
+// The colours of the second look (?ui=2): ?theme=light|dark, else what this page showed last, else dark. The operator page
+// changes it while the display runs (a {"theme"} event, below), so it is set before the first paint.
+(function () {
+  let t = new URLSearchParams(location.search).get("theme");
+  try { if (t !== "light" && t !== "dark") t = localStorage.getItem("theme"); } catch (_) { /* no storage: dark */ }
+  document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+})();
+</script>
 <style>
   /* Sizes are in units of a 1024x600 7-inch screen (--u = 1 px there): body text 28 px, buttons at least 64 px. */
   :root { --u: min(calc(100vw / 1024), calc(100vh / 600)); --cyan: #2debeb; --ink: #dffcfc; --muted: #8fc9c9;
@@ -94,6 +103,8 @@
   .map { min-width: 0; min-height: 0; display: flex; align-items: center; }
   .plan { width: 100%; height: 100%; }
   .plan .floor { fill: #031012; stroke: var(--line); stroke-width: 0.08; }
+  .plan .base-floor { fill: #0a2327; stroke: #0a2327; stroke-width: 0.06; stroke-linejoin: round; }
+  .plan .base-walls { fill: #2f5a5e; }
   .plan .section { fill: #0b2b2e; stroke: #1d6468; stroke-width: 0.06; }
   .plan .section.hi { fill: rgba(45, 235, 235, .28); stroke: var(--cyan); stroke-width: 0.12; }
   .plan .section-label { fill: var(--muted); font-weight: 700; }
@@ -165,6 +176,15 @@
 <div id="progress" aria-hidden="true"></div>
 <div id="state"></div>
 <script src="views.js"></script>
+<script>
+// ?ui=2 is the second look of the screen (ui2.css, views2.js): same face, same events, same buttons, other layout and colours.
+// ?still switches animations off (for screenshots).
+if (new URLSearchParams(location.search).has("still")) document.body.classList.add("still");
+if (new URLSearchParams(location.search).get("ui") === "2") {
+  document.body.classList.add("ui2");
+  document.write('<link rel="stylesheet" href="ui2.css"><script src="views2.js"><\/script>');
+}
+</script>
 <script>
 "use strict";
 // Robot face: glowing cyan eyes and a thin mouth on pure black.
@@ -535,6 +555,20 @@ if (params.has("update")) {
   try { showScreen(JSON.parse(params.get("update"))); } catch (_) { /* a bad debug parameter: just the face */ }
 }
 
+// ---------- how the screen looks: set from the operator page ----------
+function setTheme(name) {
+  if (name !== "light" && name !== "dark") return;
+  document.documentElement.dataset.theme = name;
+  try { localStorage.setItem("theme", name); } catch (_) { /* a per-page convenience only */ }
+}
+function setLook(name) {                         // 1 the original screen, 2 the second look: the page loads again with the other one
+  const now = params.get("ui") === "2" ? "2" : "1";
+  if ((name !== "1" && name !== "2") || name === now) return;
+  const next = new URLSearchParams(location.search);
+  next.set("ui", name);
+  location.search = next.toString();
+}
+
 // ---------- events ----------
 function connect() {
   let es;
@@ -542,6 +576,8 @@ function connect() {
   es.onmessage = ev => {
     try {
       const d = JSON.parse(ev.data);
+      if (d.theme) { setTheme(d.theme); return; }
+      if (d.look) { setLook(d.look); return; }
       if (d.talk) { startTalk(d.talk, performance.now()); return; }
       if (d.screen) { showScreen(d.screen); return; }
       const name = ALIASES[String(d.emotion || "").toLowerCase()];

@@ -364,11 +364,11 @@ class GoalSafetyTest(unittest.TestCase):
 
     def test_a_goal_too_far_from_the_base_is_rejected(self):
         nav, link = self.nav(max_goal_distance_m=5.0)
-        link.pose, link.localised = {"x": 1.0, "y": 1.0}, True
-        nav.go_to_pose(11.0, 1.0, 0.0, 1)
+        link.pose, link.localised = {"x": -6.0, "y": 1.0}, True
+        nav.go_to_pose(2.0, 1.0, 0.0, 1)
         self.assertEqual(len(link.rejected), 1)
         self.assertIn("5 m limit", link.rejected[0][1])
-        nav.go_to_pose(4.0, 1.0, 0.0, 1)
+        nav.go_to_pose(-3.0, 1.0, 0.0, 1)
         self.assertEqual(len(link.goals), 1)
 
     def test_a_goal_on_another_floor_than_the_base_is_rejected(self):

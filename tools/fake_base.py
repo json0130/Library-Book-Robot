@@ -192,6 +192,7 @@ class FakeBase:
         from robot_link import rules
         floor = self.plan.floor(self.level) if self.plan is not None and self.level is not None else None
         width_m, height_m = (floor.width, floor.height) if floor is not None else (8.0, 6.0)
+        x0, y0 = (floor.x0, floor.y0) if floor is not None else (0.0, 0.0)
         res, pad = 0.05, 20
         w, h = int(width_m / res) + 2 * pad, int(height_m / res) + 2 * pad
         data = [-1] * (w * h)
@@ -199,7 +200,7 @@ class FakeBase:
             for cx in range(pad, w - pad):
                 edge = cx in (pad, w - pad - 1) or cy in (pad, h - pad - 1)
                 data[cy * w + cx] = 100 if edge else 0
-        return rules.GridView(w, h, res, -pad * res, -pad * res, tuple(data))
+        return rules.GridView(w, h, res, x0 - pad * res, y0 - pad * res, tuple(data))
 
     def map_info(self, have: Optional[int] = None) -> dict:
         import base64
@@ -272,7 +273,7 @@ class FakeBase:
 
     def outside_map(self, x: float, y: float) -> bool:
         floor = self.plan.floor(self.level) if self.plan is not None and self.level is not None else None
-        return floor is not None and not (0 <= x <= floor.width and 0 <= y <= floor.height)
+        return floor is not None and not floor.contains(x, y)
 
     def cancel(self, goal_id: str) -> dict:
         self.update()

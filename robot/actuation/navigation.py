@@ -84,7 +84,7 @@ class TurtleBotNavigation(Navigation):
             if level is None and self.plan.station is not None:
                 level = self.plan.station.level
             plan_floor = self.plan.floor(level) if level is not None else None
-            if plan_floor is not None and not (0 <= x <= plan_floor.width and 0 <= y <= plan_floor.height):
+            if plan_floor is not None and not plan_floor.contains(x, y):
                 raise GoalRejected(f"({x:.2f}, {y:.2f}) is outside level {plan_floor.level} "
                                    f"({plan_floor.width:g} x {plan_floor.height:g} m)")
         pose = self.link.pose

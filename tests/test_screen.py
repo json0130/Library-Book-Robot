@@ -327,9 +327,9 @@ class DirectionsTest(unittest.TestCase):
 
     def test_the_robot_is_at_the_station_unless_returning(self):
         c = composer()
-        self.assertEqual(c.robot_position(), (1, 9.0, 5.5))
+        self.assertEqual(c.robot_position(), (1, -4.0, 2.5))
         c.on_navigation(NavigationRequested("", "shelf 2-SF-A", 1.0, 2.0, 1.57, shelf="2-SF-A", floor=2))
-        self.assertEqual(c.robot_position(), (1, 9.0, 5.5))            # with a visitor at the station
+        self.assertEqual(c.robot_position(), (1, -4.0, 2.5))            # with a visitor at the station
         c.path = "RETURNING.NAVIGATING"
         self.assertEqual(c.robot_position(), (2, 1.0, 2.0))             # during a trip: the last target
 
@@ -671,6 +671,75 @@ class ServerAndOperatorTest(unittest.TestCase):
                    "function status", "function face", "/input"):
             self.assertIn(fn, views.replace("fetch(\"/input\"", "/input"))
         self.assertNotIn("innerHTML", views)
+
+    def test_the_second_look_is_served_offline_and_draws_every_view(self):
+        with self.get("/?ui=2") as r:
+            page = r.read().decode()
+        self.assertIn("ui2.css", page)
+        self.assertIn("views2.js", page)
+        with self.get("/ui2.css") as r:
+            css = r.read().decode()
+        self.assertNotIn("http", css)                                  # offline: no font or image from the internet
+        with self.get("/views2.js") as r:
+            views = r.read().decode()
+        self.assertNotIn("innerHTML", views)
+        for view in VIEWS:                                             # one drawing for each view the composer can send
+            self.assertRegex(views, r"\b%s\b" % view)
+        self.assertIn("Views.render =", views)
+        with self.get("/ui-version") as r:
+            self.assertTrue(json.loads(r.read())["version"])
+
+    def test_the_operator_sets_how_the_screen_looks_and_pages_follow(self):
+        seen = self.hub.subscribe()
+        for command, value in (("theme", "light"), ("look", "2"), ("theme", " Dark ")):
+            with self.post("/operator", {"command": command, "arg": value}) as r:
+                self.assertEqual(json.loads(r.read())[command], value.strip().lower())
+        self.assertEqual([seen.get(timeout=2) for _ in range(3)], [{"theme": "light"}, {"look": "2"}, {"theme": "dark"}])
+        for bad in (("theme", "neon"), ("look", "3"), ("theme", "")):
+            with self.assertRaises(urllib.error.HTTPError):
+                self.post("/operator", {"command": bad[0], "arg": bad[1]})
+        self.assertEqual(self.hub.inbox.after(0)["items"], [])           # the robot is not asked: this is the display's own setting
+        late = self.hub.subscribe()                                      # a page that connects now starts with the last choices
+        self.assertEqual([late.get(timeout=2) for _ in range(2)], [{"theme": "dark"}, {"look": "2"}])
+        self.assertTrue(allowed("POST", "/operator", False))             # another computer's operator page may set it
+
+    def test_the_second_look_has_a_light_theme_and_the_page_follows_the_events(self):
+        with self.get("/ui2.css") as r:
+            css = r.read().decode()
+        self.assertIn('html[data-theme="light"] body.ui2', css)
+        for token in ("--ink", "--muted", "--surface", "--cyan", "--on-accent", "--map-bg", "--bg"):
+            self.assertIn(token + ":", css.split('html[data-theme="light"]')[1].split("}")[0] if token != "--ink" else css)
+        with self.get("/") as r:
+            page = r.read().decode()
+        for needle in ("function setTheme", "function setLook", "d.theme", "d.look", "dataset.theme"):
+            self.assertIn(needle, page)
+        with self.get("/operator") as r:
+            operator = r.read().decode()
+        for needle in ('data-look="1"', 'data-look="2"', 'data-theme="dark"', 'data-theme="light"'):
+            self.assertIn(needle, operator)
+
+    def test_the_robots_own_map_is_served_under_the_plan_and_the_motion_respects_the_viewer(self):
+        with self.get("/maps/lab.json") as r:
+            self.assertEqual(r.headers.get_content_type(), "application/json")
+            picture = json.loads(r.read())
+        self.assertEqual(set(picture) >= {"floor", "walls", "walk", "bounds"}, True)
+        with self.get("/views.js") as r:
+            views = r.read().decode()
+        for needle in ("maps/", "base_map", "p.x0", "scale(1 -1)", "base-floor", "base-walls"):     # drawn y up, in the map's own frame
+            self.assertIn(needle, views)
+        with self.get("/ui2.css") as r:
+            css = r.read().decode()
+        motion = css.split("/* ---------- motion")[1].split("/* screenshots")[0]
+        self.assertIn("@media (prefers-reduced-motion: no-preference) {", motion)
+        outside = motion.replace(motion[motion.index("@media"):], "")
+        self.assertNotIn("animation:", outside)                         # nothing moves unless the viewer allows motion
+        for name in ("draw", "ripple", "pop", "rise"):
+            self.assertIn("@keyframes " + name, css)
+        self.assertIn("body.ui2.still *", css)                          # ?still takes every animation away for screenshots
+        with self.get("/views2.js") as r:
+            views2 = r.read().decode()
+        for needle in ("animateMotion", "pathLength", "prefers-reduced-motion", "classList.contains(\"still\")"):
+            self.assertIn(needle, views2)
 
     def test_the_operator_screen_command_forces_any_view(self):
         app = make_app()

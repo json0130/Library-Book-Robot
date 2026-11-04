@@ -26,8 +26,9 @@ def has_moved(a: Optional[Tuple[float, float, float]], b: Optional[Tuple[float, 
 
 
 def pose_is_trusted(covariance, limit: float) -> bool:
-    """Is a /rtabmap/localization_pose a real fix? RTAB-Map republishes the last pose with covariance 9999 when it has lost
-    track, so a pose counts only when its x, y and yaw variances (covariance[0], [7], [35]) are all finite and at most `limit`."""
+    """Is a localisation a real fix? RTAB-Map republishes the last pose with covariance 9999 when it has lost track, and AMCL's
+    covariance grows as its particles spread out, so a pose counts only when its x, y and yaw variances (covariance[0], [7],
+    [35]) are all finite and at most `limit`."""
     try:
         values = [float(covariance[i]) for i in (0, 7, 35)]
     except (TypeError, ValueError, IndexError):
@@ -41,9 +42,9 @@ def is_localised(tf_age_s: Optional[float], loc_age_s: Optional[float], still: b
 
     All of these must hold:
       * the map -> base_footprint transform is fresh (tf_age_s <= tf_max_age_s); without it there is no pose at all;
-      * RTAB-Map has localised at least once (loc_age_s is not None);
-      * the last /rtabmap/localization_pose is younger than loc_max_age_s, OR the wheel odometry shows that the robot has
-        hardly moved since that localisation (`still`): a robot that stands still is not lost, and RTAB-Map may well stay quiet.
+      * the localiser (RTAB-Map or AMCL) has localised at least once (loc_age_s is not None);
+      * the last localisation is younger than loc_max_age_s, OR the wheel odometry shows that the robot has hardly moved
+        since that localisation (`still`): a robot that stands still is not lost, and both localisers stay quiet then.
     """
     if tf_age_s is None or tf_age_s > tf_max_age_s:
         return False

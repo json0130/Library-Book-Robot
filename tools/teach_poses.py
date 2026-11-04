@@ -342,7 +342,7 @@ class Teacher:
             except FloorPlanError as exc:
                 shutil.copy2(backup, self.floorplan_path)
                 raise TeachError(f"the floor plan would not load with these ({exc}); {self.floorplan_path.name} was put back. "
-                                 "The floor plan's rectangle for the floor is 0..width and 0..height: do the poses fit it?") from exc
+                                 "The floor's rectangle is x0, y0, width and height in floorplan.yaml (from 0, 0 unless it says otherwise): do the poses fit it?") from exc
             done.append((self.floorplan_path, backup))
         if not done:
             return "nothing to save (only complete things are saved: a section needs both corners)"

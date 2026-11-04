@@ -140,7 +140,7 @@ class FacilityTest(unittest.TestCase):
         run(app, PersonEngaged(), UserUtterance("where is the toilet"))
         shown = [u for u in app.screens if u.view == "directions"][-1].payload
         self.assertEqual(shown["steps"], ["Go to the toilets"])
-        self.assertEqual((shown["target"]["x"], shown["target"]["y"]), (10.8, 5.0))
+        self.assertEqual((shown["target"]["x"], shown["target"]["y"]), (-5.5, 1.0))
         self.assertEqual(shown["buttons"], [])
 
     def test_the_nearest_floor_is_told_first(self):

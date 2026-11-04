@@ -25,6 +25,7 @@ Linux) over SSH. Nothing needs to be installed on the PC.
 - [Part 1 - Make the map](#part-1---make-the-map)
 - [Part 2 - Noise map with click-to-go navigation](#part-2---noise-map-with-click-to-go-navigation)
 - [Link to the Jetson](#link-to-the-jetson)
+- [Two ways to localise](#two-ways-to-localise)
 - [Output files](#output-files)
 - [Settings you can change](#settings-you-can-change)
 - [Troubleshooting](#troubleshooting)
@@ -113,11 +114,15 @@ turtlebot/                     (a folder of the Library-Book-Robot repository)
 ├── run_vslam_mapping.sh       Part 1 - one command starts everything for mapping
 ├── run_vslam_noise_nav.sh     Part 2 - one command starts everything for noise mapping
 ├── run_robot_link.sh          Part 2 plus the link to the Jetson (robot_link_api); see "Link to the Jetson"
+├── run_lidar_mapping.sh       makes the LiDAR map for run_robot_link.sh --amcl (see "Two ways to localise")
+├── measure_localisation.py    how often the localiser places the robot (RTAB-Map or AMCL), only listens
 ├── check_devices.sh           shows what is plugged in where (LiDAR, base, camera, mics)
 ├── setup_mics.py              one-time setup: which USB mic is left / right
 ├── calibrate_noise.py         one-time setup: turn the mics' dBFS into dB with a phone sound meter
 ├── config/
 │   ├── vslam.launch           camera + RTAB-Map + LiDAR + move_base
+│   ├── amcl_nav.launch        LiDAR + saved map + AMCL + move_base (no camera)
+│   ├── lidar_mapping.launch   LiDAR + gmapping (no camera)
 │   └── hokuyo_costmap.yaml    navigation settings
 ├── nodes/
 │   ├── map_viewer.py
@@ -125,15 +130,19 @@ turtlebot/                     (a folder of the Library-Book-Robot repository)
 │   ├── scan_filter.py
 │   ├── noise_logger.py
 │   ├── noise_nav_web.py
+│   ├── set_initial_pose.py    sends the station pose to AMCL at start-up
 │   └── robot_link_api.py      the HTTP API for the Jetson (port 8010)
 ├── robot_link/                the API's logic in plain Python 3.8 (no ROS), tested in tests/
+├── maps/                      LiDAR maps made by run_lidar_mapping.sh (ignored by git)
 ├── tests/                     python3 -m unittest discover -s tests
 ├── docs/images/               screenshots from simulated tests
 └── extras/                    earlier experiments (LiDAR-only SLAM, first noise maps)
 ```
 
 Maps, recordings and logs are saved in the robot's **home folder** (`~`), not in
-the repo (see `.gitignore`).
+the repo (see `.gitignore`). The exceptions are `run_robot_link.sh` and
+`run_lidar_mapping.sh`: they keep everything in this folder (`run_data/`,
+`run_logs/`, `maps/`) and never write to the home folder.
 
 ---
 
@@ -657,9 +666,12 @@ The API also serves the map the click-to-go page uses (`GET /api/map`, from `/ma
 ```bash
 ./run_robot_link.sh --check       # only looks: is another ROS stack or run script already running? Starts nothing.
 ./run_robot_link.sh --dry-run     # prints what it would start
-./run_robot_link.sh --local       # starts the base, camera, LiDAR, RTAB-Map, move_base, noise logger, web page and the API on 127.0.0.1 (for the tunnel)
-./run_robot_link.sh               # the same, with the API on the Wi-Fi address (needs a firewall rule for port 8010)
+./run_robot_link.sh --amcl --local   # base, LiDAR, AMCL on maps/lidar_map.yaml, move_base, noise logger, web page, the API on 127.0.0.1 (for the tunnel)
+./run_robot_link.sh --local       # the same with the camera and RTAB-Map instead of AMCL
+./run_robot_link.sh               # RTAB-Map, with the API on the Wi-Fi address (needs a firewall rule for port 8010)
 ```
+
+`--amcl` needs a LiDAR map first and the robot standing on its station; see [Two ways to localise](#two-ways-to-localise).
 
 It starts the same things as `run_vslam_noise_nav.sh` plus the API, but:
 - it **refuses to start** (and says what it found) if a `roscore`, the Kobuki driver or one of the other `run_*.sh` scripts is already running, and it never stops
@@ -688,7 +700,8 @@ The gain must not change afterwards. The microphones are at 100 % capture volume
 
 **How fresh must the localisation be?** `python3 measure_localisation.py` listens for a minute (it only listens) and tells how often RTAB-Map
 publishes `/rtabmap/localization_pose` standing still and while moving, and suggests `_loc_max_age_s` for `robot_link_api.py` from that (see the
-rule for `localised` in `docs/robot_link.md`). Keep the robot still for the first half, then move it.
+rule for `localised` in `docs/robot_link.md`). Keep the robot still for the first half, then move it. With `--localiser amcl` it listens to
+`/amcl_pose` instead and also prints how large AMCL's covariance was (for tuning `_loc_max_covariance`).
 
 **Tests** (no ROS needed, Python 3.8): `python3 -m unittest discover -s tests`. To see the API work without the robot:
 `ROBOT_LINK_TOKEN=x python3 -m robot_link.dev_server --port 8010` (a simulated base behind the real server), and from the repository root
@@ -702,8 +715,64 @@ rule for `localised` in `docs/robot_link.md`). Keep the robot still for the firs
 | `ROBOT_LINK_TOKEN is not set` | no `.robot_link_env` | step 1 above |
 | `has no IPv4 address` | the Wi-Fi is not connected | connect it, or `_host:=<address>` |
 | Jetson says "base unreachable" | the Dell's address changed, or the API is not running | `--print-address`, update `turtlebot.base_url`; `run_logs/robot_link_api.log` |
-| `/api/health` says `ros_ok: false` | the stack is not up, or `/rtabmap/rtabmap` / `move_base` / `/odom` are silent | `run_logs/*.log` |
+| `/api/health` says `ros_ok: false` | the stack is not up, or `/rtabmap/rtabmap` (`/amcl` with `--amcl`) / `move_base` / `/odom` are silent | `run_logs/*.log` |
 | goals refused `not_localised` | RTAB-Map has not found the robot on the map | turn slowly on the spot, or "Set robot position" on the page |
+| goals refused `not_localised` with `--amcl` | AMCL did not get the station pose (`AMCL did not take the station pose` at start-up), or its covariance grew over `_loc_max_covariance` | "Set robot position" on the page, or put the robot on its station and run `python3 nodes/set_initial_pose.py`; `run_logs/set_initial_pose.log` |
+| `LiDAR map not found` | no LiDAR map yet | `./run_lidar_mapping.sh` (see below) |
+
+---
+
+## Two ways to localise
+
+`run_robot_link.sh` finds the robot on the map in one of two ways:
+
+| | **LiDAR + AMCL** (`--amcl`) | **Camera + RTAB-Map** (without `--amcl`) |
+|---|---|---|
+| Map | `maps/lidar_map.yaml` + `.pgm`, made by `run_lidar_mapping.sh` | `~/vslam_map.db`, made by `run_vslam_mapping.sh` |
+| How it finds the robot | matches each LiDAR scan against the map and follows the wheels between scans | recognises what the camera sees |
+| Where it starts | the station in `../data/floorplan.yaml`, sent to `/initialpose` at start-up | anywhere the camera recognises |
+| Load on the laptop | small; the camera is not started | heavy: RTAB-Map took 1 - 1.7 s per update on this Celeron (1 s wanted), and the camera fills the USB hub |
+| Good at | keeping track while it drives, from a known start | finding itself after being carried somewhere else |
+| Weak at | being moved by hand while running (it does not notice), long rows that look the same, glass | finding itself from a standing start on this laptop (about 1 start in 5 on 2026-11-04), dark or shiny surfaces |
+| What the link listens to | `_localiser:=amcl`: `/amcl_pose`, health check on the `/amcl` node, covariance limit 0.1 | `/rtabmap/localization_pose`, `/rtabmap/rtabmap`, limit 1.0 |
+
+**Which to use.** AMCL, once there is a LiDAR map: the robot starts on its station anyway, and the laptop is too slow for RTAB-Map to
+find the robot reliably. RTAB-Map stays for when the robot cannot start from its station, and for comparing the two.
+
+**Making the LiDAR map** (the robot drives: area clear, someone at the power switch):
+
+1. Put the robot **on its station**, facing its usual way.
+2. `./run_lidar_mapping.sh` (or `./run_lidar_mapping.sh lab2` for another name). It starts the base, the LiDAR, `scan_filter.py`,
+   gmapping and the keyboard. Drive slowly round the whole room, come back past the start, and press **Ctrl-C**: the map is saved as
+   `maps/lidar_map.pgm`, `.yaml` and a `.png` to look at. An existing map is never replaced unless you add `--overwrite` (the old one is
+   kept as `lidar_map.bak-<time>.*`).
+3. The start spot is **(0, 0) facing +x** on the new map. Set the station in `../data/floorplan.yaml` to
+   `station: {level: 1, x: 0.0, y: 0.0, yaw: 0.0}`. **Everything else in the floor plan and `data/shelves.csv` was measured on the
+   RTAB-Map map, whose frame is a different one**: teach those again on the new map (`tools/teach_poses.py` on the Jetson, with
+   `--amcl` running).
+4. For the visitor screen, on the Jetson: copy the two files over and run `python tools/map_to_plan.py lidar_map.yaml lab`
+   (it reads `map_saver` output as it is).
+
+**Starting with AMCL**: robot on its station, then `./run_robot_link.sh --amcl --local`. After move_base is up the script sends the
+station pose (`nodes/set_initial_pose.py`) and says `AMCL starts from the station: ...`. If the robot was not on the station, use
+**Set robot position** on the click-to-go page; it is sent with 0.25 m and 15 degrees of doubt, which still counts as localised.
+
+**What "localised" means with AMCL.** AMCL publishes `/amcl_pose` after each update while the robot moves (every 10 cm or 9 degrees)
+and stays quiet when it stands still; the link's rule (`docs/robot_link.md`) already allows for that. Its covariance is the spread of
+its particles: the link counts the robot as lost above `loc_max_covariance` (0.1 = about 0.3 m or 18 degrees). **0.1 is a first guess**:
+measure it in the comparison runs with `python3 measure_localisation.py --localiser amcl` and set `_loc_max_covariance:=` if needed.
+It must stay above what the start pose is sent with (0.15 m, 8 degrees). AMCL can also be confidently wrong, for example after the robot
+was carried somewhere: set its position again whenever it has been moved by hand.
+
+**Comparing the two** (step 4 of the plan): the same number of cold starts at the station with each, counting how often the base is
+localised within 30 s and stays localised during a short drive.
+
+**What is different from the earlier AMCL try** in `extras/lidar_slam/` (where AMCL often lost track):
+
+- the map is made from the **filtered** scan, the same one AMCL reads (before, gmapping read the raw scan with the robot's own posts in it);
+- AMCL starts from the **station**, sent at start-up, instead of assuming the robot is where mapping started;
+- the **map cleaner** runs (the costmap waits for `/map_clean`; without it the planner had no map);
+- AMCL is set for the URG-04LX (5.5 m, not 12 m) and updates every 10 cm instead of 25 cm (`config/amcl_nav.launch`).
 
 ---
 
@@ -763,6 +832,8 @@ python3 nodes/noise_logger.py _level:=average _side_db:=3
 | `/noise_balance` | Float32 | Left minus right (dB): + = louder on the left |
 | `/noise_reading` | Float32MultiArray | `[overall, left, right, balance]` together |
 | `/rtabmap/localization_pose` | PoseWithCovarianceStamped | Sent when the camera recognises a place |
+| `/amcl_pose` | PoseWithCovarianceStamped | AMCL's position (with `--amcl`), after each update while the robot moves |
+| `/initialpose` | PoseWithCovarianceStamped | "Set robot position" on the page; the station pose at start-up with `--amcl` |
 
 ---
 
@@ -826,4 +897,5 @@ onto a SLAM map.
 
 `extras/` holds earlier experiments: LiDAR-only SLAM with gmapping and an
 autonomous explorer, and the first noise-map scripts. See
-[`extras/README.md`](extras/README.md).
+[`extras/README.md`](extras/README.md). The LiDAR way is back in the main
+folder, fixed: see [Two ways to localise](#two-ways-to-localise).

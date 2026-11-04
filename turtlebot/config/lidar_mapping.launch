@@ -1,0 +1,52 @@
+<!--
+  LiDAR mapping: the Hokuyo LiDAR and gmapping (2D LiDAR SLAM with the wheel odometry). No camera.
+  Started by run_lidar_mapping.sh, which also starts minimal.launch, scan_filter.py (gmapping reads its
+  /hokuyo_scan_filtered, the same scan AMCL reads later), the keyboard and, at the end, map_saver.
+
+  The map frame is where the robot stood when gmapping started: that spot is (0, 0), facing +x.
+
+  Run:  roslaunch config/lidar_mapping.launch
+  Options:
+    port:=/dev/ttyACM1  laser_x:=0.0  laser_z:=0.3  laser_yaw:=3.14159   (LiDAR settings, as in amcl_nav.launch)
+-->
+<launch>
+  <arg name="scan_topic" default="/hokuyo_scan_filtered"/>
+
+  <arg name="port"      default="/dev/ttyACM0"/>
+  <arg name="laser_x"   default="0.0"/>
+  <arg name="laser_y"   default="0.0"/>
+  <arg name="laser_z"   default="0.3"/>
+  <arg name="laser_yaw" default="0.0"/>
+
+  <node pkg="urg_node" type="urg_node" name="hokuyo" output="screen">
+    <param name="serial_port" value="$(arg port)"/>
+    <param name="frame_id"    value="laser"/>
+    <remap from="scan" to="hokuyo_scan"/>
+  </node>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="laser_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
+
+  <node pkg="gmapping" type="slam_gmapping" name="slam_gmapping" output="screen">
+    <remap from="scan" to="$(arg scan_topic)"/>
+    <param name="base_frame" value="base_footprint"/>
+    <param name="odom_frame" value="odom"/>
+    <param name="map_frame"  value="map"/>
+
+    <!-- URG-04LX: about 4 m reliable, 5.6 m at most -->
+    <param name="maxRange"  value="5.5"/>
+    <param name="maxUrange" value="4.0"/>
+
+    <!-- 30 x 30 m in 5 cm squares, the resolution of the old maps and of the visitor screen's converter -->
+    <param name="xmin" value="-15.0"/>
+    <param name="ymin" value="-15.0"/>
+    <param name="xmax" value="15.0"/>
+    <param name="ymax" value="15.0"/>
+    <param name="delta" value="0.05"/>
+
+    <param name="map_update_interval" value="2.0"/>
+    <param name="linearUpdate"   value="0.2"/>
+    <param name="angularUpdate"  value="0.25"/>
+    <param name="temporalUpdate" value="2.0"/>
+    <param name="particles" value="30"/>
+  </node>
+</launch>

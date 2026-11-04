@@ -105,49 +105,74 @@ const Views = (() => {
   }
 
   // ---- directions: the floor plan as SVG, the target highlighted, an approximate path, the steps
-  const ICON = { lift: "L", help_desk: "?", entrance: "E", stairs: "S", toilets: "WC", other: "•" };
+  const ICON = { lift: "L", help_desk: "?", entrance: "E", exit: "X", stairs: "S", toilets: "WC", other: "•" };
+
+  // the picture of the robot's own map under a floor (maps/<name>.json: the floor and the walls as SVG paths in map metres)
+  const maps = {};
+  function loadMap(name) {
+    if (!maps[name]) {
+      maps[name] = fetch(`maps/${encodeURIComponent(name)}.json`).then(r => r.ok ? r.json() : null).catch(() => null);
+    }
+    return maps[name];
+  }
 
   function floorPlan(p) {
+    // A floor with a base map is drawn as the robot's map is: x to the right, y UP (screen y is -y); the sample floors, y down.
+    const fx0 = p.x0 || 0, fy0 = p.y0 || 0, up = !!p.base_map;
+    const Y = y => up ? -y : y;
+    const fy = [Y(fy0), Y(fy0 + p.height)];
+    const floorTop = Math.min(...fy), floorBottom = Math.max(...fy);
     // show the part of the floor that matters (sections, landmarks, the path, the robot), zoomed in, with a margin
     const xs = [], ys = [];
-    for (const s of p.sections || []) { xs.push(s.x, s.x + s.w); ys.push(s.y, s.y + s.h); }
-    for (const q of [...(p.landmarks || []), ...(p.robot ? [p.robot] : []), ...(p.target ? [p.target] : [])]) { xs.push(q.x); ys.push(q.y); }
-    for (const q of p.path || []) { xs.push(q[0]); ys.push(q[1]); }
-    const pad = 0.8;
-    const x0 = Math.max(0, Math.min(...xs) - pad), y0 = Math.max(0, Math.min(...ys) - pad - 0.4);
-    const x1 = Math.min(p.width, Math.max(...xs) + pad), y1 = Math.min(p.height, Math.max(...ys) + pad);
+    for (const s of p.sections || []) { xs.push(s.x, s.x + s.w); ys.push(Y(s.y), Y(s.y + s.h)); }
+    for (const q of [...(p.landmarks || []), ...(p.robot ? [p.robot] : []), ...(p.target ? [p.target] : [])]) { xs.push(q.x); ys.push(Y(q.y)); }
+    for (const q of p.path || []) { xs.push(q[0]); ys.push(Y(q[1])); }
+    const pad = up ? 1.1 : 0.8;
+    const x0 = Math.max(fx0, Math.min(...xs) - pad), y0 = Math.max(floorTop, Math.min(...ys) - pad - 0.4);
+    const x1 = Math.min(fx0 + p.width, Math.max(...xs) + pad), y1 = Math.min(floorBottom, Math.max(...ys) + pad);
     const box = svg("svg", { viewBox: `${x0 - 0.1} ${y0 - 0.1} ${x1 - x0 + 0.2} ${y1 - y0 + 0.2}`, class: "plan",
                              role: "img", "aria-label": `Plan of ${p.floor_name}` });
-    box.append(svg("rect", { x: 0, y: 0, width: p.width, height: p.height, rx: 0.2, class: "floor" }));
+    if (up) {
+      const layer = svg("g", { class: "basemap", transform: "scale(1 -1)" });
+      box.append(layer);
+      loadMap(p.base_map).then(m => {
+        if (!m) return;
+        layer.append(svg("path", { d: m.floor, class: "base-floor" }), svg("path", { d: m.walls, class: "base-walls" }));
+        layer.classList.add("ready");
+      });
+    } else {
+      box.append(svg("rect", { x: fx0, y: floorTop, width: p.width, height: p.height, rx: 0.2, class: "floor" }));
+    }
     for (const s of p.sections || []) {
-      box.append(svg("rect", { x: s.x, y: s.y, width: s.w, height: s.h, rx: 0.12,
+      const top = up ? Y(s.y + s.h) : s.y;
+      box.append(svg("rect", { x: s.x, y: top, width: s.w, height: s.h, rx: 0.12,
                                class: "section" + (s.highlight ? " hi" : "") }));
       const tall = s.h > s.w * 1.4;                    // a long narrow section: write its name along it
       const room = tall ? s.h : s.w;
       const size = Math.max(0.3, Math.min(0.6, room / Math.max(4, s.name.length) * 1.7, (tall ? s.w : s.h) * 0.45));
-      const x = tall ? s.x + s.w - size * 0.8 : s.x + s.w / 2, y = tall ? s.y + s.h / 2 : s.y + size * 1.05;
+      const x = tall ? s.x + s.w - size * 0.8 : s.x + s.w / 2, y = tall ? top + s.h / 2 : top + size * 1.05;
       box.append(svg("text", { x, y, "font-size": size, class: "section-label" + (s.highlight ? " hi" : ""),
                                "text-anchor": "middle", "dominant-baseline": "middle",
                                transform: tall ? `rotate(-90 ${x} ${y})` : "" }, s.name));
     }
-    if ((p.path || []).length > 1) {                    // APPROXIMATE: straight or L-shaped, not a planned route
-      box.append(svg("polyline", { points: p.path.map(q => q.join(",")).join(" "), class: "path" }));
+    if ((p.path || []).length > 1) {                    // the way to walk: round the walls of the base map, else straight or L-shaped
+      box.append(svg("polyline", { points: p.path.map(q => `${q[0]},${Y(q[1])}`).join(" "), class: "path" }));
     }
     for (const m of p.landmarks || []) {
-      box.append(svg("rect", { x: m.x - 0.35, y: m.y - 0.35, width: 0.7, height: 0.7, rx: 0.12, class: `landmark ${m.kind}` }));
-      box.append(svg("text", { x: m.x, y: m.y + 0.02, "font-size": 0.42, class: "landmark-icon", "text-anchor": "middle",
+      box.append(svg("rect", { x: m.x - 0.35, y: Y(m.y) - 0.35, width: 0.7, height: 0.7, rx: 0.12, class: `landmark ${m.kind}` }));
+      box.append(svg("text", { x: m.x, y: Y(m.y) + 0.02, "font-size": 0.42, class: "landmark-icon", "text-anchor": "middle",
                                "dominant-baseline": "middle" }, ICON[m.kind] || "•"));
     }
     if (p.target) {
-      box.append(svg("circle", { cx: p.target.x, cy: p.target.y, r: 0.38, class: "target-ring" }));
-      box.append(svg("circle", { cx: p.target.x, cy: p.target.y, r: 0.18, class: "target" }));
+      box.append(svg("circle", { cx: p.target.x, cy: Y(p.target.y), r: 0.38, class: "target-ring" }));
+      box.append(svg("circle", { cx: p.target.x, cy: Y(p.target.y), r: 0.18, class: "target" }));
     }
     if (p.robot) {
-      box.append(svg("circle", { cx: p.robot.x, cy: p.robot.y, r: 0.32, class: "robot" }));
-      box.append(svg("text", { x: p.robot.x, y: p.robot.y - 0.6, "font-size": 0.45, class: "robot-label",
+      box.append(svg("circle", { cx: p.robot.x, cy: Y(p.robot.y), r: 0.32, class: "robot" }));
+      box.append(svg("text", { x: p.robot.x, y: Y(p.robot.y) - 0.6, "font-size": 0.45, class: "robot-label",
                                "text-anchor": "middle" }, "You are here"));
     } else if (p.start) {
-      box.append(svg("text", { x: p.start.x, y: p.start.y - 0.6, "font-size": 0.45, class: "robot-label",
+      box.append(svg("text", { x: p.start.x, y: Y(p.start.y) - 0.6, "font-size": 0.45, class: "robot-label",
                                "text-anchor": "middle" }, p.start.label));
     }
     return box;
@@ -268,5 +293,6 @@ const Views = (() => {
     fit(target);
   }
 
-  return { render, names: Object.keys(RENDER) };
+  // what the second look (views2.js, ?ui=2) builds on: the same helpers, the floor plan drawing and the quiet-zone fitting
+  return { render, names: Object.keys(RENDER), parts: { el, svg, button, buttons, cover, badge, message, floorPlan, fit } };
 })();
