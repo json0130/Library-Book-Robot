@@ -36,8 +36,9 @@ class CameraFeed:
     IDLE_S = 1.0
 
     def __init__(self, camera, counter=None, host: str = "127.0.0.1", port: int = 8765, fps: float = 15.0,
-                 width: int = 480, quality: int = 60):
+                 width: int = 480, quality: int = 60, recorder=None):
         self.camera, self.counter = camera, counter
+        self.recorder = recorder                    # film mode (`sim --record`): robot.film.FrameRecorder gets every boxed frame
         self.host, self.port, self.interval = host, port, 1.0 / max(1.0, fps)
         self.width, self.quality = width, quality
         self.viewers = 1                            # assume someone is watching until the server says otherwise
@@ -62,6 +63,12 @@ class CameraFeed:
         if detections:                                           # box the faces at full size, then shrink
             frame = frame.copy()
             draw_faces(cv2, frame, detections)
+        if self.recorder is not None:                            # full size, faces boxed: the same picture the page gets
+            try:
+                self.recorder.write(frame)
+            except Exception as exc:                             # recording must never stop the feed
+                log.warning("camera recording stopped (%s)", exc)
+                self.recorder = None
         height, width = frame.shape[:2]
         if width > self.width:
             frame = cv2.resize(frame, (self.width, round(height * self.width / width)), interpolation=cv2.INTER_AREA)
@@ -95,4 +102,7 @@ class CameraFeed:
     async def run(self) -> None:
         while True:
             ok = await self.step()
+            if self.recorder is not None:                        # recording: keep the camera's pace even with no page open
+                await asyncio.sleep(self.interval)
+                continue
             await asyncio.sleep(RETRY_S if not ok else self.interval if self.viewers > 0 else self.IDLE_S)

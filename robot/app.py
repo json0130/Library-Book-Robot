@@ -129,7 +129,8 @@ class App:
     screen: Optional[ScreenComposer] = None       # decides what the screen shows (core/screen.py)
     link: object = None                           # drivers.turtlebot_link.TurtleBotLink when navigation.backend is turtlebot, else None
     zones: Optional[ZoneResolver] = None          # pose + noise + frozen -> zone (core/zones.py); only with a link
-    zone_source: str = "map"                      # what decided the zone now: map | noise | frozen
+    zone_source: str = "map"                      # what decided the zone now: map | noise | frozen | forced
+    forced_zone: Optional[str] = None             # film mode (`sim --zone`): this zone for the whole take, whatever the map, noise or operator say
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
@@ -234,7 +235,9 @@ class App:
     async def _on_context(self, event: ContextChanged) -> None:
         zone = resolve_area(event.zone, self.cfg.zones)
         noise_db, shown_noise = event.noise_db, None
-        if self.zones is not None:                      # with a base: the pose, the noise and the visit decide (core/zones.py)
+        if self.forced_zone is not None:                # film mode: the take's zone, never the map's or the noise's
+            zone, noise_db, shown_noise, self.zone_source = self.forced_zone, None, event.noise_db, "forced"
+        elif self.zones is not None:                    # with a base: the pose, the noise and the visit decide (core/zones.py)
             if event.zone_source is None:               # typed, the operator, the head count: the fallback map zone
                 self.zones.set_typed(zone)
             decision = self.zones.decide()
@@ -249,7 +252,7 @@ class App:
 
     async def refresh_zone(self) -> None:
         """Re-decide the zone from the pose and the noise (and the visit: frozen while one lasts); announce a change."""
-        if self.zones is None:
+        if self.zones is None or self.forced_zone is not None:
             return
         decision = self.zones.decide()
         self.zone_source = decision.source
@@ -257,6 +260,13 @@ class App:
             log.info("[zone] %s (%s%s)", decision.zone, decision.source, f", {decision.area}" if decision.area else "")
             await self.bus.publish(ContextChanged(decision.zone, self.context.group_size, decision.noise_db,
                                                   zone_source=decision.source))
+
+    async def force_zone(self, zone: str) -> None:
+        """Film mode (`sim --zone quiet|common`): hold this zone for the whole run, over the sound map, the noise and the operator."""
+        if zone not in ("quiet", "common"):
+            raise ValueError(f"zone {zone!r}: quiet or common")
+        self.forced_zone = zone
+        await self.bus.publish(ContextChanged(zone, self.context.group_size))
 
     async def _on_pose(self, event: PoseUpdated) -> None:
         if self.zones is not None:

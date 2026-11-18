@@ -168,6 +168,12 @@
                       animation: sweep 1.4s ease-in-out infinite; }
   @keyframes sweep { from { left: -30%; } to { left: 102%; } }
   #state { position: fixed; bottom: calc(4 * var(--u)); left: calc(8 * var(--u)); font: calc(14 * var(--u)) monospace; color: #155; }
+  /* film mode (?film=1): a small badge naming the zone, for the competition video; never shown otherwise */
+  #filmzone { position: fixed; top: calc(14 * var(--u)); right: calc(14 * var(--u)); z-index: 5; display: none;
+              padding: calc(6 * var(--u)) calc(14 * var(--u)); border-radius: calc(18 * var(--u)); color: #fff;
+              font: 600 calc(18 * var(--u)) system-ui, "DejaVu Sans", sans-serif; letter-spacing: .02em; pointer-events: none; }
+  #filmzone.common { display: block; background: #b9591f; }
+  #filmzone.quiet { display: block; background: #2f6f9f; }
 </style>
 </head>
 <body>
@@ -175,6 +181,7 @@
 <div id="view"></div>
 <div id="progress" aria-hidden="true"></div>
 <div id="state"></div>
+<div id="filmzone" aria-hidden="true"></div>
 <script src="views.js"></script>
 <script>
 // ?ui=2 is the second look of the screen (ui2.css, views2.js): same face, same events, same buttons, other layout and colours.
@@ -549,6 +556,11 @@ function showScreen(u) {
   Views.render(u, el("view"), send, showScreen);
   document.body.classList.toggle("touch", !!el("view").querySelector("button"));
   el("state").textContent = params.has("debug") ? `${u.state_path || ""} · ${u.zone || ""} · ${u.view || "face"}` : "";
+  if (params.get("film") === "1") {               // film mode: the zone badge
+    const zone = u.zone === "quiet" ? "quiet" : "common";
+    el("filmzone").className = zone;
+    el("filmzone").textContent = zone === "quiet" ? "Quiet zone" : "Common area";
+  }
   resize();
 }
 if (params.has("update")) {

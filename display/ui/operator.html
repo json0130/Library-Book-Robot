@@ -151,6 +151,16 @@
   .k-section { background: #3cc7cf; } .k-keepout { background: #7d848c; } .k-thin { background: #ff8a00; } .k-shelf { background: #f0a000; }
   .k-station { border: 2px solid #2e8b57; } .k-robot { background: #1f6feb; border-radius: 50% !important; }
   #skipped { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--warn); font-size: .85rem; }
+  /* film mode (/operator?film=map): only the floor plan with the robot and the sound map, side by side and large, for the
+     competition video. Nothing can be clicked; nothing changes without the parameter. */
+  body.film-map header, body.film-map main > :not(.left), body.film-map .left > section:not(#planbox):not(#sndbox),
+  body.film-map .planbar, body.film-map #pl-go, body.film-map #pl-gostate, body.film-map #plancursor, body.film-map #pl-sel,
+  body.film-map #pl-saverow, body.film-map #plannote, body.film-map #sn-cursor, body.film-map #sn-note { display: none !important; }
+  body.film-map { pointer-events: none; }
+  body.film-map main { grid-template-columns: 1fr; padding: 10px; }
+  body.film-map .left { grid-template-columns: 1fr 1fr; gap: 10px; }
+  body.film-map #plan, body.film-map #snd { aspect-ratio: auto; height: calc(100vh - 118px); }
+  body.film-map h2 { font-size: 1rem; }
 </style>
 </head>
 <body>
@@ -303,6 +313,7 @@
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+if (new URLSearchParams(location.search).get("film") === "map") document.body.classList.add("film-map");   // film mode: the maps only
 let lastPath = "";
 
 async function send(command, arg = "") {

@@ -320,12 +320,16 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                   speak: bool = False, use_faces: bool = False, preview: bool = False,
                   auto_scan: bool = False, settle_s: float = SETTLE_S, persist_storage: bool = True,
                   local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None,
-                  base: Optional[str] = None, base_url: Optional[str] = None, base_speed: float = 1.0) -> int:
+                  base: Optional[str] = None, base_url: Optional[str] = None, base_speed: float = 1.0,
+                  force_zone: Optional[str] = None, film_take: Optional[str] = None, record_path: Optional[str] = None) -> int:
+    """force_zone, film_take and record_path are film mode (robot/film.py, docs/video_shot_list.md): hold one zone for the take,
+    log timestamped events to recordings/<take>/events.jsonl, and write the boxed camera frames to an mp4. All off by default."""
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
-    for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan")):
+    for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan"), (record_path, "--record")):
         if wanted and not use_camera:
             print(f"{flag} needs the real webcam: add --camera (or use --live)", file=sys.stderr)
             return 1
+    film = recorder = None
     try:
         drivers = sim_drivers(cfg, use_camera=use_camera, speak=speak)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -362,6 +366,20 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         sim.say("Robot simulator. Type help for commands, quit to exit.")
         if initial_zone:
             await sim.op.set_zone(initial_zone)
+        if force_zone:                                       # film mode: one zone for the whole take
+            await app.force_zone(force_zone)
+            sim.say(f"  film: zone held at {force_zone} (the sound map, the noise and the operator cannot change it)")
+        if film_take:
+            from robot.film import FilmLog, take_dir
+            film = FilmLog(take_dir(film_take) / "events.jsonl", get_zone=lambda: app.context.zone,
+                           get_channels=lambda: tuple(app.style.channels), get_zone_source=lambda: app.zone_source)
+            film.attach(app.bus)
+            film.start(take=film_take, forced_zone=force_zone, base=base or "sim")
+            sim.say(f"  film: logging events to {film.path}")
+        if record_path:
+            from robot.film import FrameRecorder
+            recorder = FrameRecorder(record_path, fps=float(cfg.display["camera_fps"]))
+            sim.say(f"  film: recording the camera (faces boxed) to {record_path}")
         sim.say(f"  camera: {'real webcam' if use_camera else 'fake'} | speaker: "
                 f"{'real (' + speaker + '), TTS from ' + cfg.ai_host if speak else 'none, replies are only printed'}"
                 f" | explain/recommend: {'LLM at ' + cfg.ai_host if use_llm else 'catalogue text'}"
@@ -428,7 +446,8 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         if use_camera:
             from robot.camera_feed import CameraFeed
             feed_task = asyncio.create_task(CameraFeed(drivers.camera, counter, shown["host"], int(shown["port"]),
-                                                       float(shown["camera_fps"]), int(shown["camera_width"])).run())
+                                                       float(shown["camera_fps"]), int(shown["camera_width"]),
+                                                       recorder=recorder).run())
         if auto_scan:
             from robot.perception.book_watch import BookWatcher
             ready = lambda: (app.dialogue.leaf in ("IDLE", "OFFER", "AWAIT_BOOK", "ANSWER", "ANYTHING_ELSE")
@@ -469,6 +488,10 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                 task.cancel()
         if app is not None:
             await app.stop_link()
+        if recorder is not None:
+            recorder.close()
+        if film is not None:
+            film.close()
         if fake_base is not None:
             fake_base.stop()
         if window is not None:

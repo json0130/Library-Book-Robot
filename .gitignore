@@ -17,3 +17,10 @@ data/backups/
 
 # the sound map and the survey plan are made by tools/noise_map.py and tools/sound_survey.py (readings and plans of the room)
 data/noise/
+
+# film mode and the competition video (tools/video/, docs/video_shot_list.md): takes, footage and renders stay out of git
+recordings/
+video/footage/
+video/build/
+video/out/
+video/voiceover.wav

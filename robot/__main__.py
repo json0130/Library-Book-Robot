@@ -54,6 +54,13 @@ def main(argv=None) -> int:
     sim.add_argument("--base-speed", type=float, default=1.0, metavar="TIMES", help="with --base fake: the fake base drives this many times faster than the style's speed limit allows (default %(default)s)")
     sim.add_argument("--config-set", action="append", default=[], metavar="SECTION.KEY=VALUE",
                      help="override a setting of config/robot.yaml for this run (YAML value), e.g. returning.auto_start=true")
+    film = sim.add_argument_group("film mode (the competition video: robot/film.py, docs/video_shot_list.md)")
+    film.add_argument("--zone", choices=("quiet", "common"), default=None,
+                      help="hold this zone for the whole take, over the sound map, the noise and the operator")
+    film.add_argument("--film", metavar="TAKE", default=None,
+                      help="log timestamped events (greeting, replies, book read, goals, sound level...) to recordings/TAKE/events.jsonl")
+    film.add_argument("--record", metavar="PATH", default=None,
+                      help="write the camera picture with the faces boxed to this mp4 (needs --camera; the webcam is not opened twice)")
     states = sub.add_parser("states", help="print the state machine from its transition table")
     states.add_argument("--mermaid", action="store_true", help="print the Mermaid diagram")
     states.add_argument("--markdown", action="store_true", help="print the whole generated document")
@@ -104,7 +111,8 @@ def main(argv=None) -> int:
                                      auto_scan=args.auto_scan or args.live, settle_s=args.settle,
                                      persist_storage=not args.no_persist,
                                      local_faces=args.local_faces, base=args.base, base_url=args.base_url,
-                                     base_speed=args.base_speed))
+                                     base_speed=args.base_speed, force_zone=args.zone, film_take=args.film,
+                                     record_path=args.record))
         except KeyboardInterrupt:
             # run_sim's cleanup has run. Exit without Python's shutdown, which can abort or hang while
             # the keyboard reader thread is still blocked in stdin.readline().
