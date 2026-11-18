@@ -12,7 +12,7 @@ What it does, so the robot's link code can be exercised without ROS:
     localisation  --unlocalised-for S: goals are refused (not_localised) for the first S seconds
     noise         a level per floor-plan area (quiet sections ~38 dB, everywhere else ~62 dB) with a little jitter, new
                   readings every 0.5 s; keyboard: + / - make it louder / quieter by 5 dB, 0 resets, d drops or restores the
-                  link, f fails the next goal, q quits. While /api/speaking is true the level rises by 12 dB and the
+                  link, f fails the next goal, b "bumps" the goal being driven (it fails: bumper), q quits. While /api/speaking is true the level rises by 12 dB and the
                   readings say robot_noise: true (the robot's own voice)
     link drop     --drop-link-after N [--drop-for S]: from N seconds after start, connections are closed without an answer
                   (as with a pulled cable) for S seconds (default: for ever)
@@ -154,6 +154,16 @@ class FakeBase:
         g = self.goal
         if g is not None:
             g["status"], g["reason"] = status, reason
+
+    def bump(self) -> bool:
+        """The bumper hits something: the goal being driven fails with reason bumper (the Dell's on_safety_event). False if none."""
+        with self.lock:
+            g = self.goal
+            if g is None or g["status"] != "active":
+                return False
+            self.finish("failed", "bumper")
+            self.note(f"BUMPER pressed: goal {g['goal_id']} failed")
+            return True
 
     def distance_left(self) -> Optional[float]:
         g = self.goal
@@ -464,7 +474,7 @@ class FakeBaseServer(ThreadingHTTPServer):
 
 
 def read_keys(server: FakeBaseServer, stop: threading.Event) -> None:
-    """+ louder, - quieter, 0 reset, d drop / restore the link, f fail the next goal, q quit."""
+    """+ louder, - quieter, 0 reset, d drop / restore the link, f fail the next goal, b bump the goal being driven, q quit."""
     base = server.model
     interactive = sys.stdin.isatty()
     restore = None
@@ -496,6 +506,9 @@ def read_keys(server: FakeBaseServer, stop: threading.Event) -> None:
             elif key == "f":
                 base.fail_next += 1
                 log.info("the next goal will fail")
+            elif key == "b":
+                if not base.bump():
+                    log.info("bump: no goal is being driven")
             elif key == "q":
                 stop.set()
                 break

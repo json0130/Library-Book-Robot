@@ -59,7 +59,7 @@ except ImportError:                                   # a copy of this file on i
 RATE = 16000        # samples per second
 CHUNK_SEC = 0.5     # measure loudness every 0.5 seconds
 FRAME_SEC = 0.05    # peak mode: loudest 50 ms piece of each half second
-CONFIG = os.path.expanduser('~/mic_config.json')
+CONFIG = os.path.expanduser(os.environ.get('MIC_CONFIG') or '~/mic_config.json')      # MIC_CONFIG: a config of our own (run_robot_link.sh sets it)
 
 pos = [0.0, 0.0]
 activity = RobotActivity() if RobotActivity else None
@@ -90,6 +90,21 @@ def chunk_level(data, mode):
         return audioop.rms(data, 2)
     n = int(RATE * FRAME_SEC) * 2
     return max(audioop.rms(data[i:i + n], 2) for i in range(0, len(data) - n + 1, n))
+
+
+MAX_POSE_AGE_S = 3.0           # a map pose older than this means the localiser has stopped (no LiDAR scans, say): the row is not logged
+
+
+def map_pose(tf_buffer, now_s, map_frame='map', base_frame='base_footprint'):
+    """(x, y) of the robot on the MAP frame (the same frame as the floor plan), or None when there is no transform yet or it is stale.
+    /odom is not that frame: it starts where the base was switched on, turned by however the robot stood then (19 degrees on 2026-11-18)."""
+    try:
+        t = tf_buffer.lookup_transform(map_frame, base_frame, rospy.Time(0))
+    except Exception:                                    # no transform yet / extrapolation
+        return None
+    if abs(now_s - t.header.stamp.to_sec()) > MAX_POSE_AGE_S:
+        return None
+    return t.transform.translation.x, t.transform.translation.y
 
 
 def odom_cb(msg):
@@ -130,8 +145,31 @@ class MicStream:
         self.proc.terminate()
 
 
+def one_mic_source(cfg, mode='peak'):
+    """Yields (rms, rms) from the one USB mic of a mono mic_config.json ({"mono": {"usb_port": ...}}): both "sides" are the same microphone,
+    so the balance is 0 and the combined level is that microphone's level."""
+    port = cfg['mono']['usb_port']
+    card = card_for_port(port)
+    if card is None:
+        raise RuntimeError('USB mic not found on port %s - is it plugged into the same USB port as when you ran setup_mics.py --mono?' % port)
+    rospy.loginfo('One-mic mode: card %d (port %s)', card, port)
+    M = MicStream('plughw:%d,0' % card, mode)
+    try:
+        while not rospy.is_shutdown():
+            a = M.get()
+            if a is None:
+                rospy.logerr('The microphone stopped sending audio (unplugged?)')
+                return
+            yield a, a
+    finally:
+        M.stop()
+
+
 def two_mic_source(cfg, mode='peak'):
-    """Yields (rms_left, rms_right) from the two USB mics."""
+    """Yields (rms_left, rms_right) from the two USB mics (or the one mic of a mono config)."""
+    if 'mono' in cfg:
+        yield from one_mic_source(cfg, mode)
+        return
     cl, cr = card_for_port(cfg['left']['usb_port']), card_for_port(cfg['right']['usb_port'])
     if cl is None or cr is None:
         raise RuntimeError('USB mic not found on port %s / %s - are they plugged into the '
@@ -180,6 +218,15 @@ def main():
         mode = 'peak'
     rospy.loginfo('Measuring %s loudness', mode)
 
+    pose_frame = str(rospy.get_param('~pose_frame', 'map')).lower()       # 'map': where on the floor plan (needs the localiser); 'odom': from /odom, own frame
+    tf_buffer = None
+    if pose_frame == 'map':
+        import tf2_ros
+        tf_buffer = tf2_ros.Buffer()
+        tf2_ros.TransformListener(tf_buffer)
+        rospy.loginfo('Positions on the map frame (rows are not logged while the robot is not localised)')
+    else:
+        rospy.logwarn('Positions from /odom: not the floor plan frame, a sound map made from them is turned and shifted')
     skip_busy = str(rospy.get_param('~skip_when_busy', True)).lower() in ('true', '1', 'yes') and activity is not None
     rospy.Subscriber('/odom', Odometry, odom_cb)
     if activity:
@@ -247,6 +294,13 @@ def main():
                     skipped += 1                          # the robot's own noise says nothing about the room
                     rospy.loginfo_throttle(10, 'robot is speaking or moving: reading not logged (%d so far)', skipped)
                     continue
+                if tf_buffer is not None:
+                    here = map_pose(tf_buffer, rospy.Time.now().to_sec())
+                    if here is None:
+                        skipped += 1
+                        rospy.loginfo_throttle(10, 'no fresh map pose (not localised): reading not logged (%d so far)', skipped)
+                        continue
+                    pos[0], pos[1] = here
                 writer.writerow([round(time.time() - t0, 2),
                                  round(pos[0], 3), round(pos[1], 3), round(db_all, 1),
                                  round(db_l, 1), round(db_r, 1), round(balance, 1)]

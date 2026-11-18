@@ -1,0 +1,31 @@
+# Keep-out zones: where the planner must never send the robot (keepout.py explains it all).
+#
+# The robot is about 1.2 m tall and its LiDAR sees at 30 cm, so a desk (open underneath, top at about 75 cm) shows up only
+# as its legs: without a zone the planner can drive the robot under it. The depth camera sees a tabletop only when it is in
+# front of it, so give every desk a zone.
+#
+# Coordinates: metres on the LiDAR map (maps/lidar_map.yaml), the `map` frame: the numbers tools/teach_poses.py and the
+# click-to-go page show. They belong to that map: make the zones again when the map is made again.
+#   rect:    two opposite corners [x1, y1, x2, y2]   (tools/teach_poses.py: `keepout <name> corner1`, then `corner2`)
+#   polygon: three or more corners in order round the edge [[x, y], [x, y], [x, y]]
+# The zones are painted into the planner's map only (/map_clean); AMCL and the visitor screen keep the real map.
+#
+# Check before driving:  python3 tools/keepout_preview.py   (draws them on the map: turtlebot/maps/lidar_map_keepout.png)
+# run_robot_link.sh --amcl checks them at start and refuses a zone that is off the map, or that covers the station or a
+# shelf pose of the floor, or comes closer to one than clearance_m.
+
+clearance_m: 0.25          # about the robot's radius (config/robot_shape.yaml): nearer than this, it could not get there
+
+zones:   # none yet on the map of 2026-11-17 (the earlier zones were in the old map's frame). Examples:
+  - {name: desk1, rect: [-4.05, 2.40, -1.31, 2.90]}
+  - {name: robot1, rect: [-1.30, 2.05, -0.80, 2.65]}
+  - {name: desk2, rect: [-2.00, -1.80, -0.95, 2.25]}
+  - {name: robot2, rect: [0.05, 3.10, 0.58, 3.90]}
+  - {name: desk3, rect: [0.45, -0.45, 0.80, 3.00]}
+  - {name: chair1, rect: [-0.92, -1.41, -0.35, -0.58]}
+  - {name: chair2, rect: [0.25, -1.15, 0.85, -0.47]}
+  - {name: desk4, rect: [-3.80, 6.20, 1.20, 6.70]}
+  - {name: robot, rect: [-4.05, 2.95, -3.15, 3.65]}
+  - {name: desk, rect: [-4.05, -2.05, -3.00, 2.25]}
+#  - {name: desk_row_1, rect: [1.20, -0.40, 3.60, 0.40]}
+#  - {name: printer_corner, polygon: [[4.0, 2.0], [5.0, 2.0], [5.0, 3.0]]}

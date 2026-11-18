@@ -1,7 +1,7 @@
 """LinkCore: everything the API decides, with no ROS and no HTTP in it.
 
 The ROS node (nodes/robot_link_api.py) feeds it what ROS says (`on_tf`, `on_odom`, `on_localization_pose`, `on_plan`, `on_noise`,
-`on_goal_result`) and gives it a Backend to act with (send / cancel a goal, stop the wheels, speed limit, the speaking topic).
+`on_goal_result`, `on_safety_event`) and gives it a Backend to act with (send / cancel a goal, stop the wheels, speed limit, the speaking topic).
 The HTTP server (server.py) calls `health`, `state`, `handle_goal`, `handle_cancel`, `handle_speaking`, `handle_heartbeat`,
 `handle_max_speed`. Every method answers from what it already holds and never waits for ROS, so no request is slow.
 `tick()` runs about ten times a second (and before every request): it is the heartbeat watchdog and the other timers.
@@ -108,6 +108,7 @@ class LinkCore:
         self.map_seq: Optional[int] = None
         self.map_drawn = 0.0
         self.map_frame = "map"
+        self.last_safety: Optional[Tuple[str, float]] = None                   # (sensor, when): the last bumper / cliff / wheel drop
 
     def configure(self, settings: Settings) -> None:
         with self.lock:
@@ -169,6 +170,20 @@ class LinkCore:
             else:                                                     # preempted / recalled by someone else: the click-to-go page, say
                 self._finish(g, "cancelled", "manual_override")
             log.info("goal %s: %s%s (%s)", goal_id, g["status"], " - " + g["reason"] if g["reason"] else "", text or outcome)
+
+    def on_safety_event(self, sensor: str) -> None:
+        """The Kobuki's bumper was pressed, or a cliff or wheel-drop sensor fired (`sensor`: bumper, cliff, wheel_drop). Its safety
+        controller is already backing the robot off; a goal of ours ends `failed` with reason `bumper` and the base is stopped, so
+        move_base does not drive straight back into whatever it hit. The Jetson does not resend it by itself."""
+        with self.lock:
+            now = self.clock()
+            self.last_safety = (sensor, now)
+            g = self.goal
+            if g is None or g["status"] != "active":
+                log.warning("%s fired (no goal of ours was active)", sensor)
+                return
+            log.warning("goal %s: %s fired: the goal is cancelled", g["goal_id"], sensor)
+            self._finish(g, "failed", "bumper", stop=True)
 
     # ------------------------------------------------------------------------------------------ derived
     def _ros_ok(self) -> bool:
@@ -395,4 +410,5 @@ class LinkCore:
                     "still": self._still(now), "localised": self._localised(now), "loc_count": self.loc_count, "loc_lost": self.loc_lost,
                     "heartbeat_age": None if self.last_heartbeat is None else round(now - self.last_heartbeat, 2),
                     "speaking": self.activity.speaking(now), "moving": self.activity.moving(now),
+                    "last_safety": None if self.last_safety is None else [self.last_safety[0], round(now - self.last_safety[1], 1)],
                     "goal": None if self.goal is None else dict(self.goal)}

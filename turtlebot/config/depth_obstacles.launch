@@ -1,0 +1,83 @@
+<!--
+  The Astra depth camera as an OBSTACLE sensor only (not for localisation): depth only, small, slow, and made into a thin
+  point cloud for move_base (config/depth_costmap.yaml). Included by amcl_nav.launch when depth_obstacles is on.
+
+  The driver is astra_camera/AstraDriverNodelet from ~/turtlebot2/src/ros_astra_camera, the one 3dsensor.launch starts
+  (TURTLEBOT_3D_SENSOR=astra -> turtlebot_bringup includes/3dsensor/astra.launch.xml -> astra_launch). It is loaded here
+  directly, because that chain cannot set the depth mode or skip frames, and it would also start colour, rectify and
+  registration nodelets nobody needs here.
+    depth_mode 8 = QVGA_30Hz (320 x 240, the smallest the Astra's depth does at 30 Hz); data_skip 4 = publish one frame in
+    five, so 6 Hz. Colour and IR are never started: the driver starts a stream only when something subscribes to it, and
+    nothing here does. depth_registration off (no colour to register with).
+  depth -> depth_image_proc/point_cloud_xyz -> pcl/VoxelGrid (5 cm) -> /camera/depth/points_obstacles, all nodelets in one
+  manager, so the images and the full cloud are passed in memory, never copied through ROS. Only the thin cloud
+  (a few thousand points) goes to move_base.
+
+  Where the camera is: its own frames, depth_obstacle_camera (x forwards) and depth_obstacle_optical, from the camera_*
+  arguments, NOT the camera_* frames of the robot description (turtlebot_description's kobuki_hexagons_astra puts the camera
+  0.297 m up, 0.087 m behind the middle, level: the stock TurtleBot plate). The defaults are the mount measured on the robot
+  on 2026-11-05 (README "Depth camera: where is it?"), the same as amcl_nav.launch's.
+
+  Run alone (for a look, with minimal.launch up):  roslaunch config/depth_obstacles.launch camera_z:=0.95 camera_pitch:=0.35
+-->
+<launch>
+  <arg name="camera"       default="camera"/>
+  <arg name="device_id"    default="#1"/>
+  <arg name="depth_mode"   default="8"/>     <!-- 320 x 240 at 30 Hz (ros_astra_camera cfg/Astra.cfg) -->
+  <arg name="data_skip"    default="4"/>     <!-- publish 1 frame in 5: 6 Hz -->
+  <arg name="voxel_leaf"   default="0.05"/>  <!-- m: one point per 5 cm cube -->
+  <arg name="max_depth"    default="4.0"/>   <!-- m: further points are dropped (too noisy to be worth sending) -->
+
+  <!-- the camera on the robot: metres from base_footprint (the floor below the middle of the base), x forwards, y left;
+       camera_pitch in radians, positive = tilted DOWN; camera_yaw positive = turned left -->
+  <arg name="camera_x"     default="-0.08"/>
+  <arg name="camera_y"     default="0.0"/>
+  <arg name="camera_z"     default="0.33"/>
+  <arg name="camera_pitch" default="0.0"/>
+  <arg name="camera_yaw"   default="0.0"/>
+
+  <node pkg="tf2_ros" type="static_transform_publisher" name="depth_obstacle_camera_tf"
+        args="$(arg camera_x) $(arg camera_y) $(arg camera_z) $(arg camera_yaw) $(arg camera_pitch) 0 base_footprint depth_obstacle_camera"/>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="depth_obstacle_optical_tf"
+        args="0 0 0 -1.5707963 0 -1.5707963 depth_obstacle_camera depth_obstacle_optical"/>
+
+  <group ns="$(arg camera)">
+    <node pkg="nodelet" type="nodelet" name="depth_obstacle_manager" args="manager" output="screen">
+      <param name="num_worker_threads" value="2"/>
+    </node>
+
+    <node pkg="nodelet" type="nodelet" name="driver" args="load astra_camera/AstraDriverNodelet depth_obstacle_manager" output="screen">
+      <param name="device_id"   type="str" value="$(arg device_id)"/>
+      <param name="bootorder"   type="int" value="0"/>
+      <param name="devnums"     type="int" value="1"/>
+      <param name="rgb_camera_info_url"   value=""/>
+      <param name="depth_camera_info_url" value=""/>
+      <param name="rgb_frame_id"   value="depth_obstacle_optical"/>
+      <param name="depth_frame_id" value="depth_obstacle_optical"/>
+      <param name="depth_registration"          value="false"/>
+      <param name="color_depth_synchronization" value="false"/>
+      <param name="depth_mode" type="int" value="$(arg depth_mode)"/>
+      <param name="color_mode" type="int" value="$(arg depth_mode)"/>   <!-- never streamed; the smallest, should it ever be -->
+      <param name="ir_mode"    type="int" value="$(arg depth_mode)"/>
+      <param name="data_skip"  type="int" value="$(arg data_skip)"/>
+    </node>
+
+    <!-- the Astra's depth comes out undistorted enough for obstacles: no rectify nodelet (it would cost a full image copy) -->
+    <node pkg="nodelet" type="nodelet" name="depth_points" args="load depth_image_proc/point_cloud_xyz depth_obstacle_manager">
+      <remap from="camera_info" to="depth/camera_info"/>
+      <remap from="image_rect"  to="depth/image_raw"/>
+      <remap from="points"      to="depth/points"/>
+      <param name="queue_size" value="2"/>
+    </node>
+
+    <node pkg="nodelet" type="nodelet" name="depth_voxels" args="load pcl/VoxelGrid depth_obstacle_manager">
+      <remap from="~input"  to="depth/points"/>
+      <remap from="~output" to="depth/points_obstacles"/>
+      <param name="leaf_size"             value="$(arg voxel_leaf)"/>
+      <param name="filter_field_name"     value="z"/>          <!-- z of the optical frame = distance ahead -->
+      <param name="filter_limit_min"      value="0.0"/>
+      <param name="filter_limit_max"      value="$(arg max_depth)"/>
+      <param name="filter_limit_negative" value="false"/>
+    </node>
+  </group>
+</launch>

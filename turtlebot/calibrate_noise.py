@@ -13,6 +13,9 @@
 #   3. fits ONE offset per microphone (dB = dBFS + offset), reports the error at each level, and saves ~/noise_calibration.json.
 #      robot_link_api.py and noise_logger.py pick the file up by themselves within a few seconds.
 #
+# One microphone only: a mono config (`python3 setup_mics.py --mono --port 1-1`) makes left and right the same microphone; the table then
+# shows the same numbers twice.
+#
 # Needs ROS running with noise_logger.py (run_robot_link.sh starts it). The robot must be standing still and quiet.
 #
 # Run:     python3 calibrate_noise.py
@@ -34,7 +37,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_link import calibration                                        # noqa: E402
 
-MIC_CONFIG = os.path.expanduser('~/mic_config.json')
+MIC_CONFIG = os.path.expanduser(os.environ.get('MIC_CONFIG') or '~/mic_config.json')      # the same file noise_logger.py reads
 LEVELS = [
     ('QUIET', 'a quiet room: nothing playing, nobody talking (about 35-45 dB on the phone)'),
     ('MEDIUM', 'steady noise at talking level: music or a recording from a speaker about 1 m away (about 55-65 dB)'),
@@ -51,6 +54,13 @@ def card_for_port(port):
             if '/usb' in dev and os.path.basename(os.path.dirname(dev)) == port:
                 return int(c[4:])
     return None
+
+
+def cards_from_config(cfg, find=card_for_port):
+    """{name: card or None} of the microphones in a mic_config.json: left and right, or the one `microphone` of a mono config."""
+    if 'mono' in cfg:
+        return {'microphone': find(cfg['mono']['usb_port'])}
+    return {side: find(cfg[side]['usb_port']) for side in ('left', 'right')}
 
 
 def parse_mixer(text):
@@ -187,7 +197,7 @@ def main(argv=None):
     try:
         with open(MIC_CONFIG) as f:
             cfg = json.load(f)
-        cards = {side: card_for_port(cfg[side]['usb_port']) for side in ('left', 'right')}
+        cards = cards_from_config(cfg)
     except (OSError, ValueError, KeyError):
         print('%s is missing or wrong: run setup_mics.py first (it says which microphone is left and which is right).' % MIC_CONFIG)
         return 1

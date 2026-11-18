@@ -271,7 +271,8 @@ class StoringBook:
 
 @dataclass
 class ReturningProgress:
-    """Putting books back: phase is driving | unloading | announcing | homing; books_left are still in storage."""
+    """Putting books back: phase is driving | unloading | announcing | homing | unavailable (the base cannot drive just now) |
+    held (it bumped into something: waits for the operator); books_left are still in storage."""
     phase: str
     books_left: int
     section: Optional[str] = None

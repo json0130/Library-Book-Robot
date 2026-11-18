@@ -127,6 +127,7 @@ REPAIR_STATES = ("OFFER", "AWAIT_BOOK", "ANYTHING_ELSE")
 HELLO = f"Hello! My name is {NAME}."
 LOOSE_MIN_SCORE = 0.03            # when nothing reaches books.similarity.min_score: the nearest books above this
 UNAVAILABLE_REASONS = ("not_localised", "ros_unavailable", "no_heartbeat", "link_down")     # the base cannot drive: wait, do not skip the shelf
+HOLD_REASONS = ("bumper",)          # the base hit something: stop the trip until a person says go on (operator `resume`)
 NAV_RESUME_AFTER_S = 2.0
 RETURNING_OPENING = "Hi! I'm returning some books, can I help you with anything?"
 FOLLOW_UP_HELP = "I can tell you what it's about, suggest similar books, or return it."
@@ -533,6 +534,7 @@ class Dialogue:
         self.nav_goal_id: Optional[str] = None              # the goal being driven (turtlebot backend): NavArrived / NavFailed must carry it
         self.nav_blocked: Optional[str] = None              # why the trip waits: the link is down, the base is not localised...
         self.nav_blocked_at = 0.0
+        self.nav_held: Optional[str] = None                 # the base hit something (bumper): nothing is sent until the operator resumes
         self.nav_attempts = 0                               # tries made at the current target
         self.homing = False                                 # the drive in progress (or interrupted by "excuse me") is the one home
         self.pending_nav: Optional[tuple] = None            # (event name, payload): the base finished while "excuse me" was showing
@@ -1250,7 +1252,7 @@ class Dialogue:
         self.returning_paused = False
         self.current_shelf = None
         self.stops = []
-        self.nav_goal_id, self.nav_blocked = None, None
+        self.nav_goal_id, self.nav_blocked, self.nav_held = None, None, None
         self.fsm.forget("RETURNING")
         log.info("[returning] all returned and home")
 
@@ -1497,7 +1499,13 @@ class Dialogue:
         self.nav_goal_id = getattr(self.out.nav, "current_goal", None)
 
     async def send_current_goal(self) -> None:
-        """(Re)send the target of the current drive: the first shelf to visit, or home."""
+        """(Re)send the target of the current drive: the first shelf to visit, or home. Nothing is sent while the trip is held
+        (the base hit something): a visitor coming and going must not start it again, only the operator's `resume`."""
+        if self.nav_held:
+            self.nav_goal_id, self.nav_blocked = None, self.nav_held
+            log.warning("[returning] held after %s: not driving until the operator resumes", self.nav_held)
+            await self.progress("held", self.stops[0] if self.stops and not self.homing else None)
+            return
         if self.leaf == "HOMING" or (self.leaf == "ANNOUNCE" and self.homing):
             home = self.home_pose()
             await self._navigate("home", home["x"], home["y"], home["yaw"])
@@ -1587,6 +1595,10 @@ class Dialogue:
             if self.fsm.is_in("RETURNING"):
                 await self.block_navigation(event.reason)
             return
+        if event.reason in HOLD_REASONS:                   # it hit something: no retry, no skipping on to the next shelf
+            if self.fsm.is_in("RETURNING"):
+                await self.hold_navigation(event.reason)
+            return
         await self.base_finished("nav_failed", event)
 
     async def on_nav_cancelled(self, event: NavCancelled) -> None:
@@ -1627,9 +1639,37 @@ class Dialogue:
         if self.style_speaks():                            # a quiet zone says nothing: the screen shows it
             await self.say("Sorry, I can't drive at the moment. I'll carry on as soon as I can.", "sad")
 
+    async def hold_navigation(self, reason: str) -> None:
+        """The base hit something (its bumper, a cliff or wheel-drop sensor): the trip stops where it is and is NOT resent by
+        itself, not even after a visitor. The operator page shows it; the operator's `resume` carries on."""
+        if self.leaf == "ANNOUNCE":
+            self.pending_nav = None
+        self.nav_goal_id, self.nav_blocked, self.nav_blocked_at, self.nav_held = None, reason, self.clock(), reason
+        log.warning("[returning] the base stopped: %s. Held until the operator resumes the trip.", reason)
+        await self.progress("held", self.stops[0] if self.stops and not self.homing else None)
+        if self.style_speaks():
+            await self.say("Oops, I bumped into something. I'll wait here until someone checks on me.", "sad")
+
+    async def resume_held(self) -> str:
+        """The operator's `resume`: the trip held after a bump carries on. Returns what happened, to tell the operator."""
+        if not self.nav_held:
+            return "nothing is held: the trip is not stopped by a bump"
+        was, self.nav_held, self.nav_blocked = self.nav_held, None, None
+        log.info("[returning] the operator resumed the trip (it was held after %s)", was)
+        if self.leaf == "ANNOUNCE":
+            self.pending_nav = ("resend", None)
+        elif self.leaf in ("NAVIGATING", "HOMING"):
+            stop = self.stops[0] if self.stops and not self.homing else None
+            await self.progress("homing" if self.homing else "driving", stop)
+            await self.send_current_goal()
+        else:
+            return f"resumed: no longer held after {was}; the trip carries on when it is back in RETURNING"
+        return f"resumed after {was}: driving to {'home' if self.homing else 'shelf ' + str(self.current_shelf)} again"
+
     async def maybe_resume_navigation(self, force: bool = False) -> None:
-        """Send the goal again once the base can drive (not more often than every 2 s: a refusal is not retried in a loop)."""
-        if not self.nav_blocked or self.leaf not in ("NAVIGATING", "HOMING", "ANNOUNCE"):
+        """Send the goal again once the base can drive (not more often than every 2 s: a refusal is not retried in a loop).
+        Never while the trip is held after a bump."""
+        if not self.nav_blocked or self.nav_held or self.leaf not in ("NAVIGATING", "HOMING", "ANNOUNCE"):
             return
         if not self.out.nav.available() or (not force and self.clock() - self.nav_blocked_at < NAV_RESUME_AFTER_S):
             return
@@ -1644,7 +1684,7 @@ class Dialogue:
 
     def returning_info(self) -> dict:
         """For the operator page: the goal being driven, why the trip waits, and the shelves it had to skip."""
-        return {"goal_id": self.nav_goal_id, "blocked": self.nav_blocked, "attempts": self.nav_attempts,
+        return {"goal_id": self.nav_goal_id, "blocked": self.nav_blocked, "held": self.nav_held, "attempts": self.nav_attempts,
                 "skipped": list(self.skipped_log)}
 
     # ---- saying things ----
@@ -2389,6 +2429,7 @@ class Dialogue:
         self.guide_target, self.awaiting_guide = None, False
         self.stops, self.current_shelf = [], None
         self.stop_driving()
+        self.nav_held = None
         self.skipped, self.skipped_log = set(), []
         self.returning_paused = self.interrupted_returning = False
         self.present = self.leave_pending = False

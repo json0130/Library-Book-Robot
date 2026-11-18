@@ -14,3 +14,6 @@ data/screens/
 data/eval_runs/
 data/tts_cache/
 data/backups/
+
+# the sound map and the survey plan are made by tools/noise_map.py and tools/sound_survey.py (readings and plans of the room)
+data/noise/

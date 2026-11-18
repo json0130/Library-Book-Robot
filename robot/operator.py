@@ -20,6 +20,9 @@ the robot picks up through robot/display_link.py), so there is one implementatio
                           Refused while the dialogue is on a trip of its own, when the base is not localised, or when
                           the point is outside the map or in a wall.
     stop                  (with a real base) cancel the goal: the base stops. Always allowed.
+    resume                carry on with a returning trip that stopped because the base bumped into something (its bumper, a
+                          cliff or wheel-drop sensor: nav reason `bumper`). Such a trip is never resent by itself: check the
+                          robot and what it hit first.
 
 Events made here carry source="operator", which the session log shows with every state transition.
 """
@@ -35,7 +38,8 @@ from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged
                           UserChoice, UserUtterance)
 from robot.services.isbn import to_isbn13
 
-COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen", "drive", "stop")
+COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen", "drive", "stop",
+            "resume")
 PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 ZONES = ("quiet", "common")
 GROUP_SIZES = {"alone": 1, "group": 3}
@@ -225,6 +229,8 @@ class Operator:
             return self.drive(arg)
         elif command == "stop":
             return self.stop()
+        elif command == "resume":
+            self.tell("  " + await d.resume_held())
         elif command == "reset":
             await d.reset(everything=arg.lower() == "all")
             self.say("  reset: IDLE" + (", storage emptied" if arg.lower() == "all" else ""))

@@ -10,6 +10,7 @@
 #      still works if the card numbers change after a reboot.
 #
 # Run:  python3 setup_mics.py
+#       python3 setup_mics.py --mono --port 1-1     ONE microphone only (no clap test): noise_logger.py then uses just that microphone
 # (Stop the noise logger / run scripts first - they use the mics.)
 
 import json
@@ -22,7 +23,7 @@ import time
 import numpy as np
 
 RATE = 16000
-CONFIG = os.path.expanduser('~/mic_config.json')
+CONFIG = os.path.expanduser(os.environ.get('MIC_CONFIG') or '~/mic_config.json')      # MIC_CONFIG=run_data/mic_config.json keeps the shared ~/mic_config.json as it is
 SKIP_NAMES = ('ORBBEC', 'HDA', 'PCH')       # camera + laptop built-in mics
 
 
@@ -109,6 +110,29 @@ def countdown(msg, secs=3):
         time.sleep(1)
 
 
+def mono_config(cards, port):
+    """The config for one microphone on USB port `port` (cards = [(number, port, name)] of the USB microphones), or None if it is not there."""
+    for n, p, name in cards:
+        if p == port:
+            return {'mono': {'usb_port': p, 'name': name}, 'offset_db': 0.0, 'created': time.strftime('%Y-%m-%d %H:%M')}
+    return None
+
+
+def main_mono(port):
+    cards = [c for c in capture_cards() if c[1] and not any(s in c[2].upper() for s in SKIP_NAMES)]
+    print('USB microphones found:')
+    for n, p, name in cards:
+        print('   card %d  USB port %-8s %s' % (n, p, name))
+    cfg = mono_config(cards, port)
+    if cfg is None:
+        print('\nNo USB microphone on port %s: pick one of the ports above (--port).' % port)
+        sys.exit(1)
+    with open(CONFIG, 'w') as f:
+        json.dump(cfg, f, indent=2)
+    print('\nSaved %s:\n%s' % (CONFIG, json.dumps(cfg, indent=2)))
+    print('\nDone. noise_logger.py will now use only this microphone (restart the stack).')
+
+
 def main():
     cards = [c for c in capture_cards()
              if c[1] and not any(s in c[2].upper() for s in SKIP_NAMES)]
@@ -174,4 +198,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if '--mono' in sys.argv:
+        if '--port' not in sys.argv or sys.argv.index('--port') + 1 >= len(sys.argv):
+            print('usage: python3 setup_mics.py --mono --port USB_PORT   (for example --port 1-1; the ports are listed by running it without --port)')
+            main_mono('')
+        main_mono(sys.argv[sys.argv.index('--port') + 1])
+    else:
+        main()

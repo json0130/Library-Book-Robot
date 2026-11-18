@@ -143,6 +143,70 @@ class FloorPlanTest(TeachTest):
         self.assertEqual(self.plan.read_text(), before)
 
 
+class KeepoutTest(TeachTest):
+    """`keepout <name> corner1|corner2`: a rectangle written into a keepout.yaml of its own (not the repo's, which holds the real zones)."""
+
+    def setUp(self):
+        super().setUp()
+        self.zones = self.dir / "keepout.yaml"
+        self.zones.write_text("# Keep-out zones: a comment that must stay.\n#   rect: two opposite corners [x1, y1, x2, y2]\n\n"
+                              "clearance_m: 0.25\n\nzones: []   # none yet\n#  - {name: example, rect: [1.20, -0.40, 3.60, 0.40]}\n")
+        self.t = Teacher(lambda: self.pose[0], self.shelves, self.plan, 1, check=lambda: 0, clock=lambda: 1.7e9,
+                         keepout_path=self.zones)
+
+    def zones_now(self):
+        import keepout
+        return keepout.load(self.zones)[0]
+
+    def test_two_corners_make_a_zone_and_the_file_keeps_its_comments(self):
+        before = self.zones.read_text()
+        self.at(1.0, 2.0)
+        self.assertIn("now drive to the opposite corner", self.t.command("keepout desk_1 corner1"))
+        self.at(3.5, 0.5)
+        self.assertIn("x 1.00 to 3.50, y 0.50 to 2.00", self.t.command("keepout desk_1 corner2"))
+        self.assertIn("keepout desk_1", self.t.command("list"))
+        report = self.t.command("save")
+        self.assertIn("keepout_preview.py", report)
+        zones = self.zones_now()
+        self.assertEqual([(z.name, z.kind) for z in zones], [("desk_1", "rect")])
+        self.assertEqual(zones[0].points, [(1.0, 0.5), (3.5, 0.5), (3.5, 2.0), (1.0, 2.0)])
+        for line in before.splitlines():
+            if line.startswith("#"):
+                self.assertIn(line, self.zones.read_text())
+        self.assertEqual(len(list((self.dir / "backups").glob("keepout.yaml.*.bak"))), 1)
+        self.assertEqual(self.zones_now(), zones)
+        self.assertNotIn("desk_1", (ROOT / "turtlebot" / "config" / "keepout.yaml").read_text())   # the repo's file is untouched
+
+    def test_teaching_a_zone_again_moves_it(self):
+        for x in (1.0, 5.0):
+            self.at(x, 1.0)
+            self.t.command("keepout desk corner1")
+            self.at(x + 1.0, 2.0)
+            self.t.command("keepout desk corner2")
+            self.t.command("save")
+        zones = self.zones_now()
+        self.assertEqual(len(zones), 1)
+        self.assertEqual(zones[0].points[0], (5.0, 1.0))
+
+    def test_one_corner_is_not_saved_and_a_flat_zone_is_refused(self):
+        self.t.command("keepout desk corner1")
+        self.assertIn("only one corner", self.t.command("list"))
+        self.assertIn("nothing to save", self.t.command("save"))
+        self.at(3.1, 5.0)                                                           # the same x as corner 1
+        with self.assertRaises(TeachError) as caught:
+            self.t.command("keepout desk corner2")
+        self.assertIn("on one line", str(caught.exception))
+
+    def test_bad_commands(self):
+        for command in ("keepout desk", "keepout desk corner3", "keepout two words corner1", "keepout off: corner1"):
+            with self.assertRaises(TeachError, msg=command):
+                self.t.command(command)
+        self.at(3.0, 3.0, localised=False)
+        with self.assertRaises(TeachError) as caught:
+            self.t.command("keepout desk corner1")
+        self.assertIn("not localised", str(caught.exception))
+
+
 class SafetyTest(TeachTest):
     def test_nothing_is_recorded_while_the_base_is_not_localised(self):
         self.at(3.0, 3.0, localised=False)
@@ -185,7 +249,7 @@ class SafetyTest(TeachTest):
     def test_unknown_commands_say_what_there_is(self):
         with self.assertRaises(TeachError) as caught:
             self.t.command("teleport")
-        self.assertIn("shelf section landmark station", str(caught.exception))
+        self.assertIn("shelf section landmark station keepout", str(caught.exception))
         with self.assertRaises(TeachError):
             self.t.command("landmark castle Keep")
         with self.assertRaises(TeachError):

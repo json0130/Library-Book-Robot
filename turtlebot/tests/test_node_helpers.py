@@ -56,6 +56,21 @@ class LocaliserTest(unittest.TestCase):
         self.assertEqual((p["localization_topic"], p["localiser_node"]), ("/amcl_pose", "/amcl"))
         self.assertEqual(p.settings.loc_max_covariance, 0.1)
 
+    def test_amcl_stood_still_is_wider_than_its_own_update_distance(self):
+        """AMCL stays quiet until the robot has moved update_min_d / turned update_min_a; a robot that stopped short of that
+        must still count as localised, or it is refused its next goal after every short stop."""
+        with open(os.path.join(os.path.dirname(HERE), "config", "amcl_nav.launch")) as f:
+            launch = f.read()
+        dist = float(re.search(r'name="update_min_d" value="([0-9.]+)"', launch).group(1))
+        turn = math.degrees(float(re.search(r'name="update_min_a" value="([0-9.]+)"', launch).group(1)))
+        s = node.Params(["_localiser:=amcl"]).settings
+        self.assertGreater(s.still_dist_m, dist)
+        self.assertGreater(s.still_turn_deg, turn)
+        r = node.Params([]).settings                                              # RTAB-Map keeps the core's defaults
+        self.assertEqual((r.still_dist_m, r.still_turn_deg), (0.05, 5.0))
+        p = node.Params(["_localiser:=amcl", "_still_dist_m:=0.2"]).settings
+        self.assertEqual((p.still_dist_m, p.still_turn_deg), (0.2, 10.0))
+
     def test_each_part_can_still_be_given_on_its_own(self):
         p = node.Params(["_localiser:=amcl", "_loc_max_covariance:=0.25", "_localization_topic:=/other_pose", "_localiser_node:=/amcl2"])
         self.assertEqual((p["localization_topic"], p["localiser_node"]), ("/other_pose", "/amcl2"))

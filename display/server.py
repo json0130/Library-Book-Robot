@@ -32,6 +32,7 @@ import base64
 import ipaddress
 import re
 import json
+import os
 import queue
 import sys
 import threading
@@ -53,7 +54,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
 INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|(?:section|topic):[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
 OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset",
-                     "screen", "next", "abort", "drive", "stop", "theme", "look")
+                     "screen", "next", "abort", "drive", "stop", "resume", "theme", "look")
 MAX_MAP_BODY = 4 * 1024 * 1024      # the base's map as JSON with a PNG inside (posted by the robot, only from this computer)
 INBOX_KEEP = 200
 REPLAYED = ("screen", "state", "theme", "look")          # what a page that connects late is shown straight away
@@ -63,8 +64,58 @@ DISPLAY_SETTINGS = {"theme": ("dark", "light"), "look": ("1", "2")}
 
 
 REMOTE_GET = ("/operator", "/operator.html", "/events", "/", "/index.html", "/camera.jpg", "/camera.mjpg", "/covers/",
-              "/map.json", "/map.png")     # what another computer may read
+              "/map.json", "/map.png", "/plan.json", "/noise.json", "/survey.json", "/pose.json")     # what another computer may read (and /maps/<name>.json, below)
 REMOTE_POST = ("/operator",)                                                    # and the only thing it may send
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def plan_json(root: Path = ROOT) -> dict:
+    """The floor plan for the operator page's floor-plan panel: the floor that has the robot's own map (else the first), its
+    sections and landmarks, the station, the shelf poses and the keep-out zones, all in map metres (x right, y up). Read from
+    the files each time, so what teach_poses saves shows up without a restart. Nothing here is written."""
+    import csv
+    import yaml
+    try:
+        data = yaml.safe_load((root / "data" / "floorplan.yaml").read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return {"available": False, "error": f"floorplan.yaml: {exc}"}
+    floors = [f for f in data.get("floors") or [] if isinstance(f, dict)]
+    floor = next((f for f in floors if f.get("base_map")), floors[0] if floors else None)
+    if floor is None:
+        return {"available": False, "error": "no floors in floorplan.yaml"}
+    level = floor.get("level")
+    station = data.get("station") if isinstance(data.get("station"), dict) else None
+    shelves = []
+    try:
+        with open(root / "data" / "shelves.csv", newline="") as f:
+            for row in csv.DictReader(line for line in f if not line.lstrip().startswith("#")):
+                try:
+                    if int(row["floor"]) == level:
+                        shelves.append({"code": row["shelf"], "section": row.get("section", ""), "x": float(row["map_x"]),
+                                        "y": float(row["map_y"]), "yaw": float(row.get("map_yaw") or 0)})
+                except (KeyError, TypeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    zones, clearance = [], None
+    try:
+        keep = yaml.safe_load((root / "turtlebot" / "config" / "keepout.yaml").read_text()) or {}
+        clearance = keep.get("clearance_m")
+        for z in keep.get("zones") or []:
+            if "rect" in z and len(z["rect"]) == 4:
+                x1, y1, x2, y2 = (float(v) for v in z["rect"])
+                zones.append({"name": str(z.get("name", "")), "rect": [x1, y1, x2, y2],
+                              "points": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]})
+            elif "polygon" in z:
+                zones.append({"name": str(z.get("name", "")), "readonly": True,
+                              "points": [[float(p[0]), float(p[1])] for p in z["polygon"]]})
+    except (OSError, yaml.YAMLError, TypeError, ValueError):
+        pass
+    return {"available": True, "level": level, "name": floor.get("name", ""), "base_map": floor.get("base_map"),
+            "x0": floor.get("x0", 0), "y0": floor.get("y0", 0), "width": floor.get("width", 0), "height": floor.get("height", 0),
+            "sections": floor.get("sections") or [], "landmarks": floor.get("landmarks") or [],
+            "station": station if station and station.get("level") == level else None,
+            "shelves": shelves, "keepout": zones, "clearance_m": clearance}
 
 
 def is_local(address: str) -> bool:
@@ -84,7 +135,7 @@ def allowed(method: str, path: str, local: bool) -> bool:
     (/emotion, /talk)."""
     if local:
         return True
-    if method == "GET" and path.startswith("/covers/"):
+    if method == "GET" and (path.startswith("/covers/") or (path.startswith("/maps/") and path.endswith(".json"))):
         return True
     return path in (REMOTE_GET if method == "GET" else REMOTE_POST)
 
@@ -236,6 +287,21 @@ def make_handler(hub: Hub):
                     self._json(404, {"error": "no map from the base yet"})
                 else:
                     self._send(200, hub.map_png, "image/png")
+            elif url.path == "/plan.json":
+                self._json(200, plan_json())
+            elif url.path == "/pose.json":                   # where the robot is now (read-only look at the base, see display/pose_feed.py)
+                feed = getattr(hub, "pose_feed", None)
+                self._json(200, feed.snapshot() if feed else {"available": False, "reason": "the position feed is off"})
+            elif url.path == "/survey.json":                 # the listening points tools/sound_survey.py planned, drawn in the Sound view
+                try:
+                    self._json(200, json.loads((ROOT / "data" / "noise" / "survey_plan.json").read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    self._json(200, {"points": []})
+            elif url.path == "/noise.json":                  # the sound map made by tools/noise_map.py, for the operator page's Sound view
+                try:
+                    self._json(200, json.loads((ROOT / "data" / "noise" / "noise_grid.json").read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    self._json(200, {"available": False})
             elif url.path == "/ui-version":
                 self._json(200, {"version": ui_version()})
             elif url.path == "/emotion":
@@ -276,7 +342,7 @@ def make_handler(hub: Hub):
             if path == "/map":
                 self._map_post()
                 return
-            if path not in ("/emotion", "/talk", "/screen", "/state", "/input", "/operator"):
+            if path not in ("/emotion", "/talk", "/screen", "/state", "/input", "/operator", "/plan-edit"):
                 self._json(404, {"error": "not found"})
                 return
             try:
@@ -288,6 +354,15 @@ def make_handler(hub: Hub):
                     raise ValueError
             except ValueError:
                 self._json(400, {"error": 'body must be a JSON object, e.g. {"emotion": "happy", "hold_s": 3}'})
+                return
+            if path == "/plan-edit":                         # the floor-plan editor's Save; only from this computer (not in REMOTE_POST)
+                from display.plan_edit import EditError, save_edits
+                try:
+                    self._json(200, save_edits(ROOT, data.get("keepout"), data.get("sections")))
+                except EditError as exc:
+                    self._json(400, {"ok": False, "problems": exc.problems})
+                except Exception as exc:                     # a file that cannot be read or written: say so, do not drop the connection
+                    self._json(500, {"ok": False, "problems": [f"{type(exc).__name__}: {exc}"]})
                 return
             if path in ("/screen", "/state", "/input", "/operator"):
                 self._state_post(path, data)
@@ -471,6 +546,10 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     hub = Hub()
+    hub.pose_feed = None
+    from display.pose_feed import PoseFeed, token_from_env, DEFAULT_URL
+    feed = PoseFeed(os.environ.get("ROBOT_LINK_URL") or DEFAULT_URL, token_from_env())
+    hub.pose_feed = feed.start()
     for setting in DISPLAY_SETTINGS:
         if getattr(args, setting):
             hub.publish({setting: getattr(args, setting)})
@@ -481,6 +560,8 @@ def main(argv=None) -> int:
         return 1
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"Robot face on http://localhost:{args.port}")
+    print("Live position on the floor plan: " + ("reading the base at " + feed.base_url + " (read-only)" if feed.token else
+          "off (set ROBOT_LINK_TOKEN and restart; the tunnel must be up)"))
     try:
         terminal_loop(hub)
         if not sys.stdin.isatty():      # started without a terminal (e.g. by a script): keep serving

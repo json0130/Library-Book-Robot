@@ -268,6 +268,81 @@ class FailureTest(unittest.TestCase):
         self.assertEqual(app.dialogue.skipped, set())
 
 
+class BumperTest(unittest.TestCase):
+    """The base hit something (nav reason `bumper`, docs/robot_link.md): the trip stops and is never resent by itself."""
+
+    def tearDown(self):
+        logging.disable(logging.NOTSET)
+
+    def status_view(self, app):
+        updates = [u for u in app.screens if u.view == "status"]
+        return updates[-1].payload if updates else None
+
+    def bumped(self, zone="common"):
+        app, link = link_app(zone)
+        navigate(app)
+        publish(app, NavFailed(link.goals[0][0], "bumper"))
+        return app, link
+
+    def test_a_bump_holds_the_trip_without_a_retry_or_a_skip(self):
+        app, link = self.bumped()
+        self.assertEqual(app.dialogue.state, "RETURNING.NAVIGATING")               # it stays where it is
+        self.assertEqual(len(link.goals), 1)                                       # not tried again
+        self.assertEqual(app.dialogue.skipped, set())                              # and the shelf is not given up
+        info = app.dialogue.returning_info()
+        self.assertEqual((info["held"], info["blocked"]), ("bumper", "bumper"))
+        self.assertEqual(self.status_view(app)["heading"], "Stopped")
+        advance(app, 30)
+        run(app, PoseUpdated(1.0, 1.0, 0.0, True), LinkUp("http://stub"))           # the base is fine and says so: still held
+        self.assertEqual(len(link.goals), 1)
+        self.assertEqual(app.state_info()["link"]["returning"]["held"], "bumper")   # what the operator page shows
+
+    def test_a_visitor_coming_and_going_does_not_start_it_again(self):
+        app, link = self.bumped()
+        publish(app, PersonEngaged())
+        self.assertEqual(app.dialogue.state, "ENGAGED.OFFER")
+        run(app, UserChoice("done"))
+        advance(app, 8)
+        self.assertEqual(app.dialogue.state, "RETURNING.NAVIGATING")
+        self.assertEqual(len(link.goals), 1)
+        self.assertEqual(app.dialogue.returning_info()["held"], "bumper")
+
+    def test_the_operator_resumes_it_with_the_same_target(self):
+        from robot.operator import Operator
+        app, link = self.bumped()
+        said = []
+        self.assertTrue(asyncio.run(Operator(app, said.append).run("resume")))
+        self.assertIn("resumed after bumper", said[-1])
+        self.assertEqual(len(link.goals), 2)
+        self.assertEqual(link.goals[1][1:], link.goals[0][1:])                     # the same shelf, a new goal_id
+        self.assertNotEqual(link.goals[1][0], link.goals[0][0])
+        self.assertIsNone(app.dialogue.returning_info()["held"])
+        self.assertEqual(self.status_view(app)["heading"], "Returning books")
+        publish(app, NavArrived(link.goals[1][0]))
+        self.assertEqual(app.dialogue.state, "RETURNING.AT_SHELF")
+
+    def test_resume_with_nothing_held_does_nothing(self):
+        from robot.operator import Operator
+        app, link = link_app()
+        navigate(app)
+        said = []
+        asyncio.run(Operator(app, said.append).run("resume"))
+        self.assertIn("nothing is held", said[-1])
+        self.assertEqual(len(link.goals), 1)
+
+    def test_it_says_so_in_a_common_zone_and_only_shows_it_in_a_quiet_one(self):
+        for zone, speaks in (("common", True), ("quiet", False)):
+            with self.subTest(zone=zone):
+                app, link = self.bumped(zone)
+                self.assertEqual(self.status_view(app)["heading"], "Stopped")
+                self.assertEqual(any("bumped" in t for t in app.said), speaks)
+
+    def test_a_reset_clears_the_hold(self):
+        app, link = self.bumped()
+        asyncio.run(app.dialogue.reset())
+        self.assertIsNone(app.dialogue.nav_held)
+
+
 class LinkLostTest(unittest.TestCase):
     def tearDown(self):
         logging.disable(logging.NOTSET)

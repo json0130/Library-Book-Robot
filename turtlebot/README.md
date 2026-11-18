@@ -116,17 +116,22 @@ turtlebot/                     (a folder of the Library-Book-Robot repository)
 ├── run_robot_link.sh          Part 2 plus the link to the Jetson (robot_link_api); see "Link to the Jetson"
 ├── run_lidar_mapping.sh       makes the LiDAR map for run_robot_link.sh --amcl (see "Two ways to localise")
 ├── measure_localisation.py    how often the localiser places the robot (RTAB-Map or AMCL), only listens
+├── keepout.py                 keep-out zones: read, check, paint (map_cleaner.py, the run script and tools/ use it)
 ├── check_devices.sh           shows what is plugged in where (LiDAR, base, camera, mics)
 ├── setup_mics.py              one-time setup: which USB mic is left / right
 ├── calibrate_noise.py         one-time setup: turn the mics' dBFS into dB with a phone sound meter
 ├── config/
 │   ├── vslam.launch           camera + RTAB-Map + LiDAR + move_base
-│   ├── amcl_nav.launch        LiDAR + saved map + AMCL + move_base (no camera)
+│   ├── amcl_nav.launch        LiDAR + saved map + AMCL + move_base (+ the depth camera for obstacles, the safety controller)
+│   ├── depth_obstacles.launch the Astra depth only (320 x 240, 6 Hz) -> 5 cm point cloud, never for localising
+│   ├── depth_costmap.yaml     the depth cloud in both costmaps (5 cm to robot height + 5 cm)
+│   ├── robot_shape.yaml       the robot's outline and inflation (measured: 0.18 m all round)
+│   ├── keepout.yaml           keep-out zones on the LiDAR map (under the desks)
 │   ├── lidar_mapping.launch   LiDAR + gmapping (no camera)
 │   └── hokuyo_costmap.yaml    navigation settings
 ├── nodes/
 │   ├── map_viewer.py
-│   ├── map_cleaner.py
+│   ├── map_cleaner.py         removes specks; paints the keep-out zones into /map_clean
 │   ├── scan_filter.py
 │   ├── noise_logger.py
 │   ├── noise_nav_web.py
@@ -666,7 +671,8 @@ The API also serves the map the click-to-go page uses (`GET /api/map`, from `/ma
 ```bash
 ./run_robot_link.sh --check       # only looks: is another ROS stack or run script already running? Starts nothing.
 ./run_robot_link.sh --dry-run     # prints what it would start
-./run_robot_link.sh --amcl --local   # base, LiDAR, AMCL on maps/lidar_map.yaml, move_base, noise logger, web page, the API on 127.0.0.1 (for the tunnel)
+./run_robot_link.sh --amcl --local   # base, LiDAR, AMCL on maps/lidar_map.yaml, depth camera for obstacles, move_base, noise logger, web page, the API on 127.0.0.1 (for the tunnel)
+./run_robot_link.sh --amcl --no-depth --local   # the same with the camera off (only keep-out zones keep it from under the desks)
 ./run_robot_link.sh --local       # the same with the camera and RTAB-Map instead of AMCL
 ./run_robot_link.sh               # RTAB-Map, with the API on the Wi-Fi address (needs a firewall rule for port 8010)
 ```
@@ -731,7 +737,8 @@ rule for `localised` in `docs/robot_link.md`). Keep the robot still for the firs
 | Map | `maps/lidar_map.yaml` + `.pgm`, made by `run_lidar_mapping.sh` | `~/vslam_map.db`, made by `run_vslam_mapping.sh` |
 | How it finds the robot | matches each LiDAR scan against the map and follows the wheels between scans | recognises what the camera sees |
 | Where it starts | the station in `../data/floorplan.yaml`, sent to `/initialpose` at start-up | anywhere the camera recognises |
-| Load on the laptop | small; the camera is not started | heavy: RTAB-Map took 1 - 1.7 s per update on this Celeron (1 s wanted), and the camera fills the USB hub |
+| What it avoids | the LiDAR, **plus the depth camera** (depth only, an obstacle sensor: desks, chair seats) and **keep-out zones** | the LiDAR only (at 30 cm) |
+| Load on the laptop | small; the camera runs depth only, 320 x 240 at 6 Hz (estimate below) | heavy: RTAB-Map took 1 - 1.7 s per update on this Celeron (1 s wanted), and the camera fills the USB hub |
 | Good at | keeping track while it drives, from a known start | finding itself after being carried somewhere else |
 | Weak at | being moved by hand while running (it does not notice), long rows that look the same, glass | finding itself from a standing start on this laptop (about 1 start in 5 on 2026-11-04), dark or shiny surfaces |
 | What the link listens to | `_localiser:=amcl`: `/amcl_pose`, health check on the `/amcl` node, covariance limit 0.1 | `/rtabmap/localization_pose`, `/rtabmap/rtabmap`, limit 1.0 |
@@ -741,21 +748,25 @@ find the robot reliably. RTAB-Map stays for when the robot cannot start from its
 
 **Making the LiDAR map** (the robot drives: area clear, someone at the power switch):
 
-1. Put the robot **on its station**, facing its usual way.
-2. `./run_lidar_mapping.sh` (or `./run_lidar_mapping.sh lab2` for another name). It starts the base, the LiDAR, `scan_filter.py`,
+1. **Tidy the room first**: chairs pushed in under the desks, bags off the floor, doors as they usually are, and **nobody in view** of the
+   LiDAR while it maps (stand behind the robot, out of its 240 degrees, or outside the room). Whatever is on the map is what AMCL
+   expects to see for ever: a chair left out becomes a "wall" AMCL looks for, a person a ghost.
+2. Put the robot **on its station**, facing its usual way.
+3. `./run_lidar_mapping.sh` (or `./run_lidar_mapping.sh lab2` for another name). It starts the base, the LiDAR, `scan_filter.py`,
    gmapping and the keyboard. Drive slowly round the whole room, come back past the start, and press **Ctrl-C**: the map is saved as
    `maps/lidar_map.pgm`, `.yaml` and a `.png` to look at. An existing map is never replaced unless you add `--overwrite` (the old one is
    kept as `lidar_map.bak-<time>.*`).
-3. The start spot is **(0, 0) facing +x** on the new map. Set the station in `../data/floorplan.yaml` to
+4. The start spot is **(0, 0) facing +x** on the new map. Set the station in `../data/floorplan.yaml` to
    `station: {level: 1, x: 0.0, y: 0.0, yaw: 0.0}`. **Everything else in the floor plan and `data/shelves.csv` was measured on the
    RTAB-Map map, whose frame is a different one**: teach those again on the new map (`tools/teach_poses.py` on the Jetson, with
-   `--amcl` running).
-4. For the visitor screen, on the Jetson: copy the two files over and run `python tools/map_to_plan.py lidar_map.yaml lab`
-   (it reads `map_saver` output as it is).
+   `--amcl` running), and the keep-out zones (below).
+5. For the visitor screen, on the Jetson: copy the two files over and run `python tools/map_to_plan.py lidar_map.yaml lab`
+   (it reads `map_saver` output as it is; the keep-out zones are not in it).
 
 **Starting with AMCL**: robot on its station, then `./run_robot_link.sh --amcl --local`. After move_base is up the script sends the
 station pose (`nodes/set_initial_pose.py`) and says `AMCL starts from the station: ...`. If the robot was not on the station, use
 **Set robot position** on the click-to-go page; it is sent with 0.25 m and 15 degrees of doubt, which still counts as localised.
+Options: `--no-depth` (camera off), `--robot-height 1.15`, `--keepout FILE`, `--map FILE`.
 
 **What "localised" means with AMCL.** AMCL publishes `/amcl_pose` after each update while the robot moves (every 10 cm or 9 degrees)
 and stays quiet when it stands still; the link's rule (`docs/robot_link.md`) already allows for that. Its covariance is the spread of
@@ -763,6 +774,12 @@ its particles: the link counts the robot as lost above `loc_max_covariance` (0.1
 measure it in the comparison runs with `python3 measure_localisation.py --localiser amcl` and set `_loc_max_covariance:=` if needed.
 It must stay above what the start pose is sent with (0.15 m, 8 degrees). AMCL can also be confidently wrong, for example after the robot
 was carried somewhere: set its position again whenever it has been moved by hand.
+
+**AMCL in a cluttered room** (`config/amcl_nav.launch`, every value commented there; starting values to tune in step 4). Chairs that
+moved, people and bags are not on the map, so many beams hit something AMCL does not expect. It uses the `likelihood_field_prob` model
+(each beam scored by how close its end is to a mapped wall) with **beam skipping** (beams that most particles agree hit something
+unmapped are left out of that update), `laser_z_hit` / `laser_z_rand` 0.5 / 0.5 instead of 0.95 / 0.05 (a beam on a chair costs a
+particle little), 90 beams of the URG-04LX's 683, and a 5.5 m range.
 
 **Comparing the two** (step 4 of the plan): the same number of cold starts at the station with each, counting how often the base is
 localised within 30 s and stays localised during a short drive.
@@ -772,7 +789,104 @@ localised within 30 s and stays localised during a short drive.
 - the map is made from the **filtered** scan, the same one AMCL reads (before, gmapping read the raw scan with the robot's own posts in it);
 - AMCL starts from the **station**, sent at start-up, instead of assuming the robot is where mapping started;
 - the **map cleaner** runs (the costmap waits for `/map_clean`; without it the planner had no map);
-- AMCL is set for the URG-04LX (5.5 m, not 12 m) and updates every 10 cm instead of 25 cm (`config/amcl_nav.launch`).
+- AMCL is set for the URG-04LX (5.5 m, not 12 m), updates every 10 cm instead of 25 cm, and ignores what is not on the map.
+
+### Obstacles in 3D: the depth camera (with `--amcl`)
+
+The robot is about 1.1 - 1.2 m tall; the LiDAR sees one slice at 30 cm. A desk (open underneath, top at about 75 cm) is two legs to the
+LiDAR, and the planner would happily drive the robot under it. So with `--amcl` the **Astra runs depth only, as an obstacle sensor**
+(`config/depth_obstacles.launch`); it is never used to localise. `--no-depth` leaves it off: then only keep-out zones protect the desks.
+
+- **The driver** is `astra_camera/AstraDriverNodelet` from `~/turtlebot2/src/ros_astra_camera` (what `3dsensor.launch` starts with
+  `TURTLEBOT_3D_SENSOR=astra`), loaded directly so it can be set to **depth mode 8 (320 x 240)** and **`data_skip` 4 (6 Hz)**. Colour
+  and IR never start: the driver starts a stream only when something subscribes, and nothing does. No registration, no rectifying.
+- **Depth -> obstacles**: `depth_image_proc/point_cloud_xyz` and `pcl/VoxelGrid` (5 cm) as nodelets in one manager, to
+  `/camera/depth/points_obstacles`, which both costmaps read beside the LiDAR (`config/depth_costmap.yaml`). Points from **5 cm** above
+  the floor up to **robot_height + 5 cm** (`--robot-height`, default 1.2 m) are obstacles; obstacles are **cleared by raytracing**: a
+  separate clearing source keeps the floor points, so each ray to the floor proves the air before it empty (a chair moved away is
+  forgotten that way; the LiDAR cannot clear above its own 30 cm).
+- **If the camera stops** (no cloud for 1 s), move_base stops the robot ("Sensor data is out of date") rather than drive on with the
+  LiDAR alone. At start, `run_robot_link.sh` waits for the cloud and refuses to go on without it (use `--no-depth` deliberately).
+
+**Its limits; read these before trusting it.**
+
+- It sees **only ahead**, about **58 degrees wide** (and about 45 - 50 degrees high). Turning on the spot, backing up, and anything at the
+  side are LiDAR only.
+- It sees **nothing closer than about 0.5 - 0.6 m**. With the camera where the robot description puts it (30 cm up, level), the floor
+  comes into view 0.64 m ahead and a **75 cm tabletop only from about 1 m away**: closer than that the edge is above its view.
+- So **what it has seen must stay in the costmap** until a ray of the camera or the LiDAR passes through that place again and finds it
+  empty. That is how the costmap works (nothing is forgotten just because it left the view), so a desk seen on the way in is still
+  there when the robot is under its edge. **But** the link clears the costmaps before every new goal (`/move_base/clear_costmaps`,
+  to forget ghost obstacles): a goal sent while the robot stands within a metre of a desk starts with that desk unknown above 30 cm.
+  **Put a keep-out zone round every desk**; the camera is the second line, for what moves (chairs pulled out, a trolley).
+- Black, shiny or glass surfaces and direct sunlight give no depth: no obstacle there either.
+
+**Depth camera: where is it?** The robot description (`turtlebot_description`, `kobuki_hexagons_astra`, the teammate's workspace:
+not edited) puts the camera **0.297 m above the floor, 0.087 m behind the middle of the base, 0.0125 m left, level**: the stock
+TurtleBot plate. The live tf on the Dell says the same. Wrong numbers put obstacles in the wrong place (or make the floor an obstacle),
+so the mount was **measured on the robot (2026-11-05)**, on a flat floor:
+
+| Argument | What to measure | Description's value | Measured (the default) |
+|---|---|---|---|
+| `camera_z` | floor to the middle of the camera's lenses, in metres | 0.297 | 0.33 |
+| `camera_x` | forwards from the middle of the base (halfway between the wheels) to the camera's front face; negative if behind | -0.087 | -0.08 |
+| `camera_y` | left (+) or right (-) of the robot's centre line to the middle of the camera | 0.0125 | 0.0 |
+| `camera_pitch` | how far it is tilted **down**, in radians (degrees x 0.01745; a phone level app on top of the camera) | 0.0 | 0.0 |
+| `camera_yaw` | turned left (+) / right (-) from straight ahead, radians | 0.0 | 0.0 |
+
+They are the defaults of those arguments in `config/amcl_nav.launch` (and `depth_obstacles.launch`); measure again and change them there
+if the camera is moved. `depth_obstacles.launch` publishes its own `depth_obstacle_camera` frame from them, so the teammate's description
+is never touched. At 0.33 m and level, with the Astra's view about 22 degrees up, a 75 cm tabletop comes into view only from about 1 m
+away. Check in step 4, standing still: with nothing
+within 3 m in front the floor must not become obstacles, and a box about 40 cm high put 1.5 m ahead must. A camera tilted down by 15 -
+20 degrees sees the floor closer and tabletops worse; level and higher up sees tabletops sooner.
+
+**What it costs the laptop: an estimate** (to be measured with `top` in a stationary run, step 4). The USB load is the big win: 320 x 240
+depth at 30 Hz is about 4.6 MB/s on the hub (the driver drops 4 frames in 5 after they arrive), against roughly eight times that for
+RTAB-Map's 640 x 480 depth and colour. CPU, as a share of one of the Celeron N3160's four cores: the driver 5 - 10 %, `point_cloud_xyz` on 77 000
+pixels at 6 Hz 2 - 5 %, the 5 cm voxel grid 10 - 20 % (it sorts every point of each frame), and the costmaps raytracing a few thousand
+points from two sources 5 - 15 %; together roughly **a quarter to a half of one core, 6 - 12 % of the laptop**. If it is more: raise
+`data_skip` (9 = 3 Hz), `voxel_leaf` 0.08, or lower `max_depth` to 3.0 in `config/depth_obstacles.launch`. At 0.25 m/s the robot moves
+4 cm between two clouds at 6 Hz (8 cm at 3 Hz).
+
+### Keep-out zones (with `--amcl`)
+
+Named rectangles and polygons in `config/keepout.yaml`, in metres on the LiDAR map (the `map` frame). `map_cleaner.py` paints them as
+walls into **`/map_clean` only**, the planner's map: AMCL keeps the real `/map` (walls that are not there would not match the LiDAR and
+would confuse it), and the visitor screen's map (`map_to_plan.py`, from the saved file) has none. The link refuses a goal inside one
+(`outside_map`), and the operator page's map shows them as walls.
+
+```yaml
+clearance_m: 0.25
+zones:
+  - {name: desk_row_1, rect: [1.20, -0.40, 3.60, 0.40]}               # two opposite corners
+  - {name: printer_corner, polygon: [[4.0, 2.0], [5.0, 2.0], [5.0, 3.0]]}
+```
+
+- **Teach** them by driving to two opposite corners, on the Jetson with `--amcl` running: `python tools/teach_poses.py`, then
+  `keepout desk_row_1 corner1`, drive, `keepout desk_row_1 corner2`, `save` (it edits `turtlebot/config/keepout.yaml`, with a backup;
+  copy it to the Dell). Or write them in by hand from the click-to-go page's numbers.
+- **Check** them on the map: `python3 tools/keepout_preview.py` (on either computer; `--map` for another map) writes
+  `maps/lidar_map_keepout.png` with the zones in red, the station and the shelf poses on it, and lists any problem.
+- **At start** `run_robot_link.sh --amcl` refuses (before starting anything) a zone with a corner off the map, or one that covers the
+  station or a shelf pose on the station's floor, or comes nearer to one than `clearance_m`; `map_cleaner.py` checks again and, if a
+  zone cannot be used, publishes **no** `/map_clean`, so the robot does not drive at all.
+- They belong to one map: make them again when the map is made again.
+
+### The robot's outline (`config/robot_shape.yaml`)
+
+**A circle of 0.20 m radius, inflation 0.40 m.** Measured on the robot (2026-11-05): 0.18 m from the middle of the base to the furthest
+part at any height, forwards, backwards, left and right alike (nothing sticks out beyond the Kobuki's 0.177 m); the radius adds 2 cm for
+measuring error. If something is added that sticks out, measure again: if all four are about the same, the largest is `robot_radius`;
+otherwise give a `footprint` polygon (the file shows how). Keep `inflation_radius` at least the radius + 0.15 m.
+
+### Bumpers, cliff and wheel-drop sensors
+
+The **Kobuki safety controller** runs with `--amcl` as with the stock navigation (`amcl_nav.launch` includes it): when a bumper is
+pressed, or a cliff or wheel-drop sensor fires, it backs the robot off on `cmd_vel_mux`'s safety input, which outranks navigation.
+`run_robot_link.sh` warns if it is not running. On top of that, `robot_link_api.py` ends the Jetson's goal: `failed`, reason
+**`bumper`**, and stops the base. The Jetson does **not** retry: a returning trip stops where it is and the operator page shows
+"Stopped: bumper" with a **Resume trip** button (`docs/robot_link.md`). `tools/fake_base.py` has the same (key `b`) for testing.
 
 ---
 
@@ -812,6 +926,10 @@ sound-meter (dB SPL) readings.
 | Paint size | `nodes/noise_nav_web.py` `RADIUS` | 0.4 m | Size of the circle each reading paints |
 | Camera map noise filter | `config/vslam.launch` `Grid/NoiseFilteringRadius` | 0.05 m | Fewer specks in **new** maps |
 | LiDAR mounting | `vslam.launch` args `laser_z`, `laser_yaw` | 0.3 m, 0 | Use `laser_yaw:=3.14159` if it faces backwards |
+| Robot outline (`--amcl`) | `config/robot_shape.yaml` | 0.20 m circle, inflation 0.40 m | Measure again if something sticks out past the base |
+| Robot height (`--amcl`) | `--robot-height` | 1.2 m | Depth points up to this + 5 cm are obstacles |
+| Camera mounting (`--amcl`) | `amcl_nav.launch` args `camera_x`, `camera_z`, `camera_pitch`... | measured: 0.33 m up, 0.08 m behind, level | Measure again if the camera is moved |
+| Depth rate / detail | `depth_obstacles.launch` args `data_skip`, `voxel_leaf`, `max_depth` | 4 (6 Hz), 0.05 m, 4 m | Less CPU with a bigger skip or leaf |
 
 Options for the nodes are given ROS-style, e.g. to run the logger by hand:
 
@@ -825,7 +943,9 @@ python3 nodes/noise_logger.py _level:=average _side_db:=3
 | Topic | Type | Contents |
 |---|---|---|
 | `/map` | OccupancyGrid | Map from RTAB-Map |
-| `/map_clean` | OccupancyGrid | Map with small specks removed (used for planning) |
+| `/map_clean` | OccupancyGrid | Map with small specks removed and, with `--amcl`, the keep-out zones painted in (used for planning) |
+| `/camera/depth/points_obstacles` | PointCloud2 | The depth camera's 5 cm voxel cloud for the costmaps (`--amcl`) |
+| `/mobile_base/events/bumper`, `.../cliff`, `.../wheel_drop` | kobuki_msgs | The safety sensors; a firing one fails the Jetson's goal (`bumper`) |
 | `/map_image` | Image | Live map with distances (Part 1 viewer) |
 | `/hokuyo_scan`, `/hokuyo_scan_filtered` | LaserScan | LiDAR, raw and without hits on the robot |
 | `/noise_level`, `/noise_left`, `/noise_right` | Float32 | Loudness in dB |
@@ -845,6 +965,11 @@ python3 nodes/noise_logger.py _level:=average _side_db:=3
 | `!!! No /odom from the robot base` / gmapping or RTAB-Map "Dropped 100% of messages" | The base isn't talking to the laptop | Switch the base ON (LED lit), check its USB cable, `ls /dev/kobuki` |
 | `Could not open serial Hokuyo` / `!!! LiDAR not found` | LiDAR unplugged or no permission | Plug it in; the script runs `chmod` for you; or do installation step 4 |
 | `!!! No camera images` | Camera unplugged / not enough USB bandwidth | `./check_devices.sh`; try a USB port directly on the laptop |
+| `!!! No obstacle points from the depth camera` / `The Astra camera is not on USB` (`--amcl`) | camera unplugged, or its driver failed | `./check_devices.sh`; `run_logs/amcl_nav.log`; only if the desks all have keep-out zones: `--no-depth` |
+| `Sensor data is out of date` in `run_logs/amcl_nav.log`, the robot stops | the depth cloud stopped (no cloud for 1 s) | as above; `rostopic hz /camera/depth/points_obstacles` should say about 6 |
+| `The keep-out zones cannot be used` | a zone off the map, or over the station or a shelf pose | `python3 ../tools/keepout_preview.py`, fix `config/keepout.yaml` |
+| the floor in front shows up as obstacles (`--amcl`) | the camera's height or tilt is wrong | measure it ("Depth camera: where is it?") |
+| goal `failed` with reason `bumper` | the bumper, a cliff or a wheel-drop sensor fired | check the robot and what it hit; **Resume trip** on the Jetson's operator page |
 | `run_id on parameter server does not match` | Two launches started at the same moment | Use the run scripts (they start things in order) |
 | Browser: "site can't be reached" | No tunnel, or the web server isn't running | Open the `ssh -L ...` tunnel; check the script reached its last step; use `http://` not `https://` |
 | Browser page loads but stays blank | Old stream from before a restart | Reload the page (Ctrl+F5) |

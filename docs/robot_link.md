@@ -82,7 +82,8 @@ A request that was understood but **refused for a reason the robot has to act on
 - `nav.status`: `idle` (no goal since the server started), `active`, `succeeded`, `failed`, `cancelled`.
   A finished goal **stays reported** (same `goal_id`, final status) until another goal arrives, so the Jetson cannot miss the outcome by polling between two goals.
   `distance_left` is metres along the plan to the goal (`null` when not `active`, or not known). `reason` is empty unless the goal `failed` or was `cancelled`:
-  `no_path`, `blocked`, `aborted`, `timeout`, `lost_localisation`, `ros_unavailable` (failed); `cancelled_by_client`, `superseded`, `heartbeat_timeout`, `manual_override` (cancelled).
+  `no_path`, `blocked`, `aborted`, `timeout`, `lost_localisation`, `ros_unavailable`, `bumper` (failed); `cancelled_by_client`, `superseded`, `heartbeat_timeout`, `manual_override` (cancelled).
+  `bumper`: the Kobuki's bumper was pressed, or a cliff or wheel-drop sensor fired, while the goal was active. The base's own safety controller has already backed it off; the Dell cancels the goal and stops the base, so move_base does not drive straight back into what it hit. **The Jetson must not resend it by itself**: a person checks the robot first. Added after `api_version` 1 was fixed: a client that does not know it reads it as any other `failed` reason (backwards compatible; `api_version` stays 1).
   `manual_override`: someone sent another goal, or pressed Stop, on the click-to-go page (port 8000) while the Jetson's goal was active. The person wins: the Dell does not fight them, and the Jetson reads its goal as cancelled and must not resend it by itself.
 - `noise`: the latest reading of `noise_logger` (`/noise_reading`: overall, left, right, balance). `overall` is the level the Jetson uses.
   - `unit`: `"dB"` (a calibrated sound level) or `"dBFS"` (decibels relative to the microphone's full scale, always negative, **not** comparable with the library's 45 / 60 dB thresholds).
@@ -148,6 +149,7 @@ The base's occupancy map, so the Jetson's operator page can draw it and let a pe
 - Starts the link in the background (it never blocks the robot's event loop): a heartbeat every 1 s and a state poll every 0.5 s on one thread, and commands (goal, cancel, speaking, max_speed) on another, in order, with up to 2 retries (they are idempotent). `GET /api/health` is read every 5 s.
 - **Link status**: *connected* (the last request worked), *degraded* (some requests failed in the last 3 s), *lost* (3 s without any reply). Entering *lost* publishes `LinkDown`; the first reply after that publishes `LinkUp`.
 - **A goal** gets a new `goal_id` each time it is sent. The outcome is read from `nav.status` of `/api/state` for that id and published once: `NavArrived`, `NavFailed` (with the `reason`) or `NavCancelled`. While `active`, `NavProgress` carries `distance_left`.
+- **What a failure does to a returning trip** (`robot/core/dialogue.py`): `not_localised`, `ros_unavailable`, `no_heartbeat` and a lost link make it wait and resend by itself once the base can drive; `no_path`, `blocked` and the like are tried once more, then the shelf is skipped. **`bumper` holds the trip**: no retry, no skipping, and nothing is resent, not after a visitor either, until the operator presses **Resume trip** on the operator page (the operator command `resume`). The page shows "Stopped: bumper"; the visitor screen shows "Stopped" (and in a zone that speaks the robot says it bumped into something).
 - A goal the Jetson sent but the Dell never confirmed is resent (same id) until it is accepted, the link is lost or another goal replaces it.
 - When nothing answers at all the link goes *lost* with the reason `base unreachable at <url>: check that the ssh tunnel is running (scripts/robot_link_tunnel.sh) or the Dell's IP (turtlebot.base_url), and that robot_link_api is running there`.
 - **The map page**: every `turtlebot.map_every_s` (5 s) the robot reads `GET /api/map?have=<version>` and, when the map changed, hands it to the display server (`robot/map_feed.py`), which shows it on the operator page at `/operator` next to the live pose. A click on the map picks a point (dragging turns the arrow); **Go there** sends the operator command `drive x y [yaw]` and **STOP** (or Esc) sends `stop`. `drive` is refused with the reason shown on the page while the dialogue is on a trip of its own, when the link is down or the base is not localised, or when the point is outside the map or in a wall (`turtlebot.max_goal_distance_m`, the floor plan, and the Dell's own checks all apply). `turtlebot.operator_drive: false` makes the page view-only.
@@ -284,13 +286,17 @@ The robot also compares the Dell's `time` with its own on every health check and
 | `robot_noise` | `/robot_speaking` (`Bool`, our own flag) and `/odom` twist |
 | `POST /api/max_speed` | dynamic_reconfigure `/move_base/DWAPlannerROS`, `max_vel_x` |
 | `battery` | `/mobile_base/sensors/core` (`kobuki_msgs/SensorState.battery`, tenths of a volt) |
-| `outside_map` | `/map_clean` (else `/map`): outside the grid, or a cell that is a known obstacle |
+| `outside_map` | `/map_clean` (else `/map`): outside the grid, or a cell that is a known obstacle (with `--amcl` that includes the keep-out zones) |
+| `bumper` | `/mobile_base/events/bumper` (`PRESSED`), `/mobile_base/events/cliff` (`CLIFF`), `/mobile_base/events/wheel_drop` (`DROPPED`); the Kobuki safety controller (on `cmd_vel_mux`'s safety input, priority 10, above navigation's 5) does the backing off |
 
 ### 6.1 Two localisers
 
-`run_robot_link.sh --amcl` runs **AMCL on a LiDAR map** (`turtlebot/maps/lidar_map.yaml`, made by `run_lidar_mapping.sh`; the camera is not
-started) and sends the station pose from `data/floorplan.yaml` to `/initialpose` once move_base is up (`nodes/set_initial_pose.py`), so the
-robot must start on its station. Without `--amcl` it runs **RTAB-Map** with the camera on `~/vslam_map.db`, as before. The API is the same
+`run_robot_link.sh --amcl` runs **AMCL on a LiDAR map** (`turtlebot/maps/lidar_map.yaml`, made by `run_lidar_mapping.sh`) and sends the
+station pose from `data/floorplan.yaml` to `/initialpose` once move_base is up (`nodes/set_initial_pose.py`), so the robot must start on its
+station. The camera runs **depth only, as an obstacle sensor** for move_base (it never localises; `--no-depth` turns it off), and the
+**keep-out zones** of `turtlebot/config/keepout.yaml` are painted into the planner's map `/map_clean` (not `/map`, which AMCL reads, and not
+the visitor screen's map). Both are there because the robot is about 1.2 m tall and the LiDAR sees one slice at 30 cm: it could drive under
+a desk. The API does not change with any of it. Without `--amcl` it runs **RTAB-Map** with the camera on `~/vslam_map.db`, as before. The API is the same
 either way; only what `robot_link_api.py` listens to changes (`_localiser:=amcl`, below). Which to use and why: `turtlebot/README.md`,
 "Two ways to localise" (in short: on the Dell's Celeron RTAB-Map found the robot from a standing start about 1 time in 5).
 
@@ -308,17 +314,20 @@ The two maps have different `map` frames. A LiDAR map's (0, 0) is where its mapp
 | `robot_link/` | the logic in plain Python 3.8 with no ROS (`core.py` the API's behaviour, `server.py` HTTP, `rules.py`, `activity.py`, `calibration.py`, `netaddr.py`, `mapimage.py` the map as a PNG); `dev_server.py` serves it over a simulated base |
 | `calibrate_noise.py` | gain / AGC check and the guided 3-level calibration against a phone |
 | `measure_localisation.py` | listens to `/rtabmap/localization_pose` (or `/amcl_pose` with `--localiser amcl`) standing still and moving, suggests `_loc_max_age_s`, shows AMCL's covariance |
-| `run_robot_link.sh` | starts the whole stack including the API; refuses if another ROS stack is running; `--amcl [--map FILE]` for AMCL |
+| `run_robot_link.sh` | starts the whole stack including the API; refuses if another ROS stack is running; `--amcl [--map FILE] [--no-depth] [--robot-height M] [--keepout FILE]` for AMCL |
 | `run_lidar_mapping.sh` | makes the LiDAR map (gmapping + keyboard, saved into `turtlebot/maps/`); the robot drives |
-| `config/amcl_nav.launch`, `config/lidar_mapping.launch` | LiDAR + map + AMCL + move_base; LiDAR + gmapping (no camera in either) |
+| `config/amcl_nav.launch`, `config/lidar_mapping.launch` | LiDAR + map + AMCL + move_base (+ the depth camera for obstacles, the safety controller); LiDAR + gmapping |
+| `config/depth_obstacles.launch`, `config/depth_costmap.yaml` | the Astra depth only (320 x 240, 6 Hz) -> point cloud -> 5 cm voxels -> both costmaps, marking 5 cm to robot height + 5 cm |
+| `config/robot_shape.yaml` | the robot's outline and inflation (a 0.20 m circle: the robot measures 0.18 m all round) |
+| `config/keepout.yaml`, `keepout.py`, `nodes/map_cleaner.py` | keep-out zones: checked at start, painted into `/map_clean`; `tools/keepout_preview.py` draws them, `tools/teach_poses.py` records them |
 | `nodes/set_initial_pose.py` | sends the station pose to `/initialpose` and waits for AMCL to take it |
 | `tests/` | `python3 -m unittest discover -s tests` (no ROS needed) |
 
 Node parameters, ROS style on the command line (`python3 nodes/robot_link_api.py _iface:=wlp2s0 _port:=8010`; they work without a ROS master, which is why they are not read from the parameter server):
 `_iface` (default `wlp2s0`), `_host` (overrides `_iface`; `127.0.0.1` for tests), `_port`,
 `_localiser` (`rtabmap`, or `amcl`: sets the next three), `_localization_topic` (`/rtabmap/localization_pose`; `/amcl_pose`), `_localiser_node` (`/rtabmap/rtabmap`; `/amcl`),
-`_loc_max_covariance` (1.0; 0.1 for AMCL, tune it), `_max_speed_limit` (0.25), `_tf_max_age_s` (1.0), `_loc_max_age_s`, `_still_dist_m` (0.05), `_still_turn_deg` (5), `_lost_localisation_after_s` (5), `_goal_timeout_s` (900),
-`_calibration_file`, `_skip_clear_costmaps`. `--print-address` prints the address it would bind to and exits.
+`_loc_max_covariance` (1.0; 0.1 for AMCL, tune it), `_max_speed_limit` (0.25), `_tf_max_age_s` (1.0), `_loc_max_age_s`, `_still_dist_m` (0.05; 0.12 for AMCL) and `_still_turn_deg` (5; 10 for AMCL: AMCL stays quiet until the robot has moved 0.10 m or turned 8.6 degrees, so "stood still" has to be wider than that), `_lost_localisation_after_s` (5), `_goal_timeout_s` (900),
+`_calibration_file`, `_skip_clear_costmaps`, `_bumper_topic`, `_cliff_topic`, `_wheel_drop_topic` (the `/mobile_base/events/...` ones). `--print-address` prints the address it would bind to and exits.
 
-The watchdog and every other timer run in a 10 Hz loop and before each request. When a goal is cancelled by us (client, watchdog, lost localisation, shutdown) the node cancels its own `move_base` goal and sends zero velocity for half a second.
+The watchdog and every other timer run in a 10 Hz loop and before each request. When a goal is ended by us (client, watchdog, lost localisation, bumper, shutdown) the node cancels its own `move_base` goal and sends zero velocity for half a second.
 If the ROS master restarts, the node re-executes itself to reconnect (rospy cannot re-register).

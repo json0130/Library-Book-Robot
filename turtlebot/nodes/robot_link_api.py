@@ -5,7 +5,8 @@
 #
 # All the decisions are in robot_link/ (plain Python, tested without ROS). This file only connects them to ROS:
 #   reads   tf map->base_footprint, /rtabmap/localization_pose (or /amcl_pose), /odom, /move_base/NavfnROS/plan, /noise_reading,
-#           /mobile_base/sensors/core (battery), /move_base/status, /map_clean (or /map)
+#           /mobile_base/sensors/core (battery), /move_base/status, /map_clean (or /map),
+#           /mobile_base/events/bumper, /mobile_base/events/cliff, /mobile_base/events/wheel_drop (a goal then fails: "bumper")
 #   writes  move_base goals (action client), /robot_speaking, zero velocity, DWAPlannerROS max_vel_x (dynamic_reconfigure)
 #
 # Needs the environment variable ROBOT_LINK_TOKEN (same value on the Jetson) - it refuses to start without it.
@@ -46,6 +47,8 @@ DEFAULTS = {
     "map_topics": "/map_clean,/map", "dwa_name": "/move_base/DWAPlannerROS",
     "zero_topics": "/navigation_velocity_smoother/raw_cmd_vel,/cmd_vel_mux/input/navi",
     "localiser": "rtabmap", "localization_topic": "", "localiser_node": "", "calibration_file": calibration.DEFAULT_PATH,
+    "bumper_topic": "/mobile_base/events/bumper", "cliff_topic": "/mobile_base/events/cliff",
+    "wheel_drop_topic": "/mobile_base/events/wheel_drop",
     "battery_empty_v": 13.2, "battery_full_v": 16.5, "enable_max_speed": True, "skip_clear_costmaps": False,
     "wait_for_iface_s": 30.0, "log_every_s": 10.0,
 }
@@ -55,9 +58,14 @@ DEFAULTS = {
 # RTAB-Map sends a real fix with a small covariance and a lost one with 9999, so its limit only has to tell those apart. AMCL's
 # covariance is the spread of its particles and grows as it loses track: 0.1 (about 0.3 m, 18 degrees) is a first guess, to be
 # tuned in the comparison runs. It must stay above what the start pose is sent with (set_initial_pose.py: 0.15 m, 8 degrees).
+# AMCL publishes /amcl_pose only after the robot has moved update_min_d (0.10 m) or turned update_min_a (0.15 rad, 8.6 degrees)
+# (config/amcl_nav.launch), and nothing at all while it stands still. The "stood still" test of the localisation rule must be wider
+# than that, or a robot that stopped 0.05 - 0.10 m (or 5 - 8.6 degrees) after the last update is "not localised" until it moves on:
+# a goal would be refused as not_localised after every short stop. So its limits sit just above AMCL's.
 LOCALISERS = {
     "rtabmap": {"localization_topic": "/rtabmap/localization_pose", "localiser_node": "/rtabmap/rtabmap", "loc_max_covariance": 1.0},
-    "amcl": {"localization_topic": "/amcl_pose", "localiser_node": "/amcl", "loc_max_covariance": 0.1},
+    "amcl": {"localization_topic": "/amcl_pose", "localiser_node": "/amcl", "loc_max_covariance": 0.1,
+             "still_dist_m": 0.12, "still_turn_deg": 10.0},
 }
 
 
@@ -173,7 +181,7 @@ class RosBackend(Backend):
         import actionlib
         import tf2_ros
         from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-        from kobuki_msgs.msg import SensorState
+        from kobuki_msgs.msg import BumperEvent, CliffEvent, SensorState, WheelDropEvent
         from move_base_msgs.msg import MoveBaseAction
         from nav_msgs.msg import OccupancyGrid, Odometry, Path
         from actionlib_msgs.msg import GoalStatusArray
@@ -192,6 +200,13 @@ class RosBackend(Backend):
         rospy.Subscriber(p["noise_topic"], Float32MultiArray, self._noise, queue_size=5)
         rospy.Subscriber(p["battery_topic"], SensorState, self._battery, queue_size=2)
         rospy.Subscriber("/move_base/status", GoalStatusArray, lambda m: setattr(self, "status_at", time.time()), queue_size=2)
+        # the Kobuki's safety sensors: only the moment one fires counts (pressed, a cliff, a wheel off the floor), not the release
+        rospy.Subscriber(p["bumper_topic"], BumperEvent,
+                         lambda m: m.state == BumperEvent.PRESSED and self.core.on_safety_event("bumper"), queue_size=5)
+        rospy.Subscriber(p["cliff_topic"], CliffEvent,
+                         lambda m: m.state == CliffEvent.CLIFF and self.core.on_safety_event("cliff"), queue_size=5)
+        rospy.Subscriber(p["wheel_drop_topic"], WheelDropEvent,
+                         lambda m: m.state == WheelDropEvent.DROPPED and self.core.on_safety_event("wheel_drop"), queue_size=5)
         for rank, topic in enumerate(p["map_topics"].split(",")):
             rospy.Subscriber(topic.strip(), OccupancyGrid, self._map, callback_args=rank, queue_size=1)
         self.speaking_pub = rospy.Publisher(p["speaking_topic"], Bool, queue_size=1, latch=True)
@@ -384,7 +399,9 @@ class Params(dict):
         for key in ("localization_topic", "localiser_node"):
             self[key] = self[key] or profile[key]
         values = {k: v for k, v in self.cli.items() if k in Settings().__dict__}
-        values.setdefault("loc_max_covariance", profile["loc_max_covariance"])
+        for key in ("loc_max_covariance", "still_dist_m", "still_turn_deg"):
+            if key in profile:
+                values.setdefault(key, profile[key])
         self.settings = Settings.from_mapping(values)
 
 

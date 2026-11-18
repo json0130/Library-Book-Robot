@@ -3,7 +3,7 @@
 # the map of that shelf's floor. Every pose below is a PLACEHOLDER (see the description) until the real
 # map is surveyed; the shelf, section, floor and zone are the sample library's invented layout.
 shelf,section,floor,zone,map_x,map_y,map_yaw,description
-1-FIC-A,Fiction,1,common,-1.0,1.0,1.57,"Fiction, authors A-Z. TODO: placeholder pose, survey the real one."
+1-FIC-A,Fiction,1,common,-0.14,4.46,0.21,"Fiction, authors A-Z."
 2-SF-A,Science Fiction,2,common,1.0,2.0,1.57,"Science fiction, authors A-F. TODO: placeholder pose, survey the real one."
 2-SF-B,Science Fiction,2,common,1.0,4.0,1.57,"Science fiction, authors G-O. TODO: placeholder pose, survey the real one."
 2-SF-C,Science Fiction,2,common,1.0,6.0,1.57,"Science fiction, authors P-Z. TODO: placeholder pose, survey the real one."

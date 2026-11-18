@@ -253,6 +253,116 @@ class AmclStartTest(unittest.TestCase):
         self.assertNotIn("amcl", r.stdout.replace("--amcl uses the LiDAR instead", ""))
 
 
+class DepthAndKeepoutOptionTest(unittest.TestCase):
+    """--amcl's depth camera (obstacles only) and keep-out zones: option handling, in dry runs and --check only."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.map = lidar_map(os.path.join(self.tmp, "maps"))
+
+    def dry(self, *args):
+        home = tempfile.mkdtemp()
+        try:
+            r = run(SCRIPT, "--dry-run", *args, env={"HOME": home, "ROBOT_LINK_TOKEN": "dry-run-token-1234"})
+        finally:
+            shutil.rmtree(home)
+        return r, r.stdout + r.stderr
+
+    def line(self, out, name):
+        return [l for l in out.splitlines() if "would start %s:" % name in l][0]
+
+    def test_the_depth_camera_is_on_by_default_with_amcl(self):
+        r, out = self.dry("--amcl", "--map", self.map)
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn("depth_obstacles:=true", self.line(out, "amcl_nav"))
+        self.assertIn("depth camera for obstacles", out)
+        self.assertNotIn("robot_height:=", self.line(out, "amcl_nav"))           # the launch file's default (1.2 m)
+        r, out = self.dry("--amcl", "--depth-obstacles", "--map", self.map)
+        self.assertIn("depth_obstacles:=true", self.line(out, "amcl_nav"))
+
+    def test_no_depth_turns_it_off_and_says_what_that_means(self):
+        r, out = self.dry("--amcl", "--no-depth", "--map", self.map)
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn("depth_obstacles:=false", self.line(out, "amcl_nav"))
+        self.assertIn("ONLY keep-out zones", out)
+        self.assertNotIn("Astra camera is not on USB", out)                      # no camera is looked for
+
+    def test_robot_height_is_passed_on_and_checked(self):
+        r, out = self.dry("--amcl", "--robot-height", "1.15", "--map", self.map)
+        self.assertIn("robot_height:=1.15", self.line(out, "amcl_nav"))
+        r, out = self.dry("--amcl", "--robot-height=1.3", "--map", self.map)
+        self.assertIn("robot_height:=1.3", self.line(out, "amcl_nav"))
+        for bad in ("0.2", "3", "tall", "1.2m", "-1"):
+            self.assertEqual(run(SCRIPT, "--amcl", "--robot-height", bad, "--check").returncode, 2, bad)
+        self.assertEqual(run(SCRIPT, "--amcl", "--robot-height").returncode, 2)
+
+    def test_these_options_are_for_amcl_only(self):
+        for args in (["--no-depth"], ["--depth-obstacles"], ["--robot-height", "1.2"], ["--keepout", "k.yaml"]):
+            r = run(SCRIPT, *args, "--check")
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn("are for --amcl", r.stdout)
+        self.assertEqual(run(SCRIPT, "--amcl", "--depth-obstacles", "--no-depth", "--check").returncode, 2)
+
+    def test_the_map_cleaner_paints_the_zones_with_amcl_only(self):
+        r, out = self.dry("--amcl", "--map", self.map)
+        cleaner = self.line(out, "map_cleaner")
+        here = os.path.dirname(SCRIPT)
+        self.assertIn("_keepout:=%s" % os.path.join(here, "config", "keepout.yaml"), cleaner)
+        self.assertIn("_floorplan:=%s" % os.path.normpath(os.path.join(here, "..", "data", "floorplan.yaml")), cleaner)
+        self.assertIn("_shelves:=%s" % os.path.normpath(os.path.join(here, "..", "data", "shelves.csv")), cleaner)
+        empty = os.path.join(self.tmp, "keepout.yaml")                           # the repo's file holds the real zones, which belong to the real map
+        with open(empty, "w") as f:
+            f.write("zones: []\n")
+        r, out = self.dry("--amcl", "--map", self.map, "--keepout", empty)
+        self.assertIn("_keepout:=%s" % empty, self.line(out, "map_cleaner"))
+        self.assertIn("keepout: 0 zone(s) OK", out)
+        home = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(home, "vslam_map.db"), "w") as f:
+                f.write("not a real map")
+            plain = run(SCRIPT, "--dry-run", env={"HOME": home, "ROBOT_LINK_TOKEN": "dry-run-token-1234"})
+        finally:
+            shutil.rmtree(home)
+        self.assertNotIn("_keepout", self.line(plain.stdout, "map_cleaner"))     # RTAB-Map's map frame is another one
+
+    def big_map(self):
+        """30 x 30 m round (0, 0), so the floor plan's station (0, 0) is on it."""
+        folder = os.path.join(self.tmp, "big")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "lab.pgm"), "wb") as f:
+            f.write(b"P5\n300 300\n255\n" + b"\xfe" * 90000)
+        path = os.path.join(folder, "lab.yaml")
+        with open(path, "w") as f:
+            f.write("image: lab.pgm\nresolution: 0.1\norigin: [-15.0, -15.0, 0.0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
+        return path
+
+    def test_a_zone_over_the_station_is_refused_before_anything_starts(self):
+        zones = os.path.join(self.tmp, "keepout.yaml")
+        with open(zones, "w") as f:
+            f.write("zones:\n  - {name: desk, rect: [-0.5, -0.5, 0.5, 0.5]}\n")
+        r, out = self.dry("--amcl", "--map", self.big_map(), "--keepout", zones)
+        self.assertIn("The keep-out zones cannot be used", out)
+        self.assertIn("desk covers the station", out)
+        self.assertIn("keepout_preview.py", out)
+        self.assertIn("_keepout:=%s" % zones, self.line(out, "map_cleaner"))
+
+    def test_a_good_zone_and_a_missing_file(self):
+        zones = os.path.join(self.tmp, "keepout.yaml")
+        with open(zones, "w") as f:
+            f.write("zones:\n  - {name: desk, rect: [1.0, 1.0, 2.0, 2.0]}\n")
+        r, out = self.dry("--amcl", "--map", self.big_map(), "--keepout=" + zones)
+        self.assertIn("keepout: 1 zone(s) OK: desk", out)
+        r, out = self.dry("--amcl", "--map", self.big_map(), "--keepout", os.path.join(self.tmp, "none.yaml"))
+        self.assertIn("No keep-out file", out)
+
+    def test_the_help_lists_the_options(self):
+        out = run(SCRIPT, "--help").stdout
+        for option in ("--no-depth", "--robot-height", "--keepout", "--amcl"):
+            self.assertIn(option, out)
+        self.assertIn("Press Ctrl-C", out)                                       # the whole header, not cut short
+
+
 class MappingScriptTest(unittest.TestCase):
     """run_lidar_mapping.sh: only --help, --check and dry runs. It drives the robot for real, so it is never started here."""
 

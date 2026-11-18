@@ -9,7 +9,8 @@ ReturningProgress); this composer turns them into ScreenUpdate events with one o
     book_list   up to three books with their covers and one reason each; tapping one opens its card
     directions  the floor plan with the target section, the robot, an approximate path, the distance in metres
     options     the current choices as big buttons (OFFER and ANYTHING_ELSE, mainly in a quiet zone)
-    status      returning books: where to and how many are left ("Navigation unavailable" while the base cannot drive)
+    status      returning books: where to and how many are left ("Navigation unavailable" while the base cannot drive,
+                "Stopped" after it bumped into something)
 
 One state can show different views: ANSWER shows a book card for "tell me about it" and directions for "where is it".
 A content view keeps small eyes in a corner (layout "split"); the face never goes away completely. Content stays
@@ -429,6 +430,8 @@ class ScreenComposer:
             detail = self.text if leaf == "ANNOUNCE" else (f"Shelf {p.shelf}, level {p.floor}" if p and p.shelf else "")
             if p is not None and p.phase == "unavailable":       # the link to the base is down, or it is not localised
                 heading, detail = "Navigation unavailable", "Waiting for the base. The trip carries on by itself."
+            elif p is not None and p.phase == "held":          # it bumped into something: a person has to say go on
+                heading, detail = "Stopped", "I bumped into something. Waiting for a member of staff to check on me."
             return "status", StatusPayload(heading, destination, p.books_left if p else 0, detail)
         if leaf == "SCAN":
             return "face", FacePayload("Reading the book…" if self.zone == "quiet" else "")

@@ -358,6 +358,45 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(core.state()["nav"]["reason"], "timeout")
 
 
+class SafetyEventTest(unittest.TestCase):
+    """A bumper, cliff or wheel-drop event (the Kobuki safety controller backs off by itself) ends our goal: failed, bumper."""
+
+    def test_a_bump_during_a_goal_fails_it_and_stops_the_base(self):
+        for sensor in ("bumper", "cliff", "wheel_drop"):
+            core, backend, clock = make_core()
+            goal(core, "g-1")
+            core.on_safety_event(sensor)
+            nav = core.state()["nav"]
+            self.assertEqual((nav["status"], nav["reason"], nav["goal_id"]), ("failed", "bumper", "g-1"), sensor)
+            self.assertEqual((backend.cancelled, backend.stopped), (1, 1), sensor)
+            self.assertEqual(core.debug()["last_safety"][0], sensor)
+
+    def test_what_move_base_says_afterwards_changes_nothing(self):
+        core, backend, clock = make_core()
+        goal(core, "g-1")
+        core.on_safety_event("bumper")
+        core.on_goal_result("g-1", "preempted")                                  # our own cancel coming back
+        core.on_goal_result("g-1", "succeeded")
+        nav = core.state()["nav"]
+        self.assertEqual((nav["status"], nav["reason"]), ("failed", "bumper"))
+
+    def test_a_bump_with_no_goal_of_ours_is_only_noted(self):
+        core, backend, clock = make_core()
+        core.on_safety_event("bumper")
+        self.assertEqual(core.state()["nav"]["status"], "idle")
+        self.assertEqual((backend.cancelled, backend.stopped), (0, 0))           # the click-to-go page's goal is not ours to end
+        goal(core, "g-1")
+        core.on_goal_result("g-1", "succeeded")
+        core.on_safety_event("bumper")
+        self.assertEqual(core.state()["nav"]["status"], "succeeded")             # a finished goal stays as it finished
+
+    def test_the_next_goal_is_accepted_as_usual(self):
+        core, backend, clock = make_core()
+        goal(core, "g-1")
+        core.on_safety_event("bumper")
+        self.assertTrue(goal(core, "g-2")[1]["accepted"])                       # the Jetson decides whether to go on
+
+
 class DistanceTest(unittest.TestCase):
     def test_straight_line_without_a_plan(self):
         core, _, _ = make_core()

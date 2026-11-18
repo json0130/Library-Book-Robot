@@ -327,9 +327,9 @@ class DirectionsTest(unittest.TestCase):
 
     def test_the_robot_is_at_the_station_unless_returning(self):
         c = composer()
-        self.assertEqual(c.robot_position(), (1, -4.0, 2.5))
+        self.assertEqual(c.robot_position(), (1, 0.0, 0.0))
         c.on_navigation(NavigationRequested("", "shelf 2-SF-A", 1.0, 2.0, 1.57, shelf="2-SF-A", floor=2))
-        self.assertEqual(c.robot_position(), (1, -4.0, 2.5))            # with a visitor at the station
+        self.assertEqual(c.robot_position(), (1, 0.0, 0.0))             # with a visitor at the station
         c.path = "RETURNING.NAVIGATING"
         self.assertEqual(c.robot_position(), (2, 1.0, 2.0))             # during a trip: the last target
 
@@ -756,6 +756,21 @@ class ServerAndOperatorTest(unittest.TestCase):
         self.assertIn("no view called", said[-1])
         self.assertIn("view", app.state_info())
 
+
+
+class GenericSectionNameTest(unittest.TestCase):
+    """A section drawn on the floor plan and left with the editor's default name ("Section 1") must not swallow every "the X section"."""
+
+    def plan(self):
+        from robot.services.floorplan import FloorPlan
+        return FloorPlan.from_dict({"floors": [{"level": 1, "name": "Ground", "x0": 0, "y0": 0, "width": 10, "height": 10, "sections": [
+            {"name": "History", "x": 0, "y": 0, "w": 2, "h": 2}, {"name": "Section 1", "x": 4, "y": 4, "w": 2, "h": 2}]}]})
+
+    def test_the_other_section_is_found_by_its_own_name_and_the_generic_one_only_by_its_whole_name(self):
+        places = PlaceResolver(None, self.plan())
+        self.assertEqual(places.resolve("where is the history section").section, "History")
+        self.assertEqual(places.resolve("where is the section 1").section, "Section 1")
+        self.assertEqual(places.resolve("where is section 1").section, "Section 1")
 
 if __name__ == "__main__":
     unittest.main()

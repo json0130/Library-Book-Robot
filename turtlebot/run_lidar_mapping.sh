@@ -5,6 +5,9 @@
 #
 # THE ROBOT DRIVES: you drive it with the keyboard. Only with the area clear and someone at the power switch.
 #
+# Tidy the room first: chairs pushed in under the desks, bags off the floor, and NOBODY in view of the LiDAR while it maps (stand
+# behind the robot, out of its 240 degrees). What is on the map is what AMCL expects for ever: a chair left out is a "wall" it
+# keeps looking for.
 # Start with the robot ON ITS STATION, facing its usual way: that spot becomes (0, 0) facing +x on the new map. The station in
 # ../data/floorplan.yaml (where AMCL starts) is then  station: {level: 1, x: 0.0, y: 0.0, yaw: 0.0}  until poses are taught again.
 #
@@ -26,7 +29,7 @@ for arg in "$@"; do
         --check) CHECK=1 ;;
         --dry-run) DRY=1 ;;
         --overwrite) OVERWRITE=1 ;;
-        -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]}"; exit 0 ;;
         -*) echo "unknown option $arg (see --help)"; exit 2 ;;
         *) NAME="$arg" ;;
     esac

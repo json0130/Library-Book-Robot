@@ -162,7 +162,14 @@ class PlaceResolver:
         names = set(self.sections())
         if self.plan is not None:
             names |= {s.name for f in self.plan.floors.values() for s in f.sections}
-        matched = [n for n in names if {stem(w) for w in words_of(n)} <= stems]
+        generic = stem("section")
+
+        def fits(name: str) -> bool:
+            own = {stem(w) for w in words_of(name)}
+            if not own - {generic}:                       # "Section 1": the only word is "section", which every "where is the X section" has,
+                return name.lower() in text.lower()       # so it counts only when the visitor says its whole name
+            return own <= stems
+        matched = [n for n in names if fits(n)]
         if not matched:
             return None
         size = max(len(words_of(n)) for n in matched)

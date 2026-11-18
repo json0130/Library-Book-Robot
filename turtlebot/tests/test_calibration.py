@@ -174,5 +174,29 @@ class GuidedSessionTest(unittest.TestCase):
         self.assertEqual(s["n"], 6)
 
 
+class OneMicrophoneTest(unittest.TestCase):
+    """A mono mic_config.json ({"mono": {"usb_port": ...}}): one microphone is both the left and the right one."""
+
+    def test_cards_come_from_the_mono_entry_or_from_left_and_right(self):
+        find = {"1-1": 4, "1-2.6": 0, "1-2.5": 1}.get
+        self.assertEqual(cn.cards_from_config({"mono": {"usb_port": "1-1"}}, find), {"microphone": 4})
+        self.assertEqual(cn.cards_from_config({"left": {"usb_port": "1-2.6"}, "right": {"usb_port": "1-2.5"}}, find), {"left": 0, "right": 1})
+        self.assertEqual(cn.cards_from_config({"mono": {"usb_port": "1-9"}}, find), {"microphone": None})        # not plugged in
+
+    def test_setup_mics_writes_a_mono_config_for_the_port_given(self):
+        import setup_mics
+        cards = [(0, "1-2.6", "USB PnP Sound Device"), (4, "1-1", "USB_MIC")]
+        cfg = setup_mics.mono_config(cards, "1-1")
+        self.assertEqual(cfg["mono"], {"usb_port": "1-1", "name": "USB_MIC"})
+        self.assertEqual(cfg["offset_db"], 0.0)
+        self.assertIsNone(setup_mics.mono_config(cards, "1-3"))
+
+    def test_the_same_microphone_twice_fits_one_calibration_with_equal_sides(self):
+        pts = [{"reference": r, "left": d, "right": d, "overall": d} for r, d in ((44.0, -50.1), (60.0, -36.8), (68.0, -29.8))]
+        fit = calibration.fit(pts, 3.0)
+        self.assertEqual(fit["left_offset_db"], fit["right_offset_db"])
+        self.assertLessEqual(fit["max_error_db"], 3.0)                      # the real 2026-11-18 probe of the new microphone: within 3 dB
+
+
 if __name__ == "__main__":
     unittest.main()

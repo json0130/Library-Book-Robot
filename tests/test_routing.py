@@ -150,10 +150,10 @@ class TheRealPlanTest(unittest.TestCase):
     def test_directions_to_the_fiction_shelf_follow_the_map(self):
         s = self.plan.station
         payload = directions(self.plan, "book", "Dune", 1, (1, s.x, s.y), "Fiction", "1-FIC-A", (-1.0, 1.0))
-        self.assertEqual(payload.base_map, "lab")
+        self.assertEqual(payload.base_map, "lab_lidar")
         self.assertEqual(payload.path[0], [s.x, s.y])
         self.assertEqual(payload.path[-1], [-1.0, 1.0])
-        walk = Walkable.load(MAPS / "lab.json")
+        walk = Walkable.load(MAPS / "lab_lidar.json")
         for a, b in zip(payload.path, payload.path[1:]):
             self.assertTrue(walk.clear(walk.cell(*a), walk.cell(*b)), f"{a} -> {b} crosses a wall")
 

@@ -8,16 +8,19 @@
 floors:
   - level: 1
     name: Ground floor
-    # The robot's own map of the lab (display/ui/maps/lab.json, made with tools/map_to_plan.py from the TurtleBot's saved
-    # map) is drawn under this floor, in the map frame: x to the right, y UP, so x0/y0 are the lowest x and y. The sections
-    # and landmarks below are placeholders placed on that map until the real shelves are surveyed (tools/teach_poses.py).
-    x0: -7.3
-    y0: -2.2
-    width: 10.6
-    height: 8.3
-    base_map: lab
+    # The robot's own map of the lab (display/ui/maps/lab_lidar.json, made with tools/map_to_plan.py from the LiDAR map
+    # turtlebot/run_lidar_mapping.sh saved as maps/remap2 on 2026-11-17, started on the station facing the right-hand wall, so the
+    # station is (0, 0) facing +x; it agrees with the first map of 2026-11-05 to 5 degrees and 0.2 m) is drawn under this floor,
+    # in the map frame: x to the right, y UP, so x0/y0 are the lowest x and y. The sections and landmarks below are placeholders
+    # until the real shelves are surveyed (tools/teach_poses.py). lab.json is the older RTAB-Map picture, in that map's own frame.
+    x0: -8.0
+    y0: -3.8
+    width: 12.1
+    height: 13.2
+    base_map: lab_lidar
     sections:
-      - {name: Fiction, x: -2.2, y: 0.4, w: 2.0, h: 1.2}
+      - {name: Fiction, x: -0.35, y: 4.00, w: 1.80, h: 1.90}
+      - {name: Section 1, x: -5.00, y: 4.70, w: 1.55, h: 1.40}
     landmarks:
       - {kind: lift, name: Lift, x: -5.0, y: 1.5}
       - {kind: help_desk, name: Help desk, x: 1.0, y: 2.3}
@@ -48,7 +51,7 @@ floors:
       - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
 
 station:                  # where the robot waits for visitors (its "you are here" when it is not driving)
-  level: 1
-  x: -4.0
-  y: 2.5
+  level: 1                # (0, 0) facing +x: where the LiDAR mapping started; AMCL starts here (set_initial_pose.py)
+  x: 0.0
+  y: 0.0
   yaw: 0.0

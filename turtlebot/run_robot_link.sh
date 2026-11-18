@@ -2,8 +2,10 @@
 # Starts the whole robot stack for the Jetson: base, LiDAR, localisation, move_base, scan filter, map cleaner, noise logger, the
 # click-to-go page (port 8000) and robot_link_api (port 8010, the link to the Jetson).
 # Two ways to find the robot on the map (README.md, "Two ways to localise"):
-#     --amcl     the LiDAR on a LiDAR map (run_lidar_mapping.sh makes it) with AMCL; the camera is not started. The station pose
-#                from ../data/floorplan.yaml is sent to AMCL at start-up, so start with the robot ON its station.
+#     --amcl     the LiDAR on a LiDAR map (run_lidar_mapping.sh makes it) with AMCL. The station pose from ../data/floorplan.yaml
+#                is sent to AMCL at start-up, so start with the robot ON its station. The depth camera runs as an obstacle sensor
+#                only (desks, chair seats: what the LiDAR at 30 cm misses), and the keep-out zones of config/keepout.yaml are
+#                painted into the planner's map.
 #     (default)  the camera with RTAB-Map on ~/vslam_map.db (run_vslam_mapping.sh makes it).
 # Based on run_vslam_noise_nav.sh, but it reads the files in THIS folder (the repo copy), keeps its output in this folder, and
 # works on a copy of the RTAB-Map map, so it never touches the files in the home folder that the other scripts use.
@@ -11,6 +13,9 @@
 # Run (from this folder):
 #     ./run_robot_link.sh --amcl           LiDAR + AMCL on maps/lidar_map.yaml
 #     ./run_robot_link.sh --amcl --map maps/lab2.yaml    another LiDAR map (a map_saver .yaml)
+#     ./run_robot_link.sh --amcl --no-depth               LiDAR only, camera off (then ONLY keep-out zones stop it driving under a desk)
+#     ./run_robot_link.sh --amcl --robot-height 1.15      depth points up to this + 5 cm are obstacles (default 1.2 m)
+#     ./run_robot_link.sh --amcl --keepout FILE           other keep-out zones (default config/keepout.yaml; checked at start)
 #     ./run_robot_link.sh                  camera + RTAB-Map on ~/vslam_map.db (copied, never changed)
 #     ./run_robot_link.sh vslam_map2       camera + RTAB-Map on ~/vslam_map2.db
 #     ./run_robot_link.sh --check          only look: is another ROS stack or script running? Starts nothing.
@@ -30,6 +35,7 @@
 set -m
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK=0; DRY=0; LOCAL=0; AMCL=0; MAP_NAME=vslam_map; MAP_FILE=""
+DEPTH_ON=0; DEPTH_OFF=0; ROBOT_HEIGHT=""; KEEPOUT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) CHECK=1 ;;
@@ -38,7 +44,13 @@ while [ $# -gt 0 ]; do
         --amcl) AMCL=1 ;;
         --map) [ $# -ge 2 ] || { echo "--map needs a file (a map_saver .yaml)"; exit 2; }; MAP_FILE="$2"; shift ;;
         --map=*) MAP_FILE="${1#--map=}" ;;
-        -h|--help) sed -n '2,29p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --depth-obstacles) DEPTH_ON=1 ;;
+        --no-depth) DEPTH_OFF=1 ;;
+        --robot-height) [ $# -ge 2 ] || { echo "--robot-height needs metres, e.g. --robot-height 1.2"; exit 2; }; ROBOT_HEIGHT="$2"; shift ;;
+        --robot-height=*) ROBOT_HEIGHT="${1#--robot-height=}" ;;
+        --keepout) [ $# -ge 2 ] || { echo "--keepout needs a file (a keepout.yaml)"; exit 2; }; KEEPOUT="$2"; shift ;;
+        --keepout=*) KEEPOUT="${1#--keepout=}" ;;
+        -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]}"; exit 0 ;;
         -*) echo "unknown option $1 (see --help)"; exit 2 ;;
         *) MAP_NAME="$1" ;;
     esac
@@ -47,8 +59,19 @@ done
 if [ -n "$MAP_FILE" ] && [ $AMCL -eq 0 ]; then
     echo "--map is the LiDAR map for --amcl. For RTAB-Map give the map's name instead: ./run_robot_link.sh vslam_map2"; exit 2
 fi
+if [ $AMCL -eq 0 ] && [ $((DEPTH_ON + DEPTH_OFF)) -gt 0 -o -n "$ROBOT_HEIGHT" -o -n "$KEEPOUT" ]; then
+    echo "--depth-obstacles, --no-depth, --robot-height and --keepout are for --amcl (with RTAB-Map the camera localises and"
+    echo "the zones would be on the wrong map)"; exit 2
+fi
+if [ $DEPTH_ON -eq 1 ] && [ $DEPTH_OFF -eq 1 ]; then echo "--depth-obstacles and --no-depth: pick one"; exit 2; fi
+if [ -n "$ROBOT_HEIGHT" ] && ! awk -v h="$ROBOT_HEIGHT" 'BEGIN { exit !(h ~ /^[0-9]+(\.[0-9]+)?$/ && h >= 0.5 && h <= 2.0) }'; then
+    echo "--robot-height is the robot's height in metres, 0.5 to 2.0 (got '$ROBOT_HEIGHT')"; exit 2
+fi
+DEPTH=$(( AMCL == 1 && DEPTH_OFF == 0 ))                     # the camera as an obstacle sensor: on with --amcl unless --no-depth
 [ $AMCL -eq 1 ] && MAP_FILE=$(readlink -m "${MAP_FILE:-$REPO/maps/lidar_map.yaml}")
+[ $AMCL -eq 1 ] && KEEPOUT=$(readlink -m "${KEEPOUT:-$REPO/config/keepout.yaml}")
 FLOORPLAN=$(readlink -m "$REPO/../data/floorplan.yaml")      # its station: is the pose AMCL starts from
+SHELVES=$(readlink -m "$REPO/../data/shelves.csv")           # with the station: what no keep-out zone may cover
 DATA="$REPO/run_data"; LOG="$REPO/run_logs"
 PIDS=()
 
@@ -161,8 +184,29 @@ if [ $AMCL -eq 1 ]; then
         [ -f "$IMAGE" ] || { warn "The map's picture is missing: $IMAGE (named in $MAP_FILE)"; bail; }
     fi
     [ -f "$FLOORPLAN" ] || { warn "No $FLOORPLAN: its station: is the pose AMCL starts from"; bail; }
-    LAUNCH_FILES="amcl_nav.launch"; NODES="set_initial_pose"
-    for p in amcl map_server; do rospack find $p > /dev/null 2>&1 || { warn "ROS package $p is not installed"; bail; }; done
+    LAUNCH_FILES="amcl_nav.launch robot_shape.yaml"; NODES="set_initial_pose"; PACKAGES="amcl map_server move_base kobuki_safety_controller"
+    if [ $DEPTH -eq 1 ]; then
+        say "Obstacles: LiDAR + depth camera (depth only, as an obstacle sensor; robot height ${ROBOT_HEIGHT:-1.2} m)"
+        LAUNCH_FILES+=" depth_obstacles.launch depth_costmap.yaml"; PACKAGES+=" astra_camera depth_image_proc pcl_ros nodelet"
+        # the Astra by its USB vendor id (Orbbec 2bc5): it is on the robot's USB hub, so a loose plug shows up here
+        grep -qs 2bc5 /sys/bus/usb/devices/*/idVendor || { warn "The Astra camera is not on USB (vendor 2bc5). Plug it in, or start with --no-depth"; bail; }
+    else
+        warn "--no-depth: the camera stays off. The LiDAR sees one slice at 30 cm, so ONLY keep-out zones stop the robot driving"
+        warn "under a desk or into a tabletop. Use it only with a zone round every desk (config/keepout.yaml)."
+    fi
+    for p in $PACKAGES; do rospack find $p > /dev/null 2>&1 || { warn "ROS package $p is not installed"; bail; }; done
+    # the keep-out zones: on this map, and over none of the station and shelf poses (keepout.py; map_cleaner.py checks again)
+    if [ ! -f "$KEEPOUT" ]; then
+        warn "No keep-out file $KEEPOUT (it may list no zones: zones: [])"; bail
+    elif [ -f "$MAP_FILE" ]; then
+        if KEEPOUT_SAYS=$(python3 "$REPO/keepout.py" --map "$MAP_FILE" --keepout "$KEEPOUT" --floorplan "$FLOORPLAN" --shelves "$SHELVES" 2>&1); then
+            say "    $KEEPOUT_SAYS ($KEEPOUT)"
+        else
+            warn "The keep-out zones cannot be used:"; echo "$KEEPOUT_SAYS" | sed 's/^/      /'
+            echo "    Fix $KEEPOUT (python3 $(readlink -m "$REPO/../tools/keepout_preview.py") --map $MAP_FILE shows them on the map)"
+            bail
+        fi
+    fi
 else
     say "Localisation: camera + RTAB-Map (./run_robot_link.sh --amcl uses the LiDAR instead)"
     DB="$DATA/$MAP_NAME.db"; ORIGINAL=~/$MAP_NAME.db
@@ -172,12 +216,13 @@ else
     elif rospack find rtabmap_ros > /dev/null 2>&1; then RTAB_PKG=rtabmap_ros
     else warn "RTAB-Map is not installed"; bail; RTAB_PKG=rtabmap_slam; fi
 fi
-for f in "$REPO/config/$LAUNCH_FILES" "$REPO/config/hokuyo_costmap.yaml"; do
-    [ -f "$f" ] || { warn "Missing file: $f"; bail; }
+for f in $LAUNCH_FILES hokuyo_costmap.yaml; do
+    [ -f "$REPO/config/$f" ] || { warn "Missing file: $REPO/config/$f"; bail; }
 done
 for n in scan_filter map_cleaner noise_logger noise_nav_web robot_link_api $NODES; do
     [ -f "$REPO/nodes/$n.py" ] || { warn "Missing file: $REPO/nodes/$n.py"; bail; }
 done
+[ -f "$REPO/keepout.py" ] || { warn "Missing file: $REPO/keepout.py"; bail; }
 python3 -c "import numpy, matplotlib" 2>/dev/null || { warn "python3 needs numpy and matplotlib (the click-to-go page)"; bail; }
 
 # the LiDAR, found by its serial id so it works in any USB port
@@ -193,8 +238,14 @@ if [ -n "$LIDAR" ] && { [ ! -r "$LIDAR_DEV" ] || [ ! -w "$LIDAR_DEV" ]; }; then
     bail
 fi
 say "LiDAR found: $LIDAR -> $LIDAR_DEV"
-[ -f ~/mic_config.json ] && say "Using the LEFT/RIGHT USB mics from ~/mic_config.json" \
-    || warn "No ~/mic_config.json - noise will use the camera mic. Run: python3 $REPO/setup_mics.py"
+# Our own mic config (made with MIC_CONFIG=$DATA/mic_config.json python3 setup_mics.py) is used when it is there, so the shared
+# ~/mic_config.json (another person's) is neither needed nor changed. MIC_CONFIG in the environment overrides both.
+if [ -z "$MIC_CONFIG" ]; then
+    if [ -f "$DATA/mic_config.json" ]; then MIC_CONFIG="$DATA/mic_config.json"; else MIC_CONFIG=~/mic_config.json; fi
+fi
+export MIC_CONFIG
+[ -f "$MIC_CONFIG" ] && { grep -q '"mono"' "$MIC_CONFIG" && say "Using the ONE USB mic from $MIC_CONFIG" || say "Using the LEFT/RIGHT USB mics from $MIC_CONFIG"; } \
+    || warn "No $MIC_CONFIG - noise will use the camera mic. Run: MIC_CONFIG=$DATA/mic_config.json python3 $REPO/setup_mics.py"
 if [ -f ~/noise_calibration.json ]; then say "Noise calibration found: the Jetson gets sound levels in dB"
 else warn "No ~/noise_calibration.json: noise is reported in dBFS and the Jetson ignores it. Run: python3 $REPO/calibrate_noise.py"; fi
 
@@ -221,8 +272,10 @@ say "    robot base OK"
 # ---- 3. localisation (AMCL or RTAB-Map) + LiDAR + move_base ----
 if [ $AMCL -eq 1 ]; then
     NAV=amcl_nav
-    say "2/6 Starting LiDAR + AMCL localisation + navigation (map $MAP_FILE) ..."
-    start amcl_nav roslaunch "$REPO/config/amcl_nav.launch" map_file:="$MAP_FILE" port:="$LIDAR_DEV"
+    NAV_ARGS=(map_file:="$MAP_FILE" port:="$LIDAR_DEV" depth_obstacles:=$([ $DEPTH -eq 1 ] && echo true || echo false))
+    [ -n "$ROBOT_HEIGHT" ] && NAV_ARGS+=(robot_height:="$ROBOT_HEIGHT")
+    say "2/6 Starting LiDAR + AMCL localisation + navigation (map $MAP_FILE)$([ $DEPTH -eq 1 ] && echo " + depth camera for obstacles") ..."
+    start amcl_nav roslaunch "$REPO/config/amcl_nav.launch" "${NAV_ARGS[@]}"
 else
     NAV=vslam
     say "2/6 Starting camera localisation + LiDAR + navigation (map $DB) ..."
@@ -230,7 +283,9 @@ else
           rtabmap_use_scan:=false grid_sensor:=1 rtabmap_pkg:=$RTAB_PKG database_path:="$DB" port:="$LIDAR_DEV"
 fi
 start scan_filter python3 "$REPO/nodes/scan_filter.py"
-start map_cleaner python3 "$REPO/nodes/map_cleaner.py"
+CLEANER_ARGS=()
+[ $AMCL -eq 1 ] && CLEANER_ARGS=(_keepout:="$KEEPOUT" _floorplan:="$FLOORPLAN" _shelves:="$SHELVES")   # zones: LiDAR map only
+start map_cleaner python3 "$REPO/nodes/map_cleaner.py" "${CLEANER_ARGS[@]}"
 if [ $DRY -eq 0 ]; then
     if ! wait_topic 60 /hokuyo_scan/header > /dev/null 2>&1; then warn "No LiDAR data. See $LOG/$NAV.log"; stop_all; fi
     if [ $AMCL -eq 0 ]; then
@@ -238,9 +293,17 @@ if [ $DRY -eq 0 ]; then
         if ! wait_topic 120 /map/info > /dev/null 2>&1; then warn "RTAB-Map did not load the map. See $LOG/vslam.log"; stop_all; fi
     else
         if ! wait_topic 30 /map/info > /dev/null 2>&1; then warn "map_server did not load $MAP_FILE. See $LOG/amcl_nav.log"; stop_all; fi
+        if [ $DEPTH -eq 1 ] && ! wait_topic 60 /camera/depth/points_obstacles/header > /dev/null 2>&1; then
+            warn "No obstacle points from the depth camera. See $LOG/amcl_nav.log. Without them the robot can drive under a desk:"
+            warn "fix the camera, or start with --no-depth (then only the keep-out zones protect the desks)"; stop_all
+        fi
     fi
     if ! wait_topic 120 /map_clean/info > /dev/null 2>&1; then warn "Map cleaner is not working. See $LOG/map_cleaner.log"; stop_all; fi
     if ! wait_topic 90 /move_base/status/header > /dev/null 2>&1; then warn "move_base did not start. See $LOG/$NAV.log"; stop_all; fi
+    # the Kobuki's own reflex: bumper, cliff and wheel-drop sensors back the robot off (cmd_vel_mux safety input, above navigation)
+    if ! timeout -k 2 8 rosnode list 2>/dev/null | grep -q '^/kobuki_safety_controller$'; then
+        warn "The Kobuki safety controller is not running (bumpers do not back the robot off). See $LOG/$NAV.log"
+    fi
 fi
 if [ $AMCL -eq 1 ]; then
     # where AMCL starts: the station. Not fatal: without it the robot is "not localised" until someone sets its position.

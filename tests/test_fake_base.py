@@ -147,6 +147,19 @@ class ModelTest(unittest.TestCase):
         drive(base, clock, 8.0)
         self.assertEqual(base.state()["nav"]["status"], "succeeded")
 
+    def test_a_bump_fails_the_goal_being_driven_with_reason_bumper(self):
+        base, clock = make(speed=1.0)
+        beat(base, clock)
+        self.assertFalse(base.bump())                                              # nothing to bump
+        base.send_goal("g-1", 7.0, 2.0, 0.0)
+        drive(base, clock, 1.0)
+        self.assertTrue(base.bump())
+        nav = base.state()["nav"]
+        self.assertEqual((nav["status"], nav["reason"]), ("failed", "bumper"))
+        x = base.state()["pose"]["x"]
+        drive(base, clock, 3.0)
+        self.assertEqual(base.state()["pose"]["x"], x)                             # it does not drive on
+
     def test_fail_rate_one_fails_every_goal_and_the_same_seed_fails_the_same_way(self):
         outcomes = []
         for _ in range(2):
