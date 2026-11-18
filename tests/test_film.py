@@ -142,6 +142,8 @@ class FrameRecorderTest(unittest.TestCase):
             cap = cv2.VideoCapture(str(Path(d) / "cam.mp4"))
             self.assertTrue(cap.isOpened())
             self.assertEqual(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 51)
+            side = json.loads((Path(d) / "cam.mp4.json").read_text())
+            self.assertEqual((side["started"], side["frames"]), (10.0, 51))
 
     def test_the_camera_feed_records_the_boxed_frame(self):
         import numpy as np

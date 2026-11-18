@@ -190,7 +190,12 @@ class FrameRecorder:
                 self.frames += 1
 
     def close(self) -> None:
+        """Finish the mp4 and write <path>.json with when its first frame was taken, so the editor can line it up with the
+        events (tools/video/edit.py: "event:rfid_read-2s")."""
         with self._lock:
             if self._writer is not None:
                 self._writer.release()
                 self._writer = None
+                meta = {"file": self.path.name, "started": self.started, "fps": self.fps, "frames": self.frames,
+                        "clock": "time.time()"}
+                self.path.with_suffix(self.path.suffix + ".json").write_text(json.dumps(meta, indent=2))
