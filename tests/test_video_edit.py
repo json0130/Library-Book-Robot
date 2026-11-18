@@ -18,7 +18,7 @@ def fake_probe(duration=20.0, audio=True):
     return lambda path: {"duration": duration, "audio": audio, "video": True}
 
 
-def write_take(root: Path, name="t1", zone="common", camera_offset=0.5) -> Path:
+def write_take(root: Path, name="t1", zone="common", camera_offset=0.5, base="turtlebot") -> Path:
     take = root / name
     take.mkdir(parents=True)
     (take / "camera.mp4").write_bytes(b"")
@@ -26,7 +26,8 @@ def write_take(root: Path, name="t1", zone="common", camera_offset=0.5) -> Path:
     (take / "camera.mp4.json").write_text(json.dumps({"started": START + camera_offset}))
     (take / "meta.json").write_text(json.dumps({"sources": {"face": {"started": START, "file": "face.mp4"}}}))
     speech = zone == "common"
-    events = [{"t": START + 1.5, "type": "greeting"},
+    events = [{"t": START, "type": "start", "base": base},
+              {"t": START + 1.5, "type": "greeting"},
               {"t": START + 2.0, "type": "reply", "text": "Hello! My name is Stuart.", "channel": "speech" if speech else "screen"},
               {"t": START + 4.0, "type": "rfid_read", "title": "Cosmos"},
               {"t": START + 6.0, "type": "reply", "text": "Thanks! Cosmos is returned.", "channel": "speech" if speech else "screen"},
@@ -126,6 +127,15 @@ class StoryboardTest(unittest.TestCase):
         self.assertEqual([round(t, 1) for t, _, _ in segs[0].meter], [2.0, 2.5])
         self.assertNotIn("Cosmos", " ".join(texts))
 
+    def test_a_simulated_base_never_shows_a_sound_meter(self):
+        write_take(self.dir / "rec", "quietsim", "quiet", base="fake")
+        settings, segs = self.board("""
+            segments:
+              - {type: clip, take: quietsim, source: face, in: 1, out: 8, zone: quiet, sound_meter: true}
+        """)
+        self.assertEqual(segs[0].meter, [])
+        self.assertIn("no measured sound levels", settings["notes"][0][2])
+
     def test_speed_shifts_event_captions(self):
         _, segs = self.board("""
             segments:
@@ -160,12 +170,48 @@ class StoryboardTest(unittest.TestCase):
                 self.board(body)
             self.assertIn(words, str(cm.exception))
 
+    def test_footage_not_filmed_yet_becomes_a_placeholder_card_of_the_planned_length(self):
+        settings, segs = self.board("""
+            segments:
+              - {type: clip, src: notyet.mp4, duration: 12, placeholder: "Quiet study room, students working", zone: quiet}
+              - type: split
+                duration: 20
+                placeholder: "Robot driving + live map"
+                left: {take: trip1, source: camera}
+                right: {take: common1, source: face}
+        """)
+        self.assertEqual([(s.kind, s.duration) for s in segs], [("title", 12.0), ("split", 20.0)])
+        self.assertEqual(segs[0].spec["title"], "Shot needed")
+        self.assertIn("Quiet study room", segs[0].spec["subtitle"])
+        left, right = segs[1].panes
+        self.assertEqual((left.placeholder, right.placeholder), ("Robot driving + live map", ""))   # only the missing pane
+        self.assertEqual(right.file.name, "face.mp4")
+        self.assertEqual([m for _, _, m in settings["placeholders"]], ["notyet.mp4", "recordings/trip1/camera.mp4"])
+        with self.assertRaises(StoryboardError):                                  # a placeholder still needs its length
+            self.board("segments:\n  - {type: clip, src: notyet.mp4, placeholder: later}")
+
     def test_a_storyboard_over_three_minutes_is_refused_before_rendering(self):
         path = self.dir / "long.yaml"
         path.write_text("segments:\n" + "".join("  - {type: title, duration: 50, title: x}\n" for _ in range(4)))
         with self.assertRaises(StoryboardError) as cm:
             edit.render(path, root=self.dir)
         self.assertIn("over the limit", str(cm.exception))
+
+
+class VoiceTest(unittest.TestCase):
+    def test_the_voice_recording_is_lined_up_with_the_picture(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        take = write_take(d / "rec", "common1")
+        (take / "audio.wav").write_bytes(b"")
+        meta = json.loads((take / "meta.json").read_text())
+        meta["sources"]["audio"] = {"started": START - 2.0, "file": "audio.wav"}         # parecord started 2 s before the face
+        (take / "meta.json").write_text(json.dumps(meta))
+        (d / "b.yaml").write_text(f"recordings: {d / 'rec'}\nsegments:\n"
+                                  "  - {type: clip, take: common1, source: face, in: 1.5, out: 6.5, voice: {take: common1, source: audio}}\n")
+        _, segs = load_storyboard(d / "b.yaml", probe_fn=fake_probe(30), root=d)
+        v = segs[0].voice
+        self.assertEqual((v.file.name, v.start, v.end), ("audio.wav", 3.5, 8.5))       # face 1.5 s = audio 3.5 s
 
 
 class AssTest(unittest.TestCase):
@@ -209,3 +255,24 @@ class SyntheticRenderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VideoFilesTest(unittest.TestCase):
+    """The real storyboard and the voiceover script stay in step, and the cut fits in three minutes."""
+
+    def test_the_storyboard_voiceover_is_the_script_and_under_250_words(self):
+        import yaml
+        root = Path(__file__).resolve().parent.parent
+        board = yaml.safe_load((root / "video" / "storyboard.yaml").read_text())
+        vo = " ".join(s["vo"] for s in board["segments"] if s.get("vo"))
+        script = (root / "video" / "voiceover.md").read_text().split("## The whole script", 1)[1]
+        self.assertEqual(" ".join(vo.split()), " ".join(script.split()))
+        self.assertLess(len(script.split()), 250)
+
+    def test_the_planned_cut_is_under_three_minutes(self):
+        root = Path(__file__).resolve().parent.parent
+        try:
+            settings, segs = load_storyboard(root / "video" / "storyboard.yaml", probe_fn=fake_probe(60.0), root=root)
+        except StoryboardError as exc:
+            self.skipTest(f"footage on this machine does not match: {exc}")
+        self.assertLessEqual(edit.total_duration(segs), settings["max_seconds"])

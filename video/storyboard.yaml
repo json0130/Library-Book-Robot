@@ -1,0 +1,140 @@
+# Stuart's video for the HRI 2027 Student Design Competition (3 minutes at most). Rendered by tools/video/edit.py:
+#   python tools/video/edit.py --plan        # the timing, and which shots are still placeholders
+#   python tools/video/edit.py --preview     # quick 540p cut
+#   python tools/video/edit.py               # the final 1080p video -> video/out/stuart_hri2027_sdc.mp4
+# How each shot is filmed: docs/video_shot_list.md. A segment whose footage does not exist yet renders as a "Shot needed" card
+# (its `placeholder` line) for its planned length, so the cut can be timed before everything is filmed.
+#
+# The story (paper, sections 1 and 4): Stuart changes HOW it communicates by zone, not WHAT it does. Same task in both zones.
+# Disclosures (paper, section 5): simulated or operator-driven parts carry a badge.
+
+output: video/out/stuart_hri2027_sdc.mp4
+max_seconds: 180
+recordings: recordings
+voiceover: {wav: video/voiceover.wav, duck_db: 14}       # record the script in video/voiceover.md; until then a placeholder
+
+segments:
+  # ---- 0:00-0:15 Hook ----
+  - id: hook-quiet
+    type: clip
+    src: video/footage/hook_quiet.mp4
+    in: 0
+    out: 5
+    zone: quiet
+    text: "Libraries have quiet zones and lively zones."
+    duration: 5
+    placeholder: "Shot 1: quiet study area, 2-3 students working, slow pan (5 s)"
+    vo: "Libraries are not one kind of space. Some rooms are silent, others are lively, and people expect different behaviour in each."
+
+  - id: hook-lively
+    type: clip
+    src: video/footage/hook_lively.mp4
+    in: 0
+    out: 5
+    zone: common
+    text: "Robots usually behave the same everywhere."
+    duration: 5
+    placeholder: "Shot 2: lively area, people talking and walking past (5 s)"
+    vo: "Service robots usually behave the same everywhere. Stuart doesn't."
+
+  - id: title
+    type: title
+    duration: 5
+    title: Stuart
+    subtitle: A library robot that reads the room
+
+  # ---- 0:15-0:30 Concept ----
+  - id: concept
+    type: stills
+    duration: 15
+    images: [video/assets/system.png]
+    vo: "Stuart is a library robot that returns books and helps patrons, working alongside librarians. It changes how it communicates, not what it does, depending on where it is."
+
+  # ---- 0:30-1:00 Learning the zones ----
+  - id: zones
+    type: split
+    duration: 24
+    left: {src: video/footage/survey_drive.mp4, in: 0, out: 96, speed: 4, label: Robot,
+           placeholder: "Shot 3: the robot driving its sound survey (phone, landscape)"}
+    right: {take: survey1, source: map, in: 0, out: 96, speed: 4, label: "Live map + sound map",
+            placeholder: "Shot 3: film.py record --take survey1 --sources map during the survey"}
+    audio_from: none
+    vo: "As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas. The map keeps updating as Stuart moves."
+
+  - id: zones-map
+    type: stills
+    duration: 6
+    images: [video/assets/sound_map.png]
+    labels: ["Sound map: quiet zone (blue) and common area (red)"]
+    placeholder: "Shot 3b: the finished sound map, labelled Quiet zone / Common area"
+
+  # ---- 1:00-1:40 Common area ----
+  - id: common
+    type: split
+    zone: common
+    duration: 40
+    left: {take: common1, source: camera, in: "event:person_detected-2s", label: "Robot camera",
+           placeholder: "Shot 4: sim --camera --faces --record: the patron walks up (annotated webcam)"}
+    right: {take: common1, source: face, in: "event:person_detected-2s", label: "Face screen",
+            placeholder: "Shot 4: film.py record --take common1 --sources face,audio (simulated robot)"}
+    voice: {take: common1, source: audio}
+    audio_from: left
+    auto_captions: true
+    captions_from: right
+    badge: "Book scan simulated (RFID reader not fitted yet)"
+    vo: "In the common area, Stuart greets people and talks. A patron returns a book, and Stuart answers aloud and suggests something similar."
+
+  # ---- 1:40-2:15 Quiet zone, same task ----
+  - id: quiet
+    type: split
+    zone: quiet
+    duration: 34
+    left: {take: quiet1, source: camera, in: "event:person_detected-2s", label: "Robot camera",
+           placeholder: "Shot 5: quiet zone, bystanders studying; the patron walks up and asks quietly"}
+    right: {take: quiet1, source: face, in: "event:person_detected-2s", label: "Face screen",
+            placeholder: "Shot 5: film.py record --take quiet1 --sources face (simulated robot)"}
+    audio_from: none
+    auto_captions: true
+    captions_from: right
+    sound_meter: true
+    badge: "Book scan simulated (RFID reader not fitted yet)"
+    vo: "In the quiet zone, the same task looks different. Stuart doesn't start the conversation. It waits for the patron, and its answers appear as text on the screen, with no sound, so students nearby can keep working."
+
+  # ---- 2:15-2:50 Returning trip ----
+  - id: trip-out
+    type: split
+    duration: 22
+    left: {src: video/footage/trip_to_fiction.mp4, in: 1, out: 45, speed: 2, label: "Stuart driving to Fiction (autonomous)"}
+    right: {take: trip1, source: map, in: 0, out: 44, speed: 2, label: "Live map",
+            placeholder: "Shot 6: film.py record --take trip1 --sources map while it drives to Fiction"}
+    audio_from: none
+    vo: "When the patron leaves, Stuart carries the books to their sections and unloads them into the return tray for a librarian to shelve."
+
+  - id: unload
+    type: clip
+    src: video/footage/unload.mp4
+    in: 0
+    out: 6
+    duration: 6
+    operator_driven: true
+    placeholder: "Shot 7: at the Fiction return tray, the books go into the tray (by hand: operator-driven)"
+
+  - id: trip-back
+    type: clip
+    src: video/footage/trip_back.mp4
+    in: 0
+    out: 26
+    speed: 3
+    label: "Back to its station"
+    audio: mute
+
+  # ---- 2:50-3:00 Close ----
+  - id: close
+    type: stills
+    duration: 8
+    images: [video/assets/still_common.png, video/assets/still_quiet.png]
+    labels: [Common area, Quiet zone]
+    text: "Same task. Different style."
+    footer: "Junhu Song, Albert Paik, Hyeonjoon Lee, Brian Wang, Ho Seok Ahn - CARES, University of Auckland"
+    placeholder: "Stills: python tools/video/edit.py --stills <common s>,<quiet s>, copied to video/assets/still_common.png / still_quiet.png"
+    vo: "Same task. Different style. Stuart: a library robot that reads the room."

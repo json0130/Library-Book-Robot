@@ -24,6 +24,8 @@ Storyboard (YAML)
         speed: 4                             # shows an "x4" label; the clip's sound is dropped when sped up
         zone: common                         # the zone badge (orange "Common area" / blue "Quiet zone")
         operator_driven: true                # a "Operator-driven" badge (the paper says so for teleoperated parts)
+        badge: "Simulated: screen recording"  # any other disclosure, as a grey badge
+        placeholder: "what to film"          # footage not filmed yet: a "Shot needed" card for `duration` s (in a split: per pane)
         text: "Libraries have quiet zones ..."   # a large line of text over the picture
         captions: [{at: 1.0, dur: 3, text: "Stuart: Hello!"}]   # seconds from the segment's start
         auto_captions: true                  # also caption every word Stuart says, from the take's events.jsonl
@@ -35,6 +37,7 @@ Storyboard (YAML)
         right: {take: common1, source: face, label: "Face screen"}
         duration: 30                         # else the left pane's length
         audio_from: left                     # left | right | none
+        voice: {take: common1, source: audio}   # the sound from film.py's audio.wav (Stuart's speaker), lined up by start times
         captions_from: left
         zone: common
       - {type: stills, duration: 6, images: [a.png, b.png], labels: [Common area, Quiet zone], text: "Same task. Different style."}
@@ -178,6 +181,7 @@ class Pane:
     take: Optional[Take] = None
     source: Optional[str] = None
     has_audio: bool = True
+    placeholder: str = ""              # not filmed yet: a "Shot needed" panel with this text instead of the footage
 
     @property
     def duration(self) -> float:
@@ -206,6 +210,7 @@ class Segment:
     captions: list = field(default_factory=list)       # (start, end, text) in seconds from the segment's start
     meter: list = field(default_factory=list)          # (time, dB) for the sound meter
     vo: str = ""
+    voice: Optional[Pane] = None                        # the sound from another recording (film.py's audio.wav), lined up
 
     @property
     def name(self) -> str:
@@ -287,8 +292,15 @@ def auto_captions(pane: Pane, quiet: bool) -> list:
     return [tuple(c) for c in merged]
 
 
+def simulated_base(take: Optional[Take]) -> bool:
+    """The take was filmed with `sim --base fake` (or no base): its sound levels are made up, not measured."""
+    start = next((e for e in (take.events if take else []) if e.get("type") == "start"), {})
+    return start.get("base", "fake") in ("fake", "sim")
+
+
 def meter_points(pane: Pane) -> list:
-    if pane.take is None:
+    """The measured sound levels in this pane's time. None from a simulated base: a meter must never show made-up decibels."""
+    if pane.take is None or simulated_base(pane.take):
         return []
     out = []
     for e in pane.take.events:
@@ -313,7 +325,7 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
     takes = takes if takes is not None else {}
     rec = Path(data.get("recordings") or RECORDINGS)
     rec = rec if rec.is_absolute() else root / rec
-    segments = []
+    segments, placeholders, notes = [], [], []
     for i, spec in enumerate(data["segments"], 1):
         if not isinstance(spec, dict):
             raise StoryboardError(f"segment {i}: must be a mapping")
@@ -323,6 +335,15 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
             raise StoryboardError(f"{where}: type must be one of {', '.join(SEGMENT_TYPES)}")
         if spec.get("zone") not in (None, "quiet", "common"):
             raise StoryboardError(f"{where}: zone must be quiet or common")
+        missing = missing_media(spec, root, rec) if kind in ("clip", "stills") else None
+        if missing and spec.get("placeholder"):
+            # the footage is not filmed yet: a card saying what is needed, for the planned length, so the cut can be timed now
+            if not spec.get("duration"):
+                raise StoryboardError(f"{where}: a placeholder needs a duration")
+            spec = {**spec, "type": "title", "title": "Shot needed", "subtitle": str(spec["placeholder"]),
+                    "footer": f"missing: {missing}", "placeholder_for": kind}
+            kind = "title"
+            placeholders.append((i, spec.get("id") or where, missing))
         seg = Segment(i, kind, 0.0, spec, vo=str(spec.get("vo") or "").strip())
         if kind in ("title", "stills"):
             seg.duration = float(spec.get("duration", 4))
@@ -340,8 +361,19 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
         else:
             if not isinstance(spec.get("left"), dict) or not isinstance(spec.get("right"), dict):
                 raise StoryboardError(f"{where}: a split needs left: and right:")
-            seg.panes = [make_pane(spec["left"], where + " left", probe_fn, root, takes, rec),
-                         make_pane(spec["right"], where + " right", probe_fn, root, takes, rec)]
+            seg.panes = []
+            for side in ("left", "right"):
+                pspec = spec[side]
+                gone = missing_media({"type": "clip", **pspec}, root, rec)
+                text = pspec.get("placeholder") or spec.get("placeholder")
+                if gone and text:
+                    if not spec.get("duration"):
+                        raise StoryboardError(f"{where}: a split with a placeholder pane needs a duration")
+                    seg.panes.append(Pane(Path(""), 0.0, float(spec["duration"]), 1.0, pspec.get("label", ""), placeholder=str(text),
+                                          has_audio=False))
+                    placeholders.append((i, f"{spec.get('id') or where} {side}", gone))
+                else:
+                    seg.panes.append(make_pane(pspec, f"{where} {side}", probe_fn, root, takes, rec))
             seg.duration = float(spec.get("duration") or seg.panes[0].duration)
         if seg.duration <= 0:
             raise StoryboardError(f"{where}: duration must be above 0")
@@ -356,11 +388,69 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
             src = seg.panes[1] if spec.get("captions_from") == "right" and len(seg.panes) > 1 else seg.panes[0]
             seg.captions += [c for c in auto_captions(src, quiet) if c[0] < seg.duration]
         seg.captions.sort()
+        if seg.panes and spec.get("voice"):
+            seg.voice = voice_pane(spec["voice"], seg, f"{where} voice", probe_fn, takes, rec)
         if seg.panes and spec.get("sound_meter"):
             for p in seg.panes:
                 seg.meter = seg.meter or meter_points(p)
+            if not seg.meter:
+                notes.append((i, spec.get("id") or where, "no sound meter: the take has no measured sound levels (fake base or none)"))
         segments.append(seg)
+    settings["placeholders"], settings["notes"] = placeholders, notes
     return settings, segments
+
+
+def voice_pane(vspec, seg: Segment, where: str, probe_fn, takes: dict, rec: Path) -> Optional[Pane]:
+    """The stretch of a sound recording (film.py's audio.wav: Stuart's speaker) that plays with the first pane's picture, found
+    from both recordings' start times. None if the first pane is a placeholder; an error if the times are not known."""
+    ref = seg.panes[0]
+    if ref.placeholder or not isinstance(vspec, dict) or not vspec.get("take"):
+        if isinstance(vspec, dict) and vspec.get("take"):
+            return None
+        raise StoryboardError(f"{where}: voice needs take: and source:")
+    if ref.take is None or ref.speed != 1:
+        raise StoryboardError(f"{where}: the first pane must be a take at speed 1 to line the voice up with it")
+    name = vspec["take"]
+    if not (rec / name).is_dir():
+        return None
+    take = takes.get(name) or takes.setdefault(name, Take.load(name, rec))
+    source = vspec.get("source", "audio")
+    try:
+        path = take.file(source)
+    except StoryboardError:
+        return None
+    ref_start, voice_start = ref.take.start_of(ref.source), take.start_of(source)
+    if ref_start is None or voice_start is None:
+        raise StoryboardError(f"{where}: no start time for {ref.source!r} or {source!r} (meta.json)")
+    offset = ref_start + ref.start - voice_start
+    if offset < 0:
+        raise StoryboardError(f"{where}: the sound recording started {-offset:.1f} s after the picture's in point")
+    info = probe_fn(path)
+    return Pane(path, offset, min(info["duration"] or offset + seg.duration, offset + seg.duration), 1.0, take=take, source=source,
+                has_audio=info["audio"])
+
+
+def missing_media(spec: dict, root: Path, rec: Path) -> Optional[str]:
+    """The first file a clip, split or stills segment needs that does not exist yet (None if all are there)."""
+    if spec.get("type") == "stills":
+        for img in spec.get("images") or []:
+            p = Path(img) if Path(img).is_absolute() else root / img
+            if not p.is_file():
+                return str(img)
+        return None
+    for pane in ([spec.get("left"), spec.get("right")] if spec.get("type") == "split" else [spec]):
+        if not isinstance(pane, dict):
+            continue
+        if pane.get("src"):
+            p = Path(pane["src"])
+            if not (p if p.is_absolute() else root / p).is_file():
+                return str(pane["src"])
+        elif pane.get("take"):
+            folder = rec / pane["take"]
+            source = pane.get("source") or ""
+            if not any((folder / name).is_file() for name in (source, f"{source}.mp4", f"{source}.wav")):
+                return f"recordings/{pane['take']}/{source}.mp4"
+    return None
 
 
 def total_duration(segments) -> float:
@@ -449,6 +539,8 @@ def overlay_png(path: Path, seg: Segment, size=(W, H)) -> Path:
         right.append((f"x{speed:g}", "#1f2933"))
     if spec.get("operator_driven"):
         right.append(("Operator-driven", "#7a2e8e"))
+    if spec.get("badge"):
+        right.append((str(spec["badge"]), "#3d4b59"))
     y = int(32 * k)
     for text, colour in right:
         pill(d, (size[0] - int(36 * k) - pill_width(d, text, mid), y), text, mid, colour)
@@ -621,11 +713,18 @@ def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path =
         return out
     keep = seg.spec.get("audio", "keep") != "mute"
     inputs = []
-    for p in seg.panes:
-        inputs += ["-i", str(p.file)]
+    pane_size = (w, h) if seg.kind == "clip" else (w // 2, h)
+    for n_pane, p in enumerate(seg.panes):
+        if p.placeholder:
+            card = title_card(work / f"{seg.name}-pane{n_pane}.png", "Shot needed", p.placeholder, size=pane_size)
+            inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{seg.duration + 0.5:.3f}", "-i", str(card)]
+        else:
+            inputs += ["-i", str(p.file)]
     overlay = overlay_png(work / f"{seg.name}-over.png", seg, q.size)
     n = len(seg.panes)
     inputs += ["-i", str(overlay)]
+    if seg.voice is not None:
+        inputs += ["-i", str(seg.voice.file)]
     ass = write_ass(work / f"{seg.name}.ass", seg, q.size)
     if seg.kind == "clip":
         graph = pane_video_filter(0, seg.panes[0], w, h, seg.duration)
@@ -639,6 +738,8 @@ def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path =
         side = {"left": 0, "right": 1}.get(seg.spec.get("audio_from", "left"))
         audio = pane_audio_filter(side, seg.panes[side], seg.duration, keep) if side is not None else \
             f"anullsrc=r=48000:cl=stereo,atrim=duration={seg.duration:.3f}[a]"
+    if seg.voice is not None and keep:
+        audio = pane_audio_filter(n + 1, seg.voice, seg.duration, True)
     graph += ";" + subtitle_filter(ass, "o", "v") + ";" + audio
     run_ffmpeg([*inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]", *encode_args(q, seg.duration), str(out)], seg.name)
     return out
@@ -743,6 +844,10 @@ def render(storyboard: Path, preview: bool = False, stills=(), out=sys.stdout, r
     settings, segments = load_storyboard(storyboard, root=root)
     total = total_duration(segments)
     print_plan(segments, out)
+    for i, name, missing in settings.get("placeholders", []):
+        print(f"  PLACEHOLDER segment {i} ({name}): {missing} is not filmed yet", file=out)
+    for i, name, note in settings.get("notes", []):
+        print(f"  NOTE segment {i} ({name}): {note}", file=out)
     if total > settings["max_seconds"]:
         raise StoryboardError(f"the storyboard is {total:.1f} s long, over the limit of {settings['max_seconds']:g} s: cut something")
     q = Quality.preview() if preview else Quality()
@@ -799,6 +904,10 @@ def main(argv=None) -> int:
         if args.plan:
             settings, segments = load_storyboard(Path(args.storyboard))
             print_plan(segments)
+            for i, name, missing in settings.get("placeholders", []):
+                print(f"  PLACEHOLDER segment {i} ({name}): {missing} is not filmed yet")
+            for i, name, note in settings.get("notes", []):
+                print(f"  NOTE segment {i} ({name}): {note}")
             over = total_duration(segments) - settings["max_seconds"]
             return 1 if over > 0 else 0
         stills = [float(s) for s in args.stills.split(",") if s.strip()]

@@ -43,7 +43,7 @@ def make_take(root: Path, name: str, start: float, zone: str) -> Path:
     meta = {"take": name, "start_time": start, "sources": {"face": {"file": "face.mp4", "started": start, "error": None}}}
     (take / "meta.json").write_text(json.dumps(meta))
     speech = zone == "common"
-    events = [{"t": start + 0.2, "type": "start"}, {"t": start + 0.2, "type": "zone", "zone": zone, "source": "forced"},
+    events = [{"t": start + 0.2, "type": "start", "base": "turtlebot"},          # as if measured, so the meter is drawn {"t": start + 0.2, "type": "zone", "zone": zone, "source": "forced"},
               {"t": start + 1.0, "type": "person_detected"},
               {"t": start + 1.5, "type": "greeting", "zone": zone, "text": "Hello! My name is Stuart."},
               {"t": start + 1.6, "type": "reply", "text": "Hello! My name is Stuart.", "channel": "speech" if speech else "screen"},
