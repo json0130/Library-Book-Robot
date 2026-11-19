@@ -1,0 +1,7 @@
+# Mock navigation take: the simulated base drives to the Fiction shelf (the taught pose of 1-FIC-A) and back to the station.
+# Record the map page with: sim_take.py nav --zone quiet --sources map --no-speak --no-llm
+wait 3
+drive -0.14 4.46
+wait 24
+drive 0 0
+wait 24

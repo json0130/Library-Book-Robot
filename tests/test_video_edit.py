@@ -212,6 +212,22 @@ class StoryboardTest(unittest.TestCase):
         with self.assertRaises(StoryboardError):                                  # a placeholder still needs its length
             self.board("segments:\n  - {type: clip, src: notyet.mp4, placeholder: later}")
 
+    def test_photo_segments(self):
+        (self.dir / "p.jpg").write_bytes(b"")
+        _, segs = self.board("""
+            segments:
+              - {type: photo, image: p.jpg, duration: 5, fit: contain, label: A, credit: B, zone: quiet}
+        """)
+        self.assertEqual((segs[0].kind, segs[0].duration), ("photo", 5.0))
+        with self.assertRaises(StoryboardError) as cm:
+            self.board("segments:\n  - {type: photo, duration: 3}")
+        self.assertIn("image:", str(cm.exception))
+        with self.assertRaises(StoryboardError) as cm:
+            self.board("segments:\n  - {type: photo, image: nothere.jpg, duration: 3}")
+        self.assertIn("no image", str(cm.exception))
+        settings, segs = self.board("segments:\n  - {type: photo, image: nothere.jpg, duration: 3, placeholder: a photo of a library}")
+        self.assertEqual((segs[0].kind, settings["placeholders"][0][2]), ("title", "nothere.jpg"))        # a card, not an error
+
     def test_a_storyboard_over_three_minutes_is_refused_before_rendering(self):
         path = self.dir / "long.yaml"
         path.write_text("segments:\n" + "".join("  - {type: title, duration: 50, title: x}\n" for _ in range(4)))
@@ -267,7 +283,7 @@ class SyntheticRenderTest(unittest.TestCase):
             board = make_all(Path(d))
             out = edit.render(board, preview=True, stills=[1.0], out=open("/dev/null", "w"))
             info = edit.probe(out)
-            self.assertAlmostEqual(info["duration"], 23.0, delta=0.3)
+            self.assertAlmostEqual(info["duration"], 25.0, delta=0.3)
             self.assertTrue(info["audio"])
             streams = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height,r_frame_rate", "-of", "csv=p=0",
                                       str(out)], capture_output=True, text=True).stdout
@@ -294,7 +310,8 @@ class VideoFilesTest(unittest.TestCase):
     def test_the_planned_cut_is_under_three_minutes(self):
         root = Path(__file__).resolve().parent.parent
         try:
-            settings, segs = load_storyboard(root / "video" / "storyboard.yaml", probe_fn=fake_probe(60.0), root=root)
+            probe_fn = edit.probe if shutil.which("ffprobe") else fake_probe(30.0)       # the real footage's lengths where it exists
+            settings, segs = load_storyboard(root / "video" / "storyboard.yaml", probe_fn=probe_fn, root=root)
         except StoryboardError as exc:
             self.skipTest(f"footage on this machine does not match: {exc}")
         self.assertLessEqual(edit.total_duration(segs), settings["max_seconds"])

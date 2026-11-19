@@ -1,13 +1,11 @@
-# Simulated quiet-zone visit: the same task as common.txt. Stuart waits, answers on the screen and makes no sound.
-# The waits give the screen time to be read.
+# Simulated quiet-zone visit: the patron asks questions and does not return a book (tools/video/sim_take.py).
+# Stuart waits, answers on the screen and makes no sound. The waits give the screen time to be read.
 wait 2
 engage
 wait 5
-hi Stuart, can I return this book?
-wait 4
-book 9780345539434
-wait 7
-can you recommend something like Cosmos?
-wait 10
-no thanks, that's all
+hi Stuart, can you tell me about Dune?
+wait 9
+where is the science section?
+wait 9
+thanks, that's all
 wait 4

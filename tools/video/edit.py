@@ -41,6 +41,8 @@ Storyboard (YAML)
         captions_from: left
         zone: common
       - {type: stills, duration: 6, images: [a.png, b.png], labels: [Common area, Quiet zone], text: "Same task. Different style."}
+      - {type: photo, duration: 5, image: video/assets/photos/library_quiet.jpg, zone: quiet, text: "...", credit: "Photo: A, CC BY 4.0, Wikimedia Commons"}
+      - {type: photo, duration: 3, image: video/assets/paper/design_cad.png, fit: contain, label: "CAD model"}      # fit: contain keeps the whole picture
 
 Time references
     A number is seconds into the source file; "m:ss" too. "event:NAME" is the time of the first event NAME in the take's
@@ -73,7 +75,7 @@ ZONE_COLOURS = {"common": ("#b9591f", "Common area"), "quiet": ("#2f6f9f", "Quie
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 QUIET_CAPTION = "(shown on screen, no sound)"
-SEGMENT_TYPES = ("title", "clip", "split", "stills")
+SEGMENT_TYPES = ("title", "clip", "split", "stills", "photo")
 
 
 class StoryboardError(ValueError):
@@ -345,7 +347,7 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
             raise StoryboardError(f"{where}: type must be one of {', '.join(SEGMENT_TYPES)}")
         if spec.get("zone") not in (None, "quiet", "common"):
             raise StoryboardError(f"{where}: zone must be quiet or common")
-        missing = missing_media(spec, root, rec) if kind in ("clip", "stills") else None
+        missing = missing_media(spec, root, rec) if kind in ("clip", "stills", "photo") else None
         if missing and spec.get("placeholder"):
             # the footage is not filmed yet: a card saying what is needed, for the planned length, so the cut can be timed now
             if not spec.get("duration"):
@@ -355,8 +357,15 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
             kind = "title"
             placeholders.append((i, spec.get("id") or where, missing))
         seg = Segment(i, kind, 0.0, spec, vo=str(spec.get("vo") or "").strip())
-        if kind in ("title", "stills"):
+        if kind in ("title", "stills", "photo"):
             seg.duration = float(spec.get("duration", 4))
+            if kind == "photo":
+                image = spec.get("image")
+                if not image:
+                    raise StoryboardError(f"{where}: a photo needs image:")
+                p = Path(image) if Path(image).is_absolute() else root / image
+                if not p.is_file():
+                    raise StoryboardError(f"{where}: no image {p}")
             if kind == "stills":
                 images = spec.get("images") or []
                 if not images:
@@ -442,6 +451,9 @@ def voice_pane(vspec, seg: Segment, where: str, probe_fn, takes: dict, rec: Path
 
 def missing_media(spec: dict, root: Path, rec: Path) -> Optional[str]:
     """The first file a clip, split or stills segment needs that does not exist yet (None if all are there)."""
+    if spec.get("type") == "photo":
+        p = Path(spec.get("image") or "")
+        return None if (p if p.is_absolute() else root / p).is_file() else str(spec.get("image"))
     if spec.get("type") == "stills":
         for img in spec.get("images") or []:
             p = Path(img) if Path(img).is_absolute() else root / img
@@ -544,7 +556,8 @@ def overlay_png(path: Path, seg: Segment, size=(W, H)) -> Path:
         colour, label = ZONE_COLOURS[spec["zone"]]
         pill(d, (int(36 * k), int(32 * k)), label, mid, colour)
     right = []
-    speed = max((p.speed for p in seg.panes), default=1.0)
+    speeds = {p.speed for p in seg.panes if not p.placeholder}
+    speed = speeds.pop() if len(speeds) == 1 else 1.0
     if speed != 1:
         right.append((f"x{speed:g}", "#1f2933"))
     if spec.get("operator_driven"):
@@ -557,12 +570,23 @@ def overlay_png(path: Path, seg: Segment, size=(W, H)) -> Path:
         y += int(70 * k)
     if seg.kind == "split":
         for i, pane in enumerate(seg.panes):
-            if pane.label:
+            label = pane.label + (f"  x{pane.speed:g}" if pane.speed != 1 and len(speeds) > 1 and not pane.placeholder else "")
+            if label:
                 x0 = i * size[0] // 2
-                top = int(110 * k) if spec.get("zone") or right else int(30 * k)
-                pill(d, (x0 + (size[0] // 2 - pill_width(d, pane.label, small)) // 2, top), pane.label, small, (16, 22, 29, 210))
+                below = max(110 if spec.get("zone") else 30, 32 + 70 * len(right) + 6 if right else 30)    # clear of the badges
+                top = int(below * k)
+                pill(d, (x0 + (size[0] // 2 - pill_width(d, label, small)) // 2, top), label, small, (16, 22, 29, 210))
     elif seg.panes and seg.panes[0].label:
         pill(d, (int(36 * k), size[1] - int(110 * k)), seg.panes[0].label, small, (16, 22, 29, 210))
+    elif seg.kind == "photo" and spec.get("label"):
+        lf = font(int(40 * k), True)
+        pill(d, ((size[0] - pill_width(d, spec["label"], lf)) // 2, size[1] - int(120 * k)), spec["label"], lf, (16, 22, 29, 225))
+    if spec.get("credit"):                           # photo credit (CC BY needs it): small, bottom right
+        cf = font(int(22 * k))
+        text = str(spec["credit"])
+        w = d.textlength(text, font=cf)
+        d.rounded_rectangle((size[0] - w - 70 * k, size[1] - 62 * k, size[0] - 24 * k, size[1] - 20 * k), radius=int(10 * k), fill=(16, 22, 29, 190))
+        d.text((size[0] - 47 * k - w, size[1] - 53 * k), text, font=cf, fill="#cdd6df")
     if spec.get("text"):
         lines = wrap(d, spec["text"], big, int(size[0] * 0.8))
         lh = int(74 * k)
@@ -591,7 +615,8 @@ def stills_png(path: Path, seg: Segment, root: Path = ROOT, size=(W, H)) -> Path
     cell_w = (size[0] - 2 * margin - (n - 1) * gap) // n
     cell_h = bottom - top
     for i, im in enumerate(images):
-        im.thumbnail((cell_w, cell_h))
+        fit = min(cell_w / im.width, cell_h / im.height, 4.0)           # fit the cell, enlarging small images (at most 4x)
+        im = im.resize((max(1, round(im.width * fit)), max(1, round(im.height * fit))), Image.LANCZOS)
         x = margin + i * (cell_w + gap) + (cell_w - im.width) // 2
         y = top + (cell_h - im.height) // 2
         img.paste(im, (x, y))
@@ -708,6 +733,47 @@ def subtitle_filter(ass: Optional[Path], label_in: str, label_out: str) -> str:
     return f"[{label_in}]ass='{escaped}':fontsdir=/usr/share/fonts/truetype/dejavu[{label_out}]"
 
 
+def cover_png(src: Path, dst: Path, size: tuple) -> Path:
+    """The photo scaled to fill `size` (cropped at the edges), so it can be zoomed slowly without bars."""
+    from PIL import Image
+    im = Image.open(src).convert("RGB")
+    k = max(size[0] / im.width, size[1] / im.height)
+    im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+    left, top = (im.width - size[0]) // 2, (im.height - size[1]) // 2
+    im.crop((left, top, left + size[0], top + size[1])).save(dst)
+    return dst
+
+
+def contain_png(src: Path, dst: Path, size: tuple, share: float = 0.86) -> Path:
+    """The whole photo (nothing cropped) on the dark background, as large as fits in `share` of the frame; room to zoom."""
+    from PIL import Image
+    im = Image.open(src).convert("RGB")
+    k = min(size[0] * share / im.width, size[1] * share / im.height, 3.0)
+    im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+    canvas = Image.new("RGB", size, BG)
+    canvas.paste(im, ((size[0] - im.width) // 2, (size[1] - im.height) // 2))
+    canvas.save(dst)
+    return dst
+
+
+def render_photo(seg: Segment, out: Path, work: Path, q: Quality, root: Path = ROOT) -> Path:
+    """A still photo filling the frame with a slow push-in (Ken Burns), then the badges, text and credit, then the captions."""
+    w, h = q.size
+    spec = seg.spec
+    src = Path(spec["image"]) if Path(spec["image"]).is_absolute() else root / spec["image"]
+    big = (round(w * 1.25), round(h * 1.25))                           # the zoom crops into this, so it stays sharp
+    png = (contain_png if spec.get("fit") == "contain" else cover_png)(src, work / f"{seg.name}-photo.png", big)
+    over = overlay_png(work / f"{seg.name}-over.png", seg, q.size)
+    frames = max(1, round(seg.duration * FPS))
+    zoom = float(spec.get("zoom", 0.10))
+    ass = write_ass(work / f"{seg.name}.ass", seg, q.size)
+    graph = (f"[0:v]zoompan=z='1+{zoom}*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={w}x{h}:fps={FPS}[z];"
+             f"[z][1:v]overlay=0:0[o];" + subtitle_filter(ass, "o", "v"))
+    run_ffmpeg(["-loop", "1", "-framerate", str(FPS), "-i", str(png), "-i", str(over), "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                "-filter_complex", graph, "-map", "[v]", "-map", "2:a", *encode_args(q, seg.duration), str(out)], seg.name)
+    return out
+
+
 def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path = ROOT) -> Path:
     w, h = q.size
     if seg.kind in ("title", "stills"):
@@ -721,6 +787,8 @@ def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path =
         run_ffmpeg(["-loop", "1", "-framerate", str(FPS), "-i", str(png), "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
                     "-filter_complex", graph, "-map", "[v]", "-map", "1:a", *encode_args(q, seg.duration), str(out)], seg.name)
         return out
+    if seg.kind == "photo":
+        return render_photo(seg, out, work, q, root)
     keep = seg.spec.get("audio", "keep") != "mute"
     inputs = []
     pane_size = (w, h) if seg.kind == "clip" else (w // 2, h)

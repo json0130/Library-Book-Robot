@@ -77,6 +77,7 @@ recordings: {rec}
 voiceover: {{wav: {out}/missing_voiceover.wav}}
 segments:
   - {{type: title, duration: 2, title: Stuart, subtitle: A library robot that reads the room}}
+  - {{type: photo, duration: 2, image: {out}/common.png, fit: contain, label: A photo, credit: "Photo: Someone, CC BY 4.0, Wikimedia Commons", zone: common}}
   - type: clip
     src: {out}/phone.mp4
     in: 1

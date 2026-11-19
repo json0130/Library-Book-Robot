@@ -62,6 +62,54 @@ def system(path: Path, size=(1920, 1080)) -> Path:
     return path
 
 
+PARTS_DIR = ASSETS / "parts"                      # optional close-up photos of the real parts: rfid_reader.jpg, lidar.jpg, screen.jpg, base.jpg
+
+
+def parts(path: Path, size=(1920, 1080)) -> Path:
+    """The prototype photo with its parts named (face screen, LiDAR, laptop, base), and a tile for each close-up photo found in
+    video/assets/parts/ (the RFID reader is not on the prototype yet: its tile says a photo is still needed)."""
+    img = Image.new("RGB", size, BG)
+    d = ImageDraw.Draw(img)
+    d.text((size[0] / 2, 50), "The parts", font=f(60, True), fill=INK, anchor="ma")
+    photo = Image.open(ASSETS / "paper" / "prototype.jpg").convert("RGB")
+    ph = size[1] - 190
+    photo = photo.resize((int(photo.width * ph / photo.height), ph))
+    px, py = 120, 150
+    img.paste(photo, (px, py))
+    s = ph / 953                                          # the photo as shown in the paper is 638 x 953
+    def at(x, y):
+        return (px + x * s, py + y * s)
+    callouts = [("Face screen", at(305, 140), (px + photo.width + 60, py + 20), TEAL),
+                ("Hokuyo LiDAR", at(300, 495), (px + photo.width + 60, py + 150), ORANGE),
+                ("Laptop: map, navigation, sound level", at(300, 380), (px + photo.width + 60, py + 280), BLUE),
+                ("TurtleBot 2 base", at(320, 790), (px + photo.width + 60, py + 410), "#7a8794")]
+    for label, target, text_at, colour in callouts:
+        d.line((text_at[0] - 14, text_at[1] + 22, target[0], target[1]), fill=colour, width=4)
+        d.ellipse((target[0] - 9, target[1] - 9, target[0] + 9, target[1] + 9), fill=colour)
+        d.rounded_rectangle((text_at[0] - 12, text_at[1], text_at[0] + d.textlength(label, font=f(34, True)) + 22, text_at[1] + 46),
+                            radius=23, fill=CARD, outline=colour, width=3)
+        d.text((text_at[0] + 5, text_at[1] + 6), label, font=f(34, True), fill=INK)
+    tx, ty = px + photo.width + 60, py + 560
+    tiles = [("RFID reader", "rfid_reader.jpg"), ("Hokuyo LiDAR", "lidar.jpg"), ("Face screen", "screen.jpg")]
+    shown = [(label, name) for label, name in tiles if name == "rfid_reader.jpg" or (PARTS_DIR / name).is_file()]
+    for i, (label, name) in enumerate(shown):
+        x = tx + i * 330
+        box = (x, ty, x + 300, ty + 230)
+        file = PARTS_DIR / name
+        if file.is_file():
+            t = Image.open(file).convert("RGB")
+            t.thumbnail((300, 230))
+            img.paste(t, (x + (300 - t.width) // 2, ty + (230 - t.height) // 2))
+        else:
+            d.rounded_rectangle(box, radius=14, outline=LINE, width=3)
+            d.text(((box[0] + box[2]) / 2, ty + 105), "photo needed", font=f(28), fill=MUTED, anchor="mm")
+        d.text((x + 150, ty + 245), label, font=f(28, True), fill=INK, anchor="ma")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    return path
+
+
 if __name__ == "__main__":
     print(system(ASSETS / "system.png"))
+    print(parts(ASSETS / "parts.png"))
     sys.exit(0)

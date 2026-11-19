@@ -12,7 +12,7 @@ without those flags the robot behaves exactly as before.
 Event types: person_detected, greeting, speech_in, reply (text, channel speech|screen), speak (a sentence as it starts playing, with
 its length: the captions' timing), screen_text (what a quiet zone shows
 instead of saying it), rfid_read (title: the book on the pad was identified; the prototype reads it by camera today, RFID in the
-final design), zone (quiet|common, and what decided it), goal_sent, goal_reached, goal_failed, unload, sound_level (dB or dBFS,
+final design), zone (quiet|common, and what decided it), goal_sent, drive_started (the base reports it is driving a goal), goal_reached, goal_failed, unload, sound_level (dB or dBFS,
 from the base), state (each state entered), start and stop.
 """
 
@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from robot.events import (BookIdentified, NavArrived, NavFailed, NavigationRequested, NoiseReading, PersonEngaged,
+from robot.events import (BookIdentified, NavArrived, NavFailed, NavigationRequested, NavProgress, NoiseReading, PersonEngaged,
                           ReplySentence, ReturningProgress, ScreenUpdate, StateEntered, UserChoice, UserUtterance)
 
 log = logging.getLogger("robot.film")
@@ -60,6 +60,7 @@ class FilmLog:
         self._last_sound = -1e9
         self._last_screen = ""
         self._last_state = ""
+        self._goals: set = set()
 
     # ---- writing ----
     def write(self, kind: str, **fields) -> dict:
@@ -124,6 +125,10 @@ class FilmLog:
         elif isinstance(event, NavigationRequested):
             self.write("goal_sent", x=round(event.x, 2), y=round(event.y, 2), title=event.title or None,
                        section=event.section, shelf=event.shelf)
+        elif isinstance(event, NavProgress):
+            if event.goal_id not in self._goals:                  # the first report of a goal: the base started driving it
+                self._goals.add(event.goal_id)
+                self.write("drive_started", goal=event.goal_id, distance_left=event.distance_left)
         elif isinstance(event, NavArrived):
             self.write("goal_reached", goal=event.goal_id)
         elif isinstance(event, NavFailed):

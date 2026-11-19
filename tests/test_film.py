@@ -11,7 +11,7 @@ from pathlib import Path
 from robot.bus import Bus
 from robot.camera_feed import CameraFeed
 from robot.config import ROOT, load_config
-from robot.events import (BookIdentified, ContextChanged, NavArrived, NavigationRequested, NoiseReading, PersonEngaged,
+from robot.events import (BookIdentified, ContextChanged, NavArrived, NavigationRequested, NavProgress, NoiseReading, PersonEngaged,
                           PoseUpdated, ReplySentence, ReturningProgress, ScreenUpdate, StateEntered, UserUtterance)
 from robot.film import FilmLog, FrameRecorder, take_dir
 from tests.test_noise_zone import noisy, zone_app
@@ -109,6 +109,11 @@ class FilmLogTest(unittest.TestCase):
         self.assertIn("goal_reached", [r["type"] for r in rows])
         self.assertEqual(next(r for r in rows if r["type"] == "unload")["shelf"], "1-FIC-A")
         self.assertEqual([r["db"] for r in rows if r["type"] == "sound_level"], [41.3])
+
+    def test_the_first_report_of_each_goal_is_its_drive_start(self):
+        self.send(NavProgress("g-2", 3.0), NavProgress("g-2", 2.5), NavProgress("g-3", 1.0))
+        rows = [r for r in self.rows() if r["type"] == "drive_started"]
+        self.assertEqual([(r["goal"], r["distance_left"]) for r in rows], [("g-2", 3.0), ("g-3", 1.0)])      # once per goal
 
     def test_events_are_logged_before_the_dialogue_handles_them(self):
         bus, seen = Bus(), []
