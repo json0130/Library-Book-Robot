@@ -267,7 +267,7 @@ segments:
     audio: mute
     auto_captions: true
     badge: "Live view. Visitor's words typed by the operator"
-    vo: "On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working."
+    vo: "On the way, Stuart meets someone in a quiet zone. Here it makes no sound: its greeting and its answers appear as text on the screen, so students nearby can keep working."
 
   - id: quiet-wait
     type: clip

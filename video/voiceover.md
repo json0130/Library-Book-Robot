@@ -1,6 +1,6 @@
 # Voiceover script
 
-13 lines, 197 words (the limit is 250). Read each at a calm pace, about 140 words a minute, starting at the time on
+13 lines, 196 words (the limit is 250). Read each at a calm pace, about 140 words a minute, starting at the time on
 its left. Stay silent in between, above all in the common-area visit, where Stuart speaks. Save each line as the file named in the table
 (`python tools/video/voiceover.py record` does that for you); a line you record replaces the TTS narration for that line, the others keep
 the TTS (a backup copy of the narration is in `video/voiceover_tts/`). The times come from `python tools/video/edit.py --plan` and move
@@ -18,7 +18,7 @@ if the footage changes: `python tools/video/voiceover.py cues --write` makes thi
 | 1:02.5 | `common-card.wav` | 68.0 s | 3.9 s | In the common area, Stuart greets people and talks. |
 | 2:10.5 | `trip-out.wav` | 9.4 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
 | 2:19.9 | `trip-back.wav` | 5.3 s | 3.0 s | and then heads back to its station. |
-| 2:25.2 | `quiet.wav` | 25.0 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
+| 2:25.2 | `quiet.wav` | 25.0 s | 13.9 s | On the way, Stuart meets someone in a quiet zone. Here it makes no sound: its greeting and its answers appear as text on the screen, so students nearby can keep working. |
 | 2:50.2 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
 | 2:54.2 | `thanks.wav` | 2.5 s | 0.9 s | Thank you. |
 
@@ -44,7 +44,7 @@ When the patron leaves, Stuart drives the returned books to their section,
 
 and then heads back to its station.
 
-On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working.
+On the way, Stuart meets someone in a quiet zone. Here it makes no sound: its greeting and its answers appear as text on the screen, so students nearby can keep working.
 
 Stuart: a library robot that reads the room.
 
