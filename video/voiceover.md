@@ -15,12 +15,12 @@ if the footage changes: `python tools/video/voiceover.py cues --write` makes thi
 | 0:34.5 | `system.wav` | 8.5 s | 7.8 s | A Jetson handles the conversation and the screen. A TurtleBot base handles navigation and measures the sound level. |
 | 0:43.0 | `parts.wav` | 9.0 s | 9.6 s (tight) | Books are read by an RFID reader, obstacles are seen by a LiDAR, and Stuart's face is shown on a small screen. |
 | 0:52.0 | `maps.wav` | 12.0 s | 11.3 s | As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas. |
-| 1:04.0 | `common-card.wav` | 40.7 s | 3.9 s | In the common area, Stuart greets people and talks. |
-| 1:44.7 | `trip-out.wav` | 18.8 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
-| 2:03.5 | `unload.wav` | 5.0 s | 4.8 s (tight) | and unloads them into a tray for a librarian to shelve. |
-| 2:08.5 | `trip-back.wav` | 8.8 s | 3.0 s | Then it heads back to its station. |
-| 2:17.3 | `quiet.wav` | 25.5 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
-| 2:42.8 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
+| 1:04.0 | `common-card.wav` | 54.9 s | 3.9 s | In the common area, Stuart greets people and talks. |
+| 1:58.9 | `trip-out.wav` | 15.7 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
+| 2:14.6 | `unload.wav` | 5.0 s | 4.8 s (tight) | and unloads them into a tray for a librarian to shelve. |
+| 2:19.6 | `trip-back.wav` | 8.8 s | 3.0 s | Then it heads back to its station. |
+| 2:28.4 | `quiet.wav` | 25.0 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
+| 2:53.5 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
 
 ## The whole script
 

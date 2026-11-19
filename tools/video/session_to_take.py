@@ -10,7 +10,8 @@ GNOME screencast, "17-19-57"), and screen.mp4. The editor then captions Stuart's
 recording to the part worth showing (crop: in the storyboard).
 
 --voice: a screen recording usually has no sound, so Stuart is silent in it. With --voice each line he said is made again with the TTS
-and placed so that it ENDS when the log says he finished it (the log notes a reply when it has been spoken), giving recordings/<take>/audio.wav
+and placed where the log says he started it (the state that first showed the words), sped up a little if it is longer than the robot's own
+voice was (the log notes a reply when it has been spoken), giving recordings/<take>/audio.wav
 to use as `voice: {take: ..., source: audio}`. The words and the timing are the robot's; the voice is the TTS (the AI server's, or the
 local Piper voice), not a recording of the run: say so if it matters.
 """
@@ -49,10 +50,37 @@ def wav_seconds(path: Path) -> float:
         return w.getnframes() / float(w.getframerate())
 
 
+def spoken_start(rows: list, index: int) -> float:
+    """When Stuart began saying the reply logged at rows[index] (the log notes a reply when it has been spoken): the time of the state that
+    first showed the same words, looking back from the reply, or the reply's own time if there is none."""
+    text = rows[index]["data"]["text"]
+    start = rows[index]["t"]
+    for r in reversed(rows[:index]):
+        if r["event"] == "ReplySentence":
+            break                                              # the line before it: everything after that is this one
+        if r["event"] == "StateEntered":
+            shown = (r["data"].get("text") or "").strip()
+            if shown and (text.startswith(shown[:40]) or shown.startswith(text[:40])):
+                start = r["t"]
+    return start
+
+
+def fit_to_slot(wav: Path, slot: float, longest_speedup: float = 1.5) -> Path:
+    """The line sped up (pitch kept) if the TTS takes longer than the robot's own voice did, so it never runs into the next line."""
+    length = wav_seconds(wav)
+    if length <= slot + 0.05:
+        return wav
+    import subprocess
+    out = wav.with_name("fit.wav")
+    rate = min(longest_speedup, length / slot)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-filter:a", f"atempo={rate:.4f}", str(out)], check=True)
+    return out
+
+
 def events_from_log(rows: list, t0: float, t1: float) -> tuple:
-    """(events, replies): the events of the log in [t0, t1] as film events, and the replies as (end time, text) for the voice."""
+    """(events, replies): the events of the log in [t0, t1] as film events, and the spoken replies as (start, end, text) for the voice."""
     events, replies, last_screen = [], [], ""
-    for r in rows:
+    for n, r in enumerate(rows):
         if not t0 - 2 <= r["t"] <= t1 + 2:
             continue
         d, kind, t = r["data"], r["event"], round(r["t"], 3)
@@ -68,7 +96,7 @@ def events_from_log(rows: list, t0: float, t1: float) -> tuple:
             channel = "speech" if "speech" in ((r.get("style") or {}).get("channels") or []) else "screen"
             events.append({"t": t, "type": "reply", "text": d["text"], "channel": channel, "zone": (r.get("context") or {}).get("zone")})
             if channel == "speech":
-                replies.append((r["t"], d["text"]))
+                replies.append((spoken_start(rows, n), r["t"], d["text"]))
         elif kind == "ScreenUpdate" and d.get("zone") == "quiet":
             payload = d.get("payload") or {}
             text = payload.get("message") or payload.get("caption") or d.get("text") or ""
@@ -105,14 +133,16 @@ def main(argv=None) -> int:
     meta = {"take": args.take, "start_time": t0, "clock": "time.time()", "from_log": str(args.log),
             "sources": {args.source: {"file": f"{args.source}.mp4", "started": t0, "error": None}}}
     pieces, speak = [], []
-    for end, text in replies:
+    for begin, end, text in replies:
         wav = Path(tempfile.mkdtemp()) / "line.wav"
+        slot = max(0.5, end - begin)                                     # how long the robot's own voice took
         if args.voice and edit.tts_line(text, wav):
-            length = wav_seconds(wav)
-            pieces.append((max(0.0, end - t0 - length), wav))
+            wav = fit_to_slot(wav, slot)
+            length = min(wav_seconds(wav), slot) if slot else wav_seconds(wav)
+            pieces.append((max(0.0, begin - t0), wav))
         else:
             length = len(text.split()) / WORDS_PER_SECOND + 0.3
-        speak.append({"t": round(end - length, 3), "type": "speak", "text": text, "seconds": round(length, 2)})
+        speak.append({"t": round(begin, 3), "type": "speak", "text": text, "seconds": round(length, 2)})
     if args.voice and pieces:
         edit.mix_at(pieces, take / "audio.wav", info["duration"])
         meta["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None,

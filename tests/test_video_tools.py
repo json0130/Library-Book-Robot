@@ -148,12 +148,13 @@ class CropAndVoiceoverTest(unittest.TestCase):
 
 
 class SessionToTakeTest(unittest.TestCase):
-    def test_a_session_log_becomes_events_with_the_voice_lines_ending_when_the_log_says(self):
+    def test_a_session_log_becomes_events_with_the_voice_lines_placed_where_the_log_says(self):
         t0 = dt.datetime(2026, 11, 19, 17, 19, 57).timestamp()
         ctx = {"zone": "common"}
         style = {"channels": ["speech", "screen"]}
         rows = [{"t": t0 + 1, "event": "ContextChanged", "data": {}, "context": ctx, "style": style},
                 {"t": t0 + 8.5, "event": "PersonEngaged", "data": {"source": "sensor"}, "context": ctx, "style": style},
+                {"t": t0 + 8.5, "event": "StateEntered", "data": {"state_path": "ENGAGED.GREET", "text": "Hello! My name is Stuart."}, "context": ctx, "style": style},
                 {"t": t0 + 11.6, "event": "ReplySentence", "data": {"text": "Hello! My name is Stuart."}, "context": ctx, "style": style},
                 {"t": t0 + 30.5, "event": "UserUtterance", "data": {"text": "i would like to return the book", "source": "operator"}, "context": ctx, "style": style},
                 {"t": t0 + 42.3, "event": "BookIdentified", "data": {"title": "Dune", "isbn": "9780441172719"}, "context": ctx, "style": style}]
@@ -162,9 +163,29 @@ class SessionToTakeTest(unittest.TestCase):
         self.assertEqual(kinds[:2], ["start", "zone"])
         for kind in ("person_detected", "reply", "speech_in", "rfid_read"):
             self.assertIn(kind, kinds)
-        self.assertEqual(replies, [(t0 + 11.6, "Hello! My name is Stuart.")])
+        self.assertEqual(replies, [(t0 + 8.5, t0 + 11.6, "Hello! My name is Stuart.")])      # started with the state that showed it
         self.assertEqual(next(e for e in events if e["type"] == "reply")["channel"], "speech")
         self.assertAlmostEqual(session_to_take.start_epoch(rows, "17:19:57.55"), t0 + 0.55, places=2)
+
+    def test_a_line_starts_with_the_state_that_first_showed_it_not_with_an_earlier_line(self):
+        rows = [{"t": 1.0, "event": "StateEntered", "data": {"text": "Hello! My name is Stuart."}},
+                {"t": 4.0, "event": "ReplySentence", "data": {"text": "Hello! My name is Stuart."}},
+                {"t": 4.0, "event": "StateEntered", "data": {"text": "I can take back a book, tell you about one. What would you like?"}},
+                {"t": 4.0, "event": "StateEntered", "data": {"text": "Hello! My name is Stuart."}},          # the old text again: not this line's
+                {"t": 11.0, "event": "ReplySentence", "data": {"text": "I can take back a book, tell you about one. What would you like?"}}]
+        self.assertEqual(session_to_take.spoken_start(rows, 1), 1.0)
+        self.assertEqual(session_to_take.spoken_start(rows, 4), 4.0)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_a_line_longer_than_the_robots_voice_is_sped_up_to_fit(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        wav = d / "line.wav"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=6", str(wav)], check=True)
+        fitted = session_to_take.fit_to_slot(wav, 4.0)
+        self.assertAlmostEqual(session_to_take.wav_seconds(fitted), 4.0, delta=0.15)
+        self.assertEqual(session_to_take.fit_to_slot(wav, 7.0), wav)                       # shorter: left alone
+        self.assertGreater(session_to_take.wav_seconds(session_to_take.fit_to_slot(wav, 2.0)), 3.9)    # never faster than x1.5
 
 
 if __name__ == "__main__":

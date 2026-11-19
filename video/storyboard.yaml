@@ -116,57 +116,86 @@ segments:
     subtitle: Stuart greets people and speaks
     vo: "In the common area, Stuart greets people and talks."
 
+  # The 20:47 run of 19 Nov (recordings/rfid2: the screen recording + the robot's session log). The visitor's words are spoken (the robot's
+  # microphone recognised them). Cut: after "Is there anything else I can help with?" (64.3 s) the book was read a second time and the
+  # robot asked about it again; the scene jumps to the visitor's goodbye (80.2 s). Slow stretches are sped up.
   - id: live-approach
     type: clip
     zone: common
-    take: rfid1
+    take: rfid2
     source: screen
-    in: 4.5
-    out: 19.5
+    in: 6.4
+    out: 17.8
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid1, source: audio}
+    voice: {take: rfid2, source: audio}
     auto_captions: true
-    badge: "Live view. Visitor's words typed by the operator"
+    badge: "Live view"
 
   - id: live-wait
     type: clip
     zone: common
-    take: rfid1
+    take: rfid2
     source: screen
-    in: 19.5
-    out: 29.0
-    speed: 4
+    in: 17.8
+    out: 25.0
+    speed: 6
     crop: [84, 116, 1820, 930]
     valign: bottom
     audio: mute
-    badge: "Live view. Visitor's words typed by the operator"
+    badge: "Live view"
 
   - id: live-ask
     type: clip
     zone: common
-    take: rfid1
+    take: rfid2
     source: screen
-    in: 29.0
-    out: 36.5
+    in: 25.0
+    out: 42.4
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid1, source: audio}
+    voice: {take: rfid2, source: audio}
     auto_captions: true
-    badge: "Live view. Visitor's words typed by the operator"
+    badge: "Live view"
 
   - id: live-hold
     type: clip
     zone: common
-    take: rfid1
+    take: rfid2
     source: screen
-    in: 36.5
-    out: 40.5
+    in: 42.4
+    out: 46.6
+    speed: 5
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    badge: "Live view"
+
+  - id: live-return
+    type: clip
+    zone: common
+    take: rfid2
+    source: screen
+    in: 46.6
+    out: 50.0
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: rfid2, source: audio}
+    auto_captions: true
+    badge: "Live view"
+
+  - id: live-place
+    type: clip
+    zone: common
+    take: rfid2
+    source: screen
+    in: 50.0
+    out: 53.0
     speed: 3
     crop: [84, 116, 1820, 930]
     valign: bottom
     audio: mute
-    badge: "Live view. Visitor's words typed by the operator"
+    badge: "Live view"
 
   # The CAD simulation of the lift taking a book out (video/footage/cad_book_retrieve_original.webm), played in reverse so the book
   # goes in (tools/video/reverse.py: cropped to the 3D view, all 37.6 s, here at x4): a pop-up in the corner of the live scene, from the
@@ -174,25 +203,38 @@ segments:
   - id: live-scan
     type: clip
     zone: common
-    take: rfid1
+    take: rfid2
     source: screen
-    in: 40.5
-    out: 52.0
+    in: 53.0
+    out: 64.3
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid1, source: audio}
+    voice: {take: rfid2, source: audio}
     auto_captions: true
     badge: "Live view: the RFID reader reads the book"
-    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 1.6, width: 560,
+    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 0.9, width: 560,
             label: "Loading the book (CAD simulation)"}
+
+  - id: live-goodbye
+    type: clip
+    zone: common
+    take: rfid2
+    source: screen
+    in: 80.2
+    out: 85.6
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: rfid2, source: audio}
+    auto_captions: true
+    badge: "Live view"
 
   # ---- Stuart takes the book to Fiction and heads back (18 Nov clips). The map next to each clip replays the real track of that drive
   # from the robot's session log (video/takes/trips_18nov.json), so the dot is where the robot was. The phone clips start at 18:27:36 and
   # 18:29:06; the replays start at 18:27:35 and 18:28:38, so the second clip is the last 26 s of its drive.
   - id: trip-out
     type: split
-    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 2.5, label: "Stuart driving to Fiction"}
-    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 2.5, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 3, label: "Stuart driving to Fiction"}
+    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 3, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
@@ -215,21 +257,103 @@ segments:
     badge: "Drive started by an operator"
     vo: "Then it heads back to its station."
 
-  # ---- Quiet zone, on the way back: another person asks questions (no return) ----
+  # ---- Quiet zone, on the way back: the 21:06 run of 19 Nov (recordings/quiet4: the screen recording + the robot's session log). Nothing is
+  # said aloud: the face screen shows the answers as text. The visitor's words are typed by the operator. Slow stretches are sped up.
   - id: quiet
-    type: split
+    type: clip
     zone: quiet
-    duration: 25.5
-    left: {take: quiet3, source: camera, in: "event:person_detected-1s", label: "Webcam: person detected",
-           placeholder: "Film live: sim --camera --faces --record --zone quiet (a person walks up and asks questions)"}
-    right: {take: quiet3, source: face, in: "event:person_detected-1s", label: "Face screen",
-            placeholder: "recordings/quiet3/face.mp4"}
-    audio_from: none
+    take: quiet4
+    source: screen
+    in: 13.6
+    out: 21.6
+    speed: 2
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
     auto_captions: true
-    captions_from: right
-    sound_meter: true
-    badge: "Face screen: simulated visit"
+    badge: "Live view. Visitor's words typed by the operator"
     vo: "On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working."
+
+  - id: quiet-wait
+    type: clip
+    zone: quiet
+    take: quiet4
+    source: screen
+    in: 21.6
+    out: 31.3
+    speed: 5
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    auto_captions: true
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: quiet-ask
+    type: clip
+    zone: quiet
+    take: quiet4
+    source: screen
+    in: 31.3
+    out: 38.5
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    auto_captions: true
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: quiet-read
+    type: clip
+    zone: quiet
+    take: quiet4
+    source: screen
+    in: 38.5
+    out: 43.3
+    speed: 3
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    auto_captions: true
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: quiet-directions
+    type: clip
+    zone: quiet
+    take: quiet4
+    source: screen
+    in: 43.3
+    out: 48.5
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    auto_captions: true
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: quiet-pause
+    type: clip
+    zone: quiet
+    take: quiet4
+    source: screen
+    in: 48.5
+    out: 52.1
+    speed: 3
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    auto_captions: true
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: quiet-thanks
+    type: clip
+    zone: quiet
+    take: quiet4
+    source: screen
+    in: 52.1
+    out: 56.0
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    auto_captions: true
+    badge: "Live view. Visitor's words typed by the operator"
 
   # ---- The end ----
   - id: end
