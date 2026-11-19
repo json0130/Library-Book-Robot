@@ -71,7 +71,7 @@ silent there.
 
 ## Already made, and how to redo it
 - **The common-area scene**: `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261119-171941.jsonl --video
-  "Screencast from 2026-11-19 17-19-57.mp4" --start 17:19:57.55 --take rfid1 --voice` (the local AI must be up for `--voice`). It writes
+  video/footage/rfid_return_screencast.mp4 --start 17:19:57.55 --take rfid1 --voice` (the local AI must be up for `--voice`). It writes
   `recordings/rfid1/` (events, the video, Stuart's voice) from the robot's log and the screen recording; the editor crops it to the operator
   page and speeds up the waits.
 - **The replayed drives**: `python tools/video/trajectory.py <log> --window 18:27:35-18:28:26 --name to_fiction --window 18:28:38-18:29:35
