@@ -277,6 +277,8 @@ def auto_captions(pane: Pane, quiet: bool) -> list:
             if per_sentence:
                 continue
             text = f"Stuart: {e.get('text', '')}"
+        elif kind == "speech_in" and e.get("text"):
+            text = f"Visitor: {e['text']}"            # what the visitor said (typed in a simulated take, so nobody hears it)
         elif (kind == "reply" and e.get("channel") == "screen") or (kind == "screen_text" and quiet):
             text = f"Stuart: {QUIET_CAPTION}"         # read on the screen, not heard: the screen in the video shows the words
         else:
@@ -411,13 +413,13 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
 def voice_pane(vspec, seg: Segment, where: str, probe_fn, takes: dict, rec: Path) -> Optional[Pane]:
     """The stretch of a sound recording (film.py's audio.wav: Stuart's speaker) that plays with the first pane's picture, found
     from both recordings' start times. None if the first pane is a placeholder; an error if the times are not known."""
-    ref = seg.panes[0]
-    if ref.placeholder or not isinstance(vspec, dict) or not vspec.get("take"):
-        if isinstance(vspec, dict) and vspec.get("take"):
-            return None
+    if not isinstance(vspec, dict) or not vspec.get("take"):
         raise StoryboardError(f"{where}: voice needs take: and source:")
+    ref = next((p for p in seg.panes if not p.placeholder), None)          # the footage the sound must match (not a "Shot needed" pane)
+    if ref is None:
+        return None
     if ref.take is None or ref.speed != 1:
-        raise StoryboardError(f"{where}: the first pane must be a take at speed 1 to line the voice up with it")
+        raise StoryboardError(f"{where}: the pane with footage must be a take at speed 1 to line the voice up with it")
     name = vspec["take"]
     if not (rec / name).is_dir():
         return None
@@ -791,12 +793,15 @@ def placeholder_voiceover(segments, path: Path, work: Path, total: float) -> tup
     for s in segments:
         starts.append(t)
         t += s.duration
-    pieces = []
+    pieces, free_at = [], 0.0
     for s, start in zip(segments, starts):
         if s.vo:
             wav = work / f"vo-{s.index:02d}.wav"
             if tts_line(s.vo, wav):
-                pieces.append((start + 0.3, wav))
+                at = max(start + 0.3, free_at + 0.3)              # never on top of the line before
+                pieces.append((at, wav))
+                with wave.open(str(wav)) as w:
+                    free_at = at + w.getnframes() / float(w.getframerate())
     if not pieces:
         return silence_wav(path, total), "silent (no TTS reachable: record video/voiceover.wav, or start the AI server)"
     inputs, labels, graph = [], [], []

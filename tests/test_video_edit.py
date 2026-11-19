@@ -129,6 +129,16 @@ class StoryboardTest(unittest.TestCase):
         self.assertEqual([(round(a, 2), round(b, 2), t) for a, b, t in segs[0].captions],
                          [(0.2, 1.1, "Stuart: Hello!"), (1.1, 2.9, "Stuart: My name is Stuart.")])   # replies are not captioned twice
 
+    def test_what_the_visitor_says_is_captioned_too(self):
+        take = self.dir / "rec" / "common1"
+        with (take / "events.jsonl").open("a") as f:
+            f.write(json.dumps({"t": START + 3.0, "type": "speech_in", "text": "can I return this book?"}) + "\n")
+        _, segs = self.board("""
+            segments:
+              - {type: clip, take: common1, source: face, in: 2.5, out: 5, auto_captions: true}
+        """)
+        self.assertIn((0.5, "Visitor: can I return this book?"), [(round(a, 2), t) for a, _, t in segs[0].captions])
+
     def test_quiet_zone_answers_are_captioned_as_shown_not_heard(self):
         _, segs = self.board("""
             segments:

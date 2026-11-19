@@ -6,6 +6,43 @@ screen shows only its face. Quiet zone: it never starts, answers as text on the 
 The cut is `video/storyboard.yaml`; `python tools/video/edit.py --plan` prints the timing and every shot that is still a placeholder (a
 "Shot needed" card of the planned length). Drop a shot's file in place and render again: nothing else changes.
 
+## Draft status (19 Nov) and what is left to film
+
+`video/out/stuart_hri2027_sdc.mp4` (1080p, 2:58, 17 MB) renders now. Done: the title, the system diagram, the common-area and the
+quiet-zone visits (simulated, screen-recorded: see below), the two trip clips from 18 Nov, and the closing stills
+(`video/assets/still_common.png`, `still_quiet.png`, frames of those takes). Every other part is a "Shot needed" card of the
+right length. To fill one, put the file at the path below and run `python tools/video/edit.py` again: nothing else changes.
+
+| In the cut | Length | File to add | What it shows |
+|---|---|---|---|
+| 0:00 | 5 s | `video/footage/hook_quiet.mp4` | quiet study area, students working, slow pan |
+| 0:05 | 5 s | `video/footage/hook_lively.mp4` | lively area, people talking and walking |
+| 0:26 left | 19 s (76 s at x4) | `video/footage/survey_drive.mp4` | the robot driving its sound survey (phone, landscape) |
+| 0:26 right | 19 s | `recordings/survey1/map.mp4` | the live map + sound map during that drive (`film.py record --take survey1 --sources map`) |
+| 0:45 | 5 s | `video/assets/sound_map.png` | the finished sound map, quiet and common areas visible |
+| 0:53 left | 52.5 s | `recordings/common1/camera.mp4` (or set `src:` to your clip) | the patron at the robot in the common area: walks up, RFID scan, the screen showing the book |
+| 1:45 left | 34 s | `recordings/quiet1/camera.mp4` (or `src:`) | the same in the quiet zone, bystanders studying |
+| 2:19 right | 19 s | `recordings/trip1/map.mp4` | the live map while it drives to Fiction |
+| 2:38 | 4 s | `video/footage/unload.mp4` | books into the return tray (operator-driven; can wait) |
+
+Your own phone clips (RFID scan, the patron) can go straight into the storyboard with `src: video/footage/<file>.mp4` and an `in:`/`out:`
+in seconds: they do not need a take.
+
+### The simulated visits (the right-hand panes at 0:53 and 1:45)
+
+Made on the Jetson with the robot program on the fake base (nothing drives), its face page recorded, and Stuart's voice from its own
+speaker, using the local AI (`scripts/start_local_ai.sh` in the local-ai worktree, or llama-server + `tools/local_ai_server.py`):
+
+```
+python -m display.server --port 8775 --host 127.0.0.1            # a separate page, so a running robot's 8765 is untouched
+AI_HOST=127.0.0.1 AI_PORT=7898 python tools/video/sim_take.py common --take common6 --zone common --no-llm
+AI_HOST=127.0.0.1 AI_PORT=7898 python tools/video/sim_take.py quiet --take quiet2 --zone quiet --no-llm
+```
+
+The visit is `video/takes/common.txt` / `quiet.txt`. `--no-llm` words the recommendation from the catalogue: the local Qwen3-1.7B
+described A Brief History of Time with Cosmos's summary in three takes out of three (`common2`, `common5` keep that version), which the
+paper's "honest answers" rules out. In the common area the takes use `screen_content: false` (only the face, as the paper describes it).
+
 ## Before filming (once)
 
 - On the Jetson: `python tools/video/film.py check`. Everything should say yes/ok. Each browser source needs about 800 MB free: close other

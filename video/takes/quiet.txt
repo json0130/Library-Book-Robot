@@ -1,12 +1,13 @@
 # Simulated quiet-zone visit: the same task as common.txt. Stuart waits, answers on the screen and makes no sound.
-wait 3
+# The waits give the screen time to be read.
+wait 2
 engage
-wait 6
+wait 5
 hi Stuart, can I return this book?
-wait 6
+wait 4
 book 9780345539434
-wait 12
-can you recommend something like Cosmos?
-wait 14
-no thanks, that's all
 wait 7
+can you recommend something like Cosmos?
+wait 10
+no thanks, that's all
+wait 4

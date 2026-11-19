@@ -1,12 +1,14 @@
 # Simulated common-area visit (tools/video/sim_take.py). Lines go to `python -m robot sim`; `wait N` lets the robot talk.
-wait 3
+# The simulator reads the next line only after Stuart has finished speaking, so a wait is just the visitor's pause;
+# except after `book`: the pad's drop is a 4 s timer, and "Done ... anything else?" follows it.
+wait 2
 engage
-wait 7
+wait 1.5
 hi Stuart, can I return this book?
-wait 6
+wait 1
 book 9780345539434
-wait 12
+wait 4.5
 can you recommend something like Cosmos?
-wait 16
+wait 2
 no thanks, that's all
-wait 7
+wait 2.5
