@@ -110,6 +110,24 @@ class FilmLogTest(unittest.TestCase):
         self.assertEqual(next(r for r in rows if r["type"] == "unload")["shelf"], "1-FIC-A")
         self.assertEqual([r["db"] for r in rows if r["type"] == "sound_level"], [41.3])
 
+    def test_events_are_logged_before_the_dialogue_handles_them(self):
+        bus, seen = Bus(), []
+
+        async def slow_dialogue(event):
+            seen.append(("dialogue", type(event).__name__))
+            self.now[0] += 5.0                                      # it speaks for five seconds
+
+        bus.subscribe(object, slow_dialogue)
+        self.log.attach(bus)                                        # attached later, but runs first
+        asyncio.run(bus.publish(PersonEngaged((1,))))
+        rows = self.rows()
+        self.assertEqual(next(r for r in rows if r["type"] == "person_detected")["t"], 100.0)
+
+    def test_each_spoken_sentence_is_logged_with_its_length(self):
+        self.log.on_speak("Hello! My name is Stuart.", 1.234)
+        row = next(r for r in self.rows() if r["type"] == "speak")
+        self.assertEqual((row["text"], row["seconds"], row["zone"]), ("Hello! My name is Stuart.", 1.23, "common"))
+
     def test_a_take_name_is_a_plain_word(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertTrue(take_dir("common-1_b", Path(d)).is_dir())
@@ -223,3 +241,67 @@ def contextlib_quiet():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoiceHookTest(unittest.TestCase):
+    def test_the_voice_reports_each_sentence_as_it_starts(self):
+        import wave as wavemod
+        from robot.actuation.voice import Voice, wav_seconds
+        from robot.core.style import StyleVector
+
+        def tone(text):
+            buf = io.BytesIO()
+            with wavemod.open(buf, "wb") as w:
+                w.setnchannels(1), w.setsampwidth(2), w.setframerate(1000)
+                w.writeframes(b"\0\0" * 500)
+            return buf.getvalue()
+
+        played, told = [], []
+        audio = type("A", (), {"play": lambda self, wav, volume: played.append(len(told))})()
+        voice = Voice(audio, tone)
+        voice.on_sentence = lambda text, seconds: told.append((text, seconds))
+        voice.say("Hello there. I am Stuart.", StyleVector())
+        self.assertEqual(told, [("Hello there.", 0.5), ("I am Stuart.", 0.5)])
+        self.assertEqual(played, [1, 2])                                    # told just before each one plays
+        self.assertEqual(wav_seconds(b"not a wav"), 0.0)
+
+
+class FaceOnlyScreenTest(unittest.TestCase):
+    """styles.yaml `screen_content: false`: the screen shows only the face while the speech carries the words (the paper's common
+    area). Off by default; the film takes switch it on with --config-set styles.common_alone.screen_content=false."""
+
+    def app(self, face_only: bool):
+        from robot.actuation.face import FaceDisplay
+        from robot.app import build_app, fake_drivers
+        from robot.sim.keyboard import apply_overrides
+        logging.disable(logging.INFO)
+        self.addCleanup(logging.disable, logging.NOTSET)
+        cfg = load_config()
+        cfg.robot.setdefault("books", {})["online_fallback"] = False
+        cfg.robot.setdefault("screen", {})["greeting_hold_s"] = 0
+        if face_only:
+            apply_overrides(cfg, ["styles.common_alone.screen_content=false"])
+        app = build_app(cfg, fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False, persist_storage=False)
+        app.screens = []
+        app.bus.subscribe(ScreenUpdate, app.screens.append)
+        return app
+
+    def visit(self, app, zone):
+        from robot.events import BookIdentified, ContextChanged, UserUtterance
+        run(app, ContextChanged(zone, 1), PersonEngaged(), UserUtterance("tell me about cosmos"))
+        return {u.view for u in app.screens}
+
+    def test_off_by_default_a_common_area_shows_the_book(self):
+        self.assertIn("book_card", self.visit(self.app(False), "common"))
+
+    def test_face_only_common_area_never_shows_content(self):
+        self.assertEqual(self.visit(self.app(True), "common"), {"face"})
+
+    def test_the_quiet_zone_still_reads_on_the_screen(self):
+        self.assertIn("book_card", self.visit(self.app(True), "quiet"))
+
+    def test_the_style_says_so(self):
+        app = self.app(True)
+        run(app, ContextChanged("common", 1))
+        self.assertFalse(app.style.screen_content)
+        self.assertIn("screen=face-only", app.style.summary())

@@ -322,6 +322,16 @@ def wait_for_page(display: str, proc=None, timeout: float = 60.0, paint_s: float
     raise RuntimeError(f"the page did not load in the browser within {timeout:g} s")
 
 
+def first_to_go() -> None:
+    """In the child, before it runs: the highest OOM score, so if memory runs out the kernel kills this recording, not the desktop
+    or VS Code (on the Jetson it did, twice, before this)."""
+    try:
+        with open("/proc/self/oom_score_adj", "w") as f:
+            f.write("1000")
+    except OSError:
+        pass
+
+
 def start_source(src: Source, log_dir: Path, popen=subprocess.Popen, settle_s: float = 6.0) -> None:
     """Start a source's processes in order (Xvfb, browser, then the recorder). Errors are kept on the source, never raised."""
     if src.error:
@@ -336,7 +346,7 @@ def start_source(src: Source, log_dir: Path, popen=subprocess.Popen, settle_s: f
             last = i == len(src.cmds) - 1
             log = open(log_dir / f"{src.name}.{Path(cmd[0]).name}.log", "w")
             proc = popen(cmd, stdin=subprocess.PIPE if (last and src.stop_with_q) else subprocess.DEVNULL,
-                         stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+                         stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True, preexec_fn=first_to_go)
             src.procs.append(proc)
             if not last:                                              # the screen, then the page, must be up before filming starts
                 if cmd[0] == "Xvfb":
@@ -384,11 +394,14 @@ def write_meta(take_path: Path, take: str, sources: list, started: float, stoppe
 
 
 def record(take: str, names, base_url: str, speaker: Optional[str], duration: Optional[float] = None,
-           wait: Optional[Callable[[], None]] = None, out=sys.stdout) -> int:
+           wait: Optional[Callable[[], None]] = None, out=sys.stdout, force: bool = False) -> int:
     from robot.film import take_dir
     take_path = take_dir(take, RECORDINGS)
     sources = plan_sources(names, take_path, base_url, speaker)
     short = memory_check(names)
+    if short and force:
+        print(f"  warning: {short}. Going ahead (--force): the recording is the first thing the kernel would stop.", file=out)
+        short = None
     if short:
         for s in sources:
             if s.name in ("face", "map"):
@@ -450,6 +463,8 @@ def main(argv=None) -> int:
     r.add_argument("--host", help="the display server's host (default display.host in config/robot.yaml)")
     r.add_argument("--port", type=int)
     r.add_argument("--duration", type=float, help="stop by itself after this many seconds")
+    r.add_argument("--force", action="store_true",
+                   help="record a browser source even with little free memory (it runs with the highest OOM score, so it goes first)")
     d = sub.add_parser("dell-command", help="print the command to film the map on the Dell")
     d.add_argument("--take", required=True)
     args = p.parse_args(argv)
@@ -462,7 +477,7 @@ def main(argv=None) -> int:
     speaker = (load_config().robot.get("devices") or {}).get("speaker")
     names = [n.strip() for n in args.sources.split(",") if n.strip()]
     try:
-        return record(args.take, names, display_base(args.host, args.port), speaker, args.duration)
+        return record(args.take, names, display_base(args.host, args.port), speaker, args.duration, force=args.force)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1

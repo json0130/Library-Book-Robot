@@ -275,7 +275,8 @@ def build_identify(cfg: Config, sim: "Sim"):
 
 
 def apply_overrides(cfg: Config, settings: list) -> None:
-    """--config-set section.key=value: set a robot.yaml value (zones.key=value: one of config/zones.yaml) (the value is read as YAML: true, 5, 0.5, text) for this run.
+    """--config-set section.key=value: set a robot.yaml value (zones.key=value: config/zones.yaml, styles.entry.key=value:
+    config/styles.yaml) (the value is read as YAML: true, 5, 0.5, text) for this run.
     Raises ValueError saying what is wrong."""
     import yaml
     for item in settings:
@@ -283,11 +284,12 @@ def apply_overrides(cfg: Config, settings: list) -> None:
         parts = key.strip().split(".")
         if not sep or not all(parts):
             raise ValueError(f"{item!r}: use section.key=value")
-        node = cfg.zones if parts[0] == "zones" else cfg.robot           # zones.* is config/zones.yaml (zones.noise.window_s=10)
-        if parts[0] == "zones":
+        # zones.* is config/zones.yaml (zones.noise.window_s=10), styles.* config/styles.yaml (styles.common_alone.screen_content=false)
+        node = {"zones": cfg.zones, "styles": cfg.styles}.get(parts[0], cfg.robot)
+        if parts[0] in ("zones", "styles"):
             parts = parts[1:]
             if not parts:
-                raise ValueError(f"{item!r}: use zones.key=value")
+                raise ValueError(f"{item!r}: use {key.split('.')[0]}.key=value")
         for part in parts[:-1]:
             node = node.setdefault(part, {})
             if not isinstance(node, dict):
@@ -374,6 +376,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             film = FilmLog(take_dir(film_take) / "events.jsonl", get_zone=lambda: app.context.zone,
                            get_channels=lambda: tuple(app.style.channels), get_zone_source=lambda: app.zone_source)
             film.attach(app.bus)
+            app.actuators.voice.on_sentence = film.on_speak
             film.start(take=film_take, forced_zone=force_zone, base=base or "sim")
             sim.say(f"  film: logging events to {film.path}")
         if record_path:

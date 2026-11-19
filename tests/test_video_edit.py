@@ -117,6 +117,18 @@ class StoryboardTest(unittest.TestCase):
         self.assertEqual(texts, ["Stuart: Hello! My name is Stuart.", "Stuart: Thanks! Cosmos is returned."])
         self.assertEqual(segs[0].captions[0][0], 1.0)                             # reply at 2.0 s, the clip starts at 1.0 s
 
+    def test_spoken_sentences_are_captioned_when_they_play(self):
+        take = self.dir / "rec" / "common1"
+        with (take / "events.jsonl").open("a") as f:
+            f.write(json.dumps({"t": START + 2.2, "type": "speak", "text": "Hello!", "seconds": 0.8}) + "\n")
+            f.write(json.dumps({"t": START + 3.1, "type": "speak", "text": "My name is Stuart.", "seconds": 1.5}) + "\n")
+        _, segs = self.board("""
+            segments:
+              - {type: clip, take: common1, source: face, in: 2, out: 5, auto_captions: true}
+        """)
+        self.assertEqual([(round(a, 2), round(b, 2), t) for a, b, t in segs[0].captions],
+                         [(0.2, 1.1, "Stuart: Hello!"), (1.1, 2.9, "Stuart: My name is Stuart.")])   # replies are not captioned twice
+
     def test_quiet_zone_answers_are_captioned_as_shown_not_heard(self):
         _, segs = self.board("""
             segments:

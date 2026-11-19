@@ -27,8 +27,13 @@ class Bus:
         self._subs: list[tuple[type, Handler]] = []
         self.errors: list[tuple[Any, Handler, BaseException]] = []   # kept for inspection and tests
 
-    def subscribe(self, event_type: type, handler: Handler) -> None:
-        self._subs.append((event_type, handler))
+    def subscribe(self, event_type: type, handler: Handler, first: bool = False) -> None:
+        """Handlers run in the order they subscribed. first=True puts this one before all the others (a recorder that must see
+        an event when it happens, not after the dialogue has spent seconds speaking about it)."""
+        if first:
+            self._subs.insert(0, (event_type, handler))
+        else:
+            self._subs.append((event_type, handler))
 
     def unsubscribe(self, event_type: type, handler: Handler) -> None:
         if (event_type, handler) in self._subs:

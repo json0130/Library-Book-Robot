@@ -9,7 +9,8 @@ without those flags the robot behaves exactly as before.
     FrameRecorder  writes the camera frames the camera feed already draws (faces boxed) to an mp4 at a steady frame rate,
                    so the webcam is not opened twice.
 
-Event types: person_detected, greeting, speech_in, reply (text, channel speech|screen), screen_text (what a quiet zone shows
+Event types: person_detected, greeting, speech_in, reply (text, channel speech|screen), speak (a sentence as it starts playing, with
+its length: the captions' timing), screen_text (what a quiet zone shows
 instead of saying it), rfid_read (title: the book on the pad was identified; the prototype reads it by camera today, RFID in the
 final design), zone (quiet|common, and what decided it), goal_sent, goal_reached, goal_failed, unload, sound_level (dB or dBFS,
 from the base), state (each state entered), start and stop.
@@ -58,6 +59,7 @@ class FilmLog:
         self._zone: Optional[str] = None
         self._last_sound = -1e9
         self._last_screen = ""
+        self._last_state = ""
 
     # ---- writing ----
     def write(self, kind: str, **fields) -> dict:
@@ -87,7 +89,11 @@ class FilmLog:
 
     # ---- the bus ----
     def attach(self, bus) -> None:
-        bus.subscribe(object, self.on_event)
+        bus.subscribe(object, self.on_event, first=True)              # see each event when it happens, before anyone handles it
+
+    def on_speak(self, text: str, seconds: float) -> None:
+        """Voice.on_sentence: a sentence starts playing through the speaker now and lasts `seconds` (the captions use this)."""
+        self.write("speak", text=text, seconds=round(seconds, 2), zone=self.get_zone())
 
     def on_event(self, event) -> None:
         try:
@@ -101,8 +107,9 @@ class FilmLog:
         elif isinstance(event, StateEntered):
             leaf = event.state_path.rsplit(".", 1)[-1]
             self.write("state", state=event.state_path, zone=event.zone)
-            if leaf == "GREET":
+            if leaf == "GREET" and self._last_state != event.state_path:      # the state is re-announced while in it: once
                 self.write("greeting", zone=event.zone, text=event.text or None)
+            self._last_state = event.state_path
         elif isinstance(event, UserUtterance):
             self.write("speech_in", text=event.text, source=event.source)
         elif isinstance(event, UserChoice):

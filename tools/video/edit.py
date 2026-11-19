@@ -268,9 +268,14 @@ def auto_captions(pane: Pane, quiet: bool) -> list:
     if pane.take is None:
         return []
     caps = []
+    per_sentence = any(e.get("type") == "speak" for e in pane.take.events)   # timed to the audio, one caption per sentence
     for e in pane.take.events:
         kind = e.get("type")
-        if kind == "reply" and e.get("channel") == "speech":
+        if kind == "speak":
+            text = f"Stuart: {e.get('text', '')}"
+        elif kind == "reply" and e.get("channel") == "speech":
+            if per_sentence:
+                continue
             text = f"Stuart: {e.get('text', '')}"
         elif (kind == "reply" and e.get("channel") == "screen") or (kind == "screen_text" and quiet):
             text = f"Stuart: {QUIET_CAPTION}"         # read on the screen, not heard: the screen in the video shows the words
@@ -278,8 +283,11 @@ def auto_captions(pane: Pane, quiet: bool) -> list:
             continue
         t = pane.file_time_to_out(float(e["t"]))
         if t is not None:
-            words = len(str(e.get("text", "")).split())
-            caps.append([t, t + min(7.0, max(2.0, 0.4 * words + 1.0)), text])
+            if kind == "speak" and e.get("seconds"):
+                length = max(1.2, float(e["seconds"]) / pane.speed + 0.3)
+            else:
+                length = min(7.0, max(2.0, 0.4 * len(str(e.get("text", "")).split()) + 1.0))
+            caps.append([t, t + length, text])
     caps.sort()
     merged = []                                         # the same "(shown on screen...)" twice in a row is one caption
     for c in caps:

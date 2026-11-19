@@ -38,6 +38,17 @@ def split_first(sentences: list) -> list:
     return sentences
 
 
+def wav_seconds(wav: bytes) -> float:
+    """How long a WAV plays (0 if it cannot be read)."""
+    import io
+    import wave
+    try:
+        with wave.open(io.BytesIO(wav)) as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except (wave.Error, EOFError):
+        return 0.0
+
+
 class Voice:
     def __init__(self, audio, synthesize: Optional[Callable[[str], bytes]] = None, face=None,
                  whisper_volume: float = 0.35, cache_dir: Optional[Path] = None, cache_tag: str = "",
@@ -51,6 +62,7 @@ class Voice:
         self.cache_dir = Path(cache_dir) if cache_dir else None     # the fixed lines also kept on disk: instant after a restart
         self.cache_tag = cache_tag                  # voice and shaping: a changed voice does not reuse old speech
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts")
+        self.on_sentence: Optional[Callable[[str, float], None]] = None   # film mode: told (text, seconds) as each sentence starts playing
 
     def _speaking(self, speaking: bool) -> None:
         if self.on_speaking is None:
@@ -155,6 +167,11 @@ class Voice:
                 if not started:
                     started = True
                     self._speaking(True)
+                if self.on_sentence is not None:
+                    try:
+                        self.on_sentence(sentences[i], wav_seconds(wav))
+                    except Exception as exc:                        # a recorder must never stop the robot speaking
+                        log.warning("on_sentence failed (%s)", exc)
                 try:
                     self.audio.play(wav, volume)
                 except (OSError, subprocess.SubprocessError) as exc:
