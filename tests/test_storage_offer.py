@@ -31,7 +31,7 @@ class OfferTest(unittest.TestCase):
                     app, book = with_stored(zone)
                     run(app, UserUtterance(ask.format(t=book.title)))
                     said = " ".join(app.said)
-                    self.assertIn(f"I have {book.title} in my storage, in slot {book.slot}. Would you like it?", said)
+                    self.assertIn(f"I have {book.title} in my storage, in slot {book.slot + 1}. Would you like it?", said)
                     self.assertNotIn("guide you", said)
                     self.assertEqual(app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
                     self.assertEqual(app.said[-1].count("anything else"), 0)          # the question is asked once
@@ -42,7 +42,7 @@ class OfferTest(unittest.TestCase):
                 app, book = with_stored()
                 run(app, UserUtterance(f"where is {book.title}"))
                 run(app, UserUtterance(yes))
-                self.assertIn(f"{book.title} is in slot {book.slot}", " ".join(app.said))
+                self.assertIn(f"{book.title} is in slot {book.slot + 1}", " ".join(app.said))
                 self.assertIsNone(app.dialogue.storage.slot_of(book.isbn))          # it left the ring
                 self.assertIn({"slot": book.slot}, sent(app, "ring"))
                 self.assertIn({"slot": book.slot, "on": True}, sent(app, "slot_light"))

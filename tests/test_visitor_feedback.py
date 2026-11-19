@@ -307,7 +307,7 @@ class ChangedMindAfterBeingHandedABookTest(unittest.TestCase):
                 run(app, UserUtterance(phrase))
                 self.assertEqual(app.dialogue.storage.slot_of(book.isbn), book.slot)    # and back in it, in the same slot
                 said = " ".join(app.said[-2:])
-                self.assertIn(f"put {book.title} back in slot {book.slot}", said)
+                self.assertIn(f"put {book.title} back in slot {book.slot + 1}", said)
                 self.assertNotIn("is empty", said)
 
     def test_the_screen_shows_the_book_with_returned_on_it(self):
@@ -319,7 +319,7 @@ class ChangedMindAfterBeingHandedABookTest(unittest.TestCase):
                 card = last(app, "book_card")
                 self.assertEqual(card.payload["title"], book.title)
                 self.assertTrue(card.payload["badge"].startswith("\u2713 Returned"), card.payload["badge"])
-                self.assertIn(f"slot {book.slot}", card.payload["badge"])
+                self.assertIn(f"slot {book.slot + 1}", card.payload["badge"])
                 self.assertGreater(len(app.screens), n)
 
     def test_what_a_quiet_zone_reads_is_the_new_reply_not_the_old_one(self):
@@ -333,7 +333,7 @@ class ChangedMindAfterBeingHandedABookTest(unittest.TestCase):
     def test_it_now_says_it_holds_the_book_again(self):
         app, book = self.handed_over()
         run(app, UserUtterance("nvm i dont need it"), UserUtterance("which book are you holding?"))
-        self.assertIn(f"{book.title} in slot {book.slot}", " ".join(app.said[-3:]))
+        self.assertIn(f"{book.title} in slot {book.slot + 1}", " ".join(app.said[-3:]))
 
     def test_saying_it_twice_is_not_a_second_return(self):
         app, book = self.handed_over()

@@ -26,6 +26,11 @@ from typing import Optional
 log = logging.getLogger("robot.storage")
 
 
+def shown_slot(slot) -> int:
+    """The slot number a visitor sees and hears: counted from 1 (slots are 0..n-1 in the code and the storage file)."""
+    return int(slot) + 1
+
+
 @dataclass
 class StoredBook:
     isbn: str

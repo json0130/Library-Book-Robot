@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, Optional
 
 from robot.services.routing import length as routing_length
+from robot.core.storage import shown_slot
 from robot.events import (ThinkingEnded, ThinkingStarted, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, LocationResolved,
                           NavigationRequested, RecommendationsReady, ReturningProgress, ScreenUpdate, StateEntered,
                           StoringBook, UserChoice, UserUtterance)
@@ -349,7 +350,7 @@ class ScreenComposer:
         self.storing = event
         card = self.book_card(event.isbn)
         if card is not None:
-            card.badge = f"\u2713 Returned \u00b7 storage slot {event.slot}"     # what stays on screen once the pad has dropped it
+            card.badge = f"\u2713 Returned \u00b7 storage slot {shown_slot(event.slot)}"     # what stays on screen once the pad has dropped it
             card.buttons = []                           # they handed it in: nothing to ask about it
             self.set_content("book_card", card)
 
@@ -435,9 +436,14 @@ class ScreenComposer:
             return "status", StatusPayload(heading, destination, p.books_left if p else 0, detail)
         if leaf == "SCAN":
             return "face", FacePayload("Reading the book…" if self.zone == "quiet" else "")
+        style = self.get_style()
+        if style is not None and not getattr(style, "screen_content", True) and not self.repair:
+            # a style whose screen shows only the face (the common area: the speech carries everything); the repair buttons,
+            # the returning trip's status and the face states above still show
+            return "face", FacePayload("")
         if leaf == "STORE" and self.storing is not None:
             card = self.book_card(self.storing.isbn) or BookCardPayload(self.storing.isbn, self.storing.title)
-            card.badge, card.buttons = f"Storage slot {self.storing.slot}", []
+            card.badge, card.buttons = f"Storage slot {shown_slot(self.storing.slot)}", []
             return "book_card", card
         if self.repair and self.choices and leaf in ("OFFER", "AWAIT_BOOK", "ANYTHING_ELSE"):
             return "options", OptionsPayload(self.text if self.zone == "quiet" else "You can tap:", [dict(o) for o in self.choices])

@@ -399,7 +399,7 @@ class ScreenTest(unittest.TestCase):
             self.assertEqual(update.zone, "quiet")
             self.assertIn(update.layout, ("full_face", "split"))
         store = next(u for u in app.screens if u.state_path == "ENGAGED.STORE")
-        self.assertIn("storage slot 4", store.text)
+        self.assertIn("storage slot 5", store.text)
 
     def test_buttons_are_offered_in_a_quiet_zone_only(self):
         quiet, common = new_app("quiet"), new_app("common")
@@ -753,7 +753,7 @@ class KnowsItsStorageTest(unittest.TestCase):
             run(app, UserUtterance(question))
             answer = " ".join(app.said[-2:])
             self.assertIn("1 returned book", answer, question)
-            self.assertIn("The Martian in slot 4", answer, question)
+            self.assertIn("The Martian in slot 5", answer, question)
             self.assertIn("shelf 2-SF-C", answer, question)
 
     def test_with_a_book_on_the_pad_it_says_so_too(self):
@@ -863,7 +863,7 @@ class RecommendationFallbacksTest(unittest.TestCase):
         self.assertEqual(app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
         card = app.screens[-1]
         self.assertEqual((card.view, card.payload["title"], card.payload["badge"]),
-                         ("book_card", "The Great Gatsby", "\u2713 Returned \u00b7 storage slot 1"))   # says the return worked
+                         ("book_card", "The Great Gatsby", "\u2713 Returned \u00b7 storage slot 2"))   # says the return worked
         self.assertEqual(card.payload["buttons"], [])                               # handed in: nothing to ask about it
 
 

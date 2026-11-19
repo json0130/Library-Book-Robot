@@ -53,7 +53,7 @@ from typing import Awaitable, Callable, Optional
 from robot.config import (ENGAGEMENT_DEFAULTS, INTENT_DEFAULTS, RETURNING_DEFAULTS, SCREEN_DEFAULTS, STORAGE_DEFAULTS,
                           TIMEOUTS_DEFAULTS)
 from robot.core.fsm import Event, History, Machine, MachineSpec, Previous, StateDef, Timer, Transition
-from robot.core.storage import ShelfStop, Storage, StoredBook
+from robot.core.storage import ShelfStop, Storage, StoredBook, shown_slot
 from robot.events import (ThinkingEnded, ThinkingStarted, BookDropped, BookFocused, BookIdentified, BookPlaced, ChoicesOffered, ExpressionRequested,
                           LinkDown, LinkUp, LocationResolved, NavArrived, NavCancelled, NavFailed, NavigationRequested, PoseUpdated, PersonEngaged, PersonLeft, PersonNearbyBusy,
                           RecommendationsReady, ReplySentence, ReturningProgress, ScanFailed, StateEntered,
@@ -821,7 +821,7 @@ class Dialogue:
             await self.publish(BookFocused(stored.isbn, "ask"))
         self.session.expect = expect_lend(stored.isbn)
         self.session.last_action = "choose"                           # the question is asked: no generic one after it
-        await self.say(f"I have {stored.title or 'that book'} in my storage, in slot {stored.slot}. Would you like it?", "happy")
+        await self.say(f"I have {stored.title or 'that book'} in my storage, in slot {shown_slot(stored.slot)}. Would you like it?", "happy")
 
     async def changed_mind(self) -> None:
         """The visitor was handed a book from the storage ring and now says they do not want it ("nvm, you can have it"). It
@@ -840,7 +840,7 @@ class Dialogue:
             self.lent_slot = slot
             if self.publish is not None and self.finder is not None and self.finder.catalog.lookup(book.isbn) is not None:
                 await self.publish(StoringBook(book.isbn, book.title or "", slot))       # the card, with "Returned", on the screen
-            await self.say(f"No problem. Please put {book.title or 'it'} back in slot {slot}, it's lit up on my ring. "
+            await self.say(f"No problem. Please put {book.title or 'it'} back in slot {shown_slot(slot)}, it's lit up on my ring. "
                            "I'll keep it there.", "happy")
         self.session.expect = expect_anything_else()
         await self.say("Is there anything else I can help with?", "neutral")
@@ -860,7 +860,7 @@ class Dialogue:
             self.out.ring.light_slot(slot, True)
             self.lent_slot, self.lent_book = slot, stored
             self._screen_text = ""                                    # (nothing changes state here: start the screen text afresh)
-            await self.say(f"Here you go: {stored.title or 'your book'} is in slot {stored.slot}, lit up on my ring. "
+            await self.say(f"Here you go: {stored.title or 'your book'} is in slot {shown_slot(stored.slot)}, lit up on my ring. "
                            "Please take it from there.", "happy")
         elif found.answer == "yes":
             await self.say("Sorry, that book is not in my storage any more. The help desk can help.", "neutral")
@@ -1200,7 +1200,7 @@ class Dialogue:
         self._stored = True
         self.session.handed_in.add(book.isbn)
         title = book.title or "this book"
-        parts = [f"Done: {title} is in storage slot {slot}."]     # where it belongs is the robot's business
+        parts = [f"Done: {title} is in storage slot {shown_slot(slot)}."]     # where it belongs is the robot's business
         self.guide_target = None                         # they handed it in: no "shall I guide you to it?"
         self.session.last_action = "return"
         self.session.book = None                         # the pad is empty now
@@ -1404,7 +1404,7 @@ class Dialogue:
             log.warning("slot %s is outside the storage ring", slot)
         if self.out.pad is not None:
             self.out.pad.vibrate()
-        await self.say(f"Thank you for returning {title}. I'm putting it in storage slot {slot}.", "happy")
+        await self.say(f"Thank you for returning {title}. I'm putting it in storage slot {shown_slot(slot)}.", "happy")
 
     def exit_store(self, event) -> None:
         """Leaving STORE: if the book was never dropped, give the slot back; the slot light goes off either way."""
@@ -1824,7 +1824,7 @@ class Dialogue:
         if not books:
             stored = f"My storage is empty right now, so I'm not holding any returned books.{on_pad}"
         else:
-            names = [f"{b.title or 'a book'} in slot {b.slot}" for b in books]
+            names = [f"{b.title or 'a book'} in slot {shown_slot(b.slot)}" for b in books]
             where = "; ".join(f"{b.title} goes back to shelf {b.shelf}" for b in books if b.shelf and b.title)
             many = f"{len(books)} returned books" if len(books) > 1 else "1 returned book"
             stored = (f"I'm holding {many} in my storage: {join_names(names)}. "

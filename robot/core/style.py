@@ -33,6 +33,7 @@ class StyleVector:
     speed_limit: float = 0.3
     recommendations: int = 1            # how many books a recommendation names: one in a quiet place, up to three out loud
     touch_buttons: bool = True          # offer and "anything else" show option buttons on the screen (quiet zones)
+    screen_content: bool = True         # book cards, lists, maps and buttons on the screen; False: only the face (speech carries it)
     name: str = field(default="default", compare=False)   # which table entry produced it
 
     def as_dict(self) -> dict:
@@ -45,7 +46,8 @@ class StyleVector:
                 f"light={self.light_color}@{self.brightness:g} eyes={self.eye_expression} "
                 f"neck={self.neck_pose} screen={self.screen_layout} "
                 f"proactive={'yes' if self.proactive else 'no'} speed<={self.speed_limit:g}m/s "
-                f"recs={self.recommendations} buttons={'yes' if self.touch_buttons else 'no'}")
+                f"recs={self.recommendations} buttons={'yes' if self.touch_buttons else 'no'}"
+                + ("" if self.screen_content else " screen=face-only"))
 
 
 SAFE_DEFAULT = StyleVector()

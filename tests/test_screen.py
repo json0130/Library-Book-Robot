@@ -162,7 +162,7 @@ class ComposerMappingTest(unittest.TestCase):
         asyncio.run(c.on_storing(StoringBook(MARTIAN, "The Martian", 4)))
         update = enter(c, "ENGAGED.STORE")
         self.assertEqual((update.view, update.payload["badge"], update.payload["buttons"]),
-                         ("book_card", "Storage slot 4", []))
+                         ("book_card", "Storage slot 5", []))
 
     def test_returning_shows_the_status_with_the_books_left(self):
         for zone in ("common", "quiet"):

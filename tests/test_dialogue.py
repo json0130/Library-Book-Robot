@@ -217,7 +217,7 @@ class BookChoicesTest(unittest.TestCase):
         app = self.offer(isbn=MARTIAN)
         run(app, UserUtterance("return"))
         sent = app.actuators.ring.esp32.sent
-        self.assertIn("storage slot 4", app.said[-1])
+        self.assertIn("storage slot 5", app.said[-1])
         self.assertIn(("ring", {"slot": 4}), sent)                                  # the ring turns...
         self.assertIn(("slot_light", {"slot": 4, "on": True}), sent)                # ...the slot lights...
         self.assertIn("pad_vibrate", [c for c, _ in sent])                          # ...the pad pulses
@@ -225,7 +225,7 @@ class BookChoicesTest(unittest.TestCase):
         self.assertIsNone(app.dialogue.storage.slot_of(MARTIAN))                     # not stored until then
         run(app, BookDropped())
         said = " ".join(app.said)
-        self.assertIn("Done: The Martian is in storage slot 4.", said)
+        self.assertIn("Done: The Martian is in storage slot 5.", said)
         self.assertNotIn("It belongs", said)                                      # the shelf is not read out
         self.assertIn(("slot_light", {"slot": 4, "on": False}), sent)
         self.assertEqual(app.dialogue.storage.slot_of(MARTIAN), 4)
@@ -329,7 +329,7 @@ class BookChoicesTest(unittest.TestCase):
         app = self.offer(event=BookIdentified(isbn=MARTIAN, title="The Martian", slot=4, found_in_catalog=True))
         run(app, UserUtterance("return"), BookDropped())
         said = " ".join(app.said)
-        self.assertIn("storage slot 4", said)
+        self.assertIn("storage slot 5", said)
         self.assertNotIn("It belongs", said)
         self.assertIsNone(app.dialogue.guide_target)
         self.assertIn("Is there anything else", app.said[-1])
@@ -775,7 +775,7 @@ class BookChoicesTest(unittest.TestCase):
         app = self.offer(isbn=MARTIAN, llm=llm)
         run(app, UserUtterance("return"), BookDropped())
         self.assertEqual(llm.prompts, [])
-        self.assertIn("storage slot 4", " ".join(app.said))
+        self.assertIn("storage slot 5", " ".join(app.said))
 
     def test_books_outside_the_catalogue_never_go_to_the_llm(self):
         llm = StubClient()
