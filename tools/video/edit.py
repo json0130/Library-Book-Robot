@@ -2,6 +2,7 @@
 
     python tools/video/edit.py                         # the full render (1920x1080, 30 fps, libx264 CRF 20, AAC)
     python tools/video/edit.py --preview               # quick, 480p: check the cut
+    python tools/video/edit.py --ai-voice              # the same cut narrated by the TTS only (your recordings are left alone) -> *_ai_voice.mp4
     python tools/video/edit.py --stills 95,130         # also export those seconds of the result as PNGs (paper figures)
     python tools/video/edit.py --plan                  # print the segments and their timing, render nothing
     python tools/video/edit.py --storyboard other.yaml
@@ -33,6 +34,7 @@ Storyboard (YAML)
         text: "Libraries have quiet zones ..."   # a large line of text over the picture
         captions: [{at: 1.0, dur: 3, text: "Stuart: Hello!"}]   # seconds from the segment's start
         auto_captions: true                  # also caption every word Stuart says, from the take's events.jsonl
+        caption_at: top                      # captions under the badges at the top instead of the bottom (a picture that fills the bottom)
         sound_meter: true                    # a dB meter from the take's sound_level events
         audio: keep                          # keep | mute (default: keep at speed 1)
         vo: "the voiceover line said over this segment"
@@ -696,12 +698,15 @@ def write_ass(path: Path, seg: Segment, size=(W, H)) -> Optional[Path]:
              "StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
              f"Style: Cap,DejaVu Sans,{int(44 * k)},&H00FFFFFF,&H00FFFFFF,&H64101610,&H64101610,0,0,0,0,100,100,0,0,3,{int(14 * k)},0,2,"
              f"{int(160 * k)},{int(160 * k)},{int(56 * k)},1",
+             f"Style: CapTop,DejaVu Sans,{int(44 * k)},&H00FFFFFF,&H00FFFFFF,&H64101610,&H64101610,0,0,0,0,100,100,0,0,3,{int(14 * k)},0,8,"
+             f"{int(60 * k)},{int(60 * k)},{int(112 * k)},1",
              f"Style: Meter,DejaVu Sans,{int(34 * k)},&H00FFFFFF,&H00FFFFFF,&H00000000,&HA0101610,1,0,0,0,100,100,0,0,3,{int(10 * k)},0,9,"
              f"{int(40 * k)},{int(40 * k)},{int(200 * k)},1",
              f"Style: Bar,DejaVu Sans,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1", "",
              "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     for start, end, text in seg.captions:
-        lines.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Cap,,0,0,0,,{ass_escape(text)}")
+        style = "CapTop" if seg.spec.get("caption_at") == "top" else "Cap"
+        lines.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{ass_escape(text)}")
     pts = sorted(seg.meter)
     for i, (t, db, unit) in enumerate(pts):
         end = pts[i + 1][0] if i + 1 < len(pts) else seg.duration
@@ -859,8 +864,8 @@ def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path =
         graph = pane_video_filter(0, seg.panes[0], w, h, seg.duration)
         graph += f";[v0][{n}:v]overlay=0:0[o]"
         if inset_index is not None:
-            pw = probe(work / f"{seg.name}-inset.mp4")["width"]
-            x, y = inset_position(seg, q, pw, badge_count(seg))
+            info = probe(work / f"{seg.name}-inset.mp4")
+            x, y = inset_position(seg, q, info["width"], badge_count(seg), info["height"])
             graph += (f";[{inset_index}:v]setpts=PTS-STARTPTS+{seg.inset_at:.3f}/TB[pop];"
                       f"[o][pop]overlay={x}:{y}:eof_action=pass[o]")
         audio = pane_audio_filter(0, seg.panes[0], seg.duration, keep)
@@ -919,11 +924,14 @@ def inset_panel(seg: Segment, work: Path, q: Quality) -> Path:
     return out
 
 
-def inset_position(seg: Segment, q: Quality, panel_w: int, right_badges: int) -> tuple:
-    """x, y of the pop-up: the top right corner, under the badges (each is 70 px of a 1080p frame)."""
+def inset_position(seg: Segment, q: Quality, panel_w: int, right_badges: int, panel_h: int = 0) -> tuple:
+    """x, y of the pop-up: the top right corner under the badges (each is 70 px of a 1080p frame), or `corner: bottom-left` (above the
+    captions' side margin, for a picture whose right side must stay visible)."""
     k = q.size[1] / H
     spec = seg.spec["inset"]
     margin = int(36 * k)
+    if spec.get("corner") == "bottom-left":
+        return margin, q.size[1] - panel_h - int(spec.get("bottom", 36) * k)
     below = int((32 + 70 * right_badges + 10) * k)
     return q.size[0] - panel_w - margin, int(spec.get("top", 0) * k) or below
 
@@ -980,6 +988,9 @@ def vo_slots(segments) -> dict:
     return {i: (starts[voiced[k + 1]] if k + 1 < len(voiced) else total) - starts[i] for k, i in enumerate(voiced)}
 
 
+USE_RECORDINGS = True        # False (--ai-voice): the narration is always the TTS, whatever you recorded
+
+
 def find_recording(folder: Path, name: str) -> Optional[Path]:
     """video/voiceover/<segment id>.wav (or .m4a, .mp3 ...): a line you recorded yourself."""
     for ext in VOICE_EXTS:
@@ -1013,7 +1024,7 @@ def build_voiceover(segments, path: Path, total: float, root: Path = ROOT, cfg: 
         if not s.vo:
             continue
         name = s.spec.get("id") or s.name
-        line = find_recording(rec_dir, name)
+        line = find_recording(rec_dir, name) if USE_RECORDINGS else None
         source = "recorded"
         if line is None:
             line, source = tts_cached(s.vo, tts_dir, name), "tts"
@@ -1099,6 +1110,8 @@ def render(storyboard: Path, preview: bool = False, stills=(), out=sys.stdout, r
     q = Quality.preview() if preview else Quality()
     final = Path(settings["output"])
     final = final if final.is_absolute() else root / final
+    if not USE_RECORDINGS:
+        final = final.with_name(final.stem + "_ai_voice" + final.suffix)
     if preview:
         final = final.with_name(final.stem + "_preview" + final.suffix)
     final.parent.mkdir(parents=True, exist_ok=True)
@@ -1146,8 +1159,12 @@ def main(argv=None) -> int:
     p.add_argument("--preview", action="store_true", help="fast 480p render")
     p.add_argument("--stills", default="", help="comma-separated seconds of the result to export as PNGs")
     p.add_argument("--plan", action="store_true", help="only print the segments and their timing")
+    p.add_argument("--ai-voice", action="store_true",
+                   help="narrate with the TTS only, ignoring video/voiceover/*.wav; writes <output>_ai_voice.mp4 beside the real-voice one")
     p.add_argument("--keep-work", action="store_true", help="keep the rendered segments (for debugging)")
     args = p.parse_args(argv)
+    global USE_RECORDINGS
+    USE_RECORDINGS = not args.ai_voice
     try:
         if args.plan:
             settings, segments = load_storyboard(Path(args.storyboard))

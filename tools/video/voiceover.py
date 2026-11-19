@@ -90,6 +90,20 @@ def pick_mic(fragment) -> str:
     return subprocess.run(["pactl", "get-default-source"], capture_output=True, text=True).stdout.strip() or sources[0]
 
 
+def peak_db(path: Path):
+    """The loudest sample of a recording in dB (-91 is digital silence), or None if it cannot be read."""
+    import re
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path), "-af", "volumedetect", "-vn", "-f", "null", "-"], capture_output=True, text=True).stderr
+    hit = re.search(r"max_volume: (-?[\d.]+|-inf) dB", out)
+    return None if not hit else (-91.0 if hit.group(1) == "-inf" else float(hit.group(1)))
+
+
+def silent(path: Path, floor: float = -50.0) -> bool:
+    """True if nothing was recorded (a microphone with nothing plugged in gives a perfectly silent file)."""
+    peak = peak_db(path)
+    return peak is None or peak < floor
+
+
 def record_one(path: Path, mic: str, seconds: float = 0.0) -> float:
     """Record 48 kHz mono WAV from the microphone until Enter (or for `seconds`); returns its length."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,7 +188,7 @@ def main(argv=None) -> int:
         return 0
     mic = pick_mic(args.mic)
     todo = [r for r in rows if (not args.only or r["id"] in args.only) and (args.redo or args.only or not r["recorded"])]
-    print(f"microphone: {mic}\n{len(todo)} line(s) to record. Speak at a calm pace; each file goes to {rec_dir}/<id>.wav\n")
+    print(f"microphone: {mic}   (another one: --mic <part of its name>; `list-mics` shows them)\n{len(todo)} line(s) to record. Speak at a calm pace; each file goes to {rec_dir}/<id>.wav\n")
     for n, r in enumerate(todo, 1):
         while True:
             print(f"[{n}/{len(todo)}] {r['id']}   starts {clock(r['start'])}, {r['slot']:.1f} s available (about {r['estimate']:.1f} s at a calm pace)")
@@ -187,6 +201,14 @@ def main(argv=None) -> int:
             length = record_one(target, mic, args.seconds)
             note = "" if length <= r["slot"] + 0.3 else f"  (longer than the {r['slot']:.1f} s it has: it will run into the next line)"
             print(f"    {length:.1f} s saved{note}")
+            if silent(target):
+                print(f"    NOTHING WAS HEARD from {mic}. This is not the microphone you speak into: `list-mics` shows them, then run again with "
+                      f"--mic <part of its name>, for example --mic MV_USB for the USB microphone.")
+                if args.seconds:
+                    break
+                if input("    Enter = record this line again, q = stop here: ").strip().lower() == "q":
+                    return 1
+                continue
             if args.seconds or input("    Enter = keep, r = record again: ").strip().lower() != "r":
                 break
     print("\nDone. Render with: python tools/video/edit.py --preview")

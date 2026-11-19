@@ -59,7 +59,7 @@ segments:
     image: video/assets/paper/cad_prototype.png
     fit: contain
     duration: 3.5
-    label: "CAD model of the prototype"
+    label: "Design V2 render"
 
   - id: robot-prototype
     type: photo
@@ -71,7 +71,7 @@ segments:
   - id: styles
     type: stills
     duration: 7
-    images: [video/assets/paper/fig6_common.png, video/assets/paper/fig6_quiet.png]
+    images: [video/assets/paper/fig6_common_v5.png, video/assets/paper/fig6_quiet_v5.png]
     labels: [Common area, Quiet zone]
     text: "The same task, two styles"
     vo: "It changes how it communicates, not what it does, depending on where it is."
@@ -119,10 +119,11 @@ segments:
     source: screen
     in: 17.9
     out: 29.0
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
+    caption_at: top
     badge: "Live view"
 
   - id: live-ask
@@ -132,10 +133,11 @@ segments:
     source: screen
     in: 29.0
     out: 33.8
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
+    caption_at: top
     badge: "Live view"
 
   - id: live-think
@@ -146,7 +148,7 @@ segments:
     in: 33.8
     out: 39.4
     speed: 3
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     badge: "Live view"
@@ -158,10 +160,11 @@ segments:
     source: screen
     in: 39.4
     out: 58.8
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
+    caption_at: top
     badge: "Live view"
 
   - id: live-wait
@@ -172,7 +175,7 @@ segments:
     in: 58.8
     out: 62.8
     speed: 4
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     badge: "Live view"
@@ -184,10 +187,11 @@ segments:
     source: screen
     in: 62.8
     out: 68.6
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
+    caption_at: top
     badge: "Live view"
 
   - id: live-place
@@ -198,7 +202,7 @@ segments:
     in: 68.6
     out: 72.0
     speed: 3
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     badge: "Live view"
@@ -210,12 +214,13 @@ segments:
     source: screen
     in: 72.0
     out: 83.4
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
+    caption_at: top
     badge: "Live view: the RFID reader reads the book"
-    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 0.7, width: 560,
+    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 0.7, width: 350, corner: bottom-left,
             label: "Loading the book (CAD simulation)"}
 
   - id: live-goodbye
@@ -225,10 +230,11 @@ segments:
     source: screen
     in: 83.4
     out: 91.9
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
+    caption_at: top
     badge: "Live view"
 
   # ---- Stuart takes the book to Fiction and heads back (18 Nov clips). The map next to each clip replays the real track of that drive
@@ -262,10 +268,11 @@ segments:
     in: 13.6
     out: 21.6
     speed: 2
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
     vo: "On the way, Stuart enters a quiet zone, which it knows from its sound map. Here it never calls out. It waits for someone to come to it, then greets them and answers in text on the screen, with no sound, so students nearby can keep working. Same task, different style."
 
@@ -277,10 +284,11 @@ segments:
     in: 21.6
     out: 31.3
     speed: 5
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
 
   - id: quiet-ask
@@ -290,10 +298,11 @@ segments:
     source: screen
     in: 31.3
     out: 38.5
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
 
   - id: quiet-read
@@ -304,10 +313,11 @@ segments:
     in: 38.5
     out: 43.3
     speed: 3
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
 
   - id: quiet-directions
@@ -317,10 +327,11 @@ segments:
     source: screen
     in: 43.3
     out: 48.5
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
 
   - id: quiet-pause
@@ -331,10 +342,11 @@ segments:
     in: 48.5
     out: 52.1
     speed: 3
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
 
   - id: quiet-thanks
@@ -344,10 +356,11 @@ segments:
     source: screen
     in: 52.1
     out: 56.0
-    crop: [84, 116, 1820, 930]
+    crop: [78, 172, 1252, 520]
     valign: bottom
     audio: mute
     auto_captions: true
+    caption_at: top
     badge: "Live view. Visitor's words typed by the operator"
 
   # ---- The end ----

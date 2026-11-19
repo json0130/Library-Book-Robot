@@ -326,3 +326,15 @@ class FilmMicTest(unittest.TestCase):
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", src, "-t", "1", str(d / f"{name}.wav")], check=True)
         self.assertGreater(film.sound_level(d / "tone.wav")[1], -30)
         self.assertLess(film.sound_level(d / "silence.wav")[1], -50)
+
+
+class SilentRecordingTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_a_microphone_that_heard_nothing_is_caught_at_once(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "1", str(d / "quiet.wav")], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=1", str(d / "voice.wav")], check=True)
+        self.assertTrue(voiceover.silent(d / "quiet.wav"))
+        self.assertFalse(voiceover.silent(d / "voice.wav"))
+        self.assertEqual(voiceover.peak_db(d / "quiet.wav"), -91.0)
