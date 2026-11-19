@@ -109,56 +109,69 @@ segments:
     subtitle: Stuart greets people and speaks
     vo: "In the common area, Stuart greets people and talks."
 
-  # The 20:47 run of 19 Nov (recordings/rfid2: the screen recording + the robot's session log). The visitor's words are spoken (the robot's
-  # microphone recognised them). Cut: after "Is there anything else I can help with?" (64.3 s) the book was read a second time and the
-  # robot asked about it again; the scene jumps to the visitor's goodbye (80.2 s). Slow stretches are sped up.
+  # The 11:31 run of 20 Nov (recordings/live3: the screen recording + the robot's session log + the REAL sound: Stuart's speaker and the
+  # microphone, recorded by tools/video/film.py as recordings/rfid3 and put under the picture by session_to_take.py --sound-take). The visitor
+  # and Stuart are heard as they were. Waits with nobody speaking are sped up (their sound is muted); every stretch with a voice plays at x1.
   - id: live-approach
     type: clip
     zone: common
-    take: rfid2
+    take: live3
     source: screen
-    in: 6.9
-    out: 17.8
+    in: 17.9
+    out: 29.0
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid2, source: audio}
+    voice: {take: live3, source: audio}
+    auto_captions: true
+    badge: "Live view"
+
+  - id: live-ask
+    type: clip
+    zone: common
+    take: live3
+    source: screen
+    in: 29.0
+    out: 33.8
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: live3, source: audio}
+    auto_captions: true
+    badge: "Live view"
+
+  - id: live-think
+    type: clip
+    zone: common
+    take: live3
+    source: screen
+    in: 33.8
+    out: 39.4
+    speed: 3
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    badge: "Live view"
+
+  - id: live-answer
+    type: clip
+    zone: common
+    take: live3
+    source: screen
+    in: 39.4
+    out: 58.8
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: live3, source: audio}
     auto_captions: true
     badge: "Live view"
 
   - id: live-wait
     type: clip
     zone: common
-    take: rfid2
+    take: live3
     source: screen
-    in: 17.8
-    out: 20.9
-    speed: 6
-    crop: [84, 116, 1820, 930]
-    valign: bottom
-    audio: mute
-    badge: "Live view"
-
-  - id: live-ask
-    type: clip
-    zone: common
-    take: rfid2
-    source: screen
-    in: 20.9
-    out: 42.4
-    crop: [84, 116, 1820, 930]
-    valign: bottom
-    voice: {take: rfid2, source: audio}
-    auto_captions: true
-    badge: "Live view"
-
-  - id: live-hold
-    type: clip
-    zone: common
-    take: rfid2
-    source: screen
-    in: 42.4
-    out: 44.6
-    speed: 5
+    in: 58.8
+    out: 62.8
+    speed: 4
     crop: [84, 116, 1820, 930]
     valign: bottom
     audio: mute
@@ -167,57 +180,54 @@ segments:
   - id: live-return
     type: clip
     zone: common
-    take: rfid2
+    take: live3
     source: screen
-    in: 44.6
-    out: 50.0
+    in: 62.8
+    out: 68.6
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid2, source: audio}
+    voice: {take: live3, source: audio}
     auto_captions: true
     badge: "Live view"
 
   - id: live-place
     type: clip
     zone: common
-    take: rfid2
+    take: live3
     source: screen
-    in: 50.0
-    out: 53.0
+    in: 68.6
+    out: 72.0
     speed: 3
     crop: [84, 116, 1820, 930]
     valign: bottom
     audio: mute
     badge: "Live view"
 
-  # The CAD simulation of the lift taking a book out (video/footage/cad_book_retrieve_original.webm), played in reverse so the book
-  # goes in (tools/video/reverse.py: cropped to the 3D view, all 37.6 s, here at x4): a pop-up in the corner of the live scene, from the
-  # moment the reader has read the book. A real shot of the book being loaded can replace it later.
   - id: live-scan
     type: clip
     zone: common
-    take: rfid2
+    take: live3
     source: screen
-    in: 53.0
-    out: 64.3
+    in: 72.0
+    out: 83.4
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid2, source: audio}
+    voice: {take: live3, source: audio}
     auto_captions: true
     badge: "Live view: the RFID reader reads the book"
-    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 0.9, width: 560,
+    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 0.7, width: 560,
             label: "Loading the book (CAD simulation)"}
 
   - id: live-goodbye
     type: clip
     zone: common
-    take: rfid2
+    take: live3
     source: screen
-    in: 77.0
-    out: 84.5
+    in: 83.4
+    out: 91.9
     crop: [84, 116, 1820, 930]
     valign: bottom
-    voice: {take: rfid2, source: audio}
+    voice: {take: live3, source: audio}
     auto_captions: true
     badge: "Live view"
 
@@ -226,8 +236,8 @@ segments:
   # 18:29:06; the replays start at 18:27:35 and 18:28:38, so the second clip is the last 26 s of its drive.
   - id: trip-out
     type: split
-    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 4, label: "Stuart driving to Fiction"}
-    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 4, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 5, label: "Stuart driving to Fiction"}
+    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 5, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
@@ -235,8 +245,8 @@ segments:
 
   - id: trip-back
     type: split
-    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 4, label: "Back to its station"}
-    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 4, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 5, label: "Back to its station"}
+    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 5, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"

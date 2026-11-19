@@ -3,7 +3,7 @@
 The story, from the paper: **Stuart changes how it communicates by zone, not what it does.** Common area: it greets, speaks aloud, and the
 screen shows only its face. Quiet zone: it never starts, answers as text on the screen, and makes no sound.
 
-The cut is `video/storyboard.yaml` (174.0 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
+The cut is `video/storyboard.yaml` (176.8 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
 placeholder (a "Shot needed" card of the planned length). Drop a shot's file in place, render again, and nothing else changes.
 
 ## The cut, in order
@@ -16,24 +16,20 @@ placeholder (a "Shot needed" card of the planned length). Drop a shot's file in 
 | 0:27 | styles | the common-area and quiet-zone interaction | Fig. 6 of the paper, cropped | done |
 | 0:34 | system, parts | system diagram; the prototype photo with its parts named, and three close-ups: the LiDAR, the face screen, the RFID reader | drawn + your photos | done |
 | 0:52 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
-| 1:04 | common area | the live operator view (the webcam with the face found, Stuart's face, the state machine): a person walks up, Stuart greets and offers, the visitor asks about Dune (answered), then asks to return a book, the RFID reader reads Clean Code, Stuart confirms, and the visitor says goodbye. **When the book is read, a pop-up in the top right corner, "Loading the book (CAD simulation)", shows the whole CAD clip in reverse (x4, 9.4 s).** Slow stretches are sped up. **Cut:** after "Is there anything else I can help with?" the reader read the book a second time and Stuart asked about it again (64 s to 80 s of the recording): that part is left out and the scene jumps to the goodbye | **your screen recording of 19 Nov, 20:47** (`video/footage/common2_screencast.mp4`) + the robot's session log | done |
-| 1:59 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was (x4) | your 18 Nov clip + the replay of that drive's real track | done |
-| 2:20 | trip back | back to the station, same two views (the clip is the last 26 s of that drive, x4) | your 18 Nov clip + the real track | done |
+| 1:02 | common area | the live operator view (the webcam with the face found, Stuart's face, the state machine): a person walks up, Stuart greets and offers, the visitor asks about Dune (answered), then asks to return a book, the RFID reader reads Clean Code, Stuart confirms, and the visitor says goodbye. **With the real voices**: Stuart's speaker and the microphone, as heard. **When the book is read, a pop-up in the top right corner, "Loading the book (CAD simulation)", shows the whole CAD clip in reverse (x4, 9.4 s).** Waits with nobody speaking are sped up; every stretch with a voice plays at normal speed | **your screen recording of 20 Nov, 11:31** (`video/footage/common3_screencast.mp4`) + the robot's session log + the sound recorded by `film.py` (`recordings/rfid3`) | done |
+| 1:59 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was (x5) | your 18 Nov clip + the replay of that drive's real track | done |
+| 2:20 | trip back | back to the station, same two views (the clip is the last 26 s of that drive, x5) | your 18 Nov clip + the real track | done |
 | 2:28 | quiet zone | another person walks up; the face screen shows the greeting and the answers as text, nothing is said aloud: asks about Dune, asks to be shown the way, says thanks. Slow stretches are sped up | **your screen recording of 19 Nov, 21:06** (`video/footage/quiet2_screencast.mp4`) + the robot's session log | done |
 | 2:51 | end | "Stuart. A library robot that reads the room." and "CARES Lab, University of Auckland" | drawn | done |
 | 2:55 | thanks | "Thank you" | drawn | done |
 
 What is simulated or added, and says so on the frame (paper, section 5):
-- The common-area scene is a real run. The visitor's words there were **spoken** (the robot's microphone recognised them); in the quiet scene
-  they were **typed by the operator**, and the badge says so.
-- **Stuart's voice in the common scene is the TTS**, made again from the log's text, started where the log says he started each line (and
-  sped up a little if the TTS is slower than the robot's own voice was): the screen recording has no sound. The words and timing are the
-  robot's, the voice is not a recording of that run. The quiet scene is silent, as the robot was.
-- **The visitor's voice in the common scene**: the visitor spoke into the robot's microphone, but nothing of that sound was kept. Until you
-  record the three lines yourself (`python tools/video/voiceover.py visitor --take rfid2`) a **stand-in** is used: the TTS voice, pitched
-  up, ending 1 s before the log says the robot heard the line. A screen recording that has its own sound is never given a synthetic voice:
-  `session_to_take.py` uses that sound as it is.
-- The unloading shot is **left out** for now (the lift is not built); the narration does not mention it.
+- The common-area scene is a real run, with its **real sound**: Stuart's speaker (recorded from the sound card's monitor) and the microphone
+  (the visitor's voice, brought down 10 dB and turned down whenever Stuart speaks so his voice is not doubled by the room). Nothing is
+  synthesised there. The visitor's words were spoken; in the quiet scene they were **typed by the operator**, and the badge says so.
+  Caveats: the microphone clips on the visitor's loudest words (the input was too hot), and a line's caption follows when it was spoken, not
+  when the robot recognised it (the log is seconds later).
+- The quiet scene is silent, as the robot was.
 - The maps beside the drive clips replay the robot's real tracks from its session log on the real floor plan (a simulated robot following
   recorded poses; nothing drives). The CAD clip says "CAD simulation"; the drives started by an operator say so.
 
@@ -79,11 +75,11 @@ The TTS lines are kept in `video/voiceover_tts/`, and the first version of the w
 silent there.
 
 ## Already made, and how to redo it
-- **The common-area scene**: `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261119-204713.jsonl --video
-  video/footage/common2_screencast.mp4 --start 20:47:19.55 --take rfid2 --voice` (the local AI must be up for `--voice`: only its TTS is used, and `AI_HOST=127.0.0.1 AI_PORT=7898` points the robot's settings at it; without it the run now stops instead of silently making no sound, which is how the first cut of this scene came out silent). It
-  writes `recordings/rfid2/` (events, the video, Stuart's voice) from the robot's log and the screen recording; the editor crops it to the operator
-  page, speeds up the waits and leaves out 64.3 s to 77.0 s. It also writes `stuart.wav` (Stuart's lines), `visitor/standin_<n>.wav` and `audio.wav` (both mixed;
-  `--remix` makes it again after you record `visitor/<n>.wav`).
+- **The common-area scene**: `python tools/video/film.py record --take rfid3 --sources audio,mic --mic MV_USB` during the run, then
+  `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261120-113145.jsonl --video video/footage/common3_screencast.mp4
+  --start 11:31:39.55 --take live3 --sound-take rfid3 --visitor-starts 29.7,63.2,84.4` (the three numbers are when the visitor began each line, in
+  seconds of the picture, from listening to the microphone file: the log only knows when the words were recognised). It writes `recordings/live3/`
+  (events, the video, the sound); the editor crops it to the operator page. The 19 Nov take (`rfid2`, with a synthetic voice) is kept.
 - **The quiet scene**: `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261119-210607.jsonl --video
   video/footage/quiet2_screencast.mp4 --start 21:06:15.55 --take quiet4` (no `--voice`: the robot said nothing). The start time is the file name's
   time plus 0.55 s (a GNOME screencast begins that long after its name; checked against the first state change in the picture).

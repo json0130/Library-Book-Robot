@@ -15,12 +15,12 @@ if the footage changes: `python tools/video/voiceover.py cues --write` makes thi
 | 0:33.0 | `system.wav` | 8.5 s | 7.8 s | A Jetson handles the conversation and the screen. A TurtleBot base handles navigation and measures the sound level. |
 | 0:41.5 | `parts.wav` | 9.0 s | 9.6 s (tight) | Books are read by an RFID reader, obstacles are seen by a LiDAR, and Stuart's face is shown on a small screen. |
 | 0:50.5 | `maps.wav` | 12.0 s | 11.3 s | As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas. |
-| 1:02.5 | `common-card.wav` | 61.6 s | 3.9 s | In the common area, Stuart greets people and talks. |
-| 2:04.1 | `trip-out.wav` | 11.8 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
-| 2:15.8 | `trip-back.wav` | 6.6 s | 3.0 s | and then heads back to its station. |
-| 2:22.4 | `quiet.wav` | 25.0 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
-| 2:47.5 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
-| 2:51.5 | `thanks.wav` | 2.5 s | 0.9 s | Thank you. |
+| 1:02.5 | `common-card.wav` | 68.0 s | 3.9 s | In the common area, Stuart greets people and talks. |
+| 2:10.5 | `trip-out.wav` | 9.4 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
+| 2:19.9 | `trip-back.wav` | 5.3 s | 3.0 s | and then heads back to its station. |
+| 2:25.2 | `quiet.wav` | 25.0 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
+| 2:50.2 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
+| 2:54.2 | `thanks.wav` | 2.5 s | 0.9 s | Thank you. |
 
 ## The whole script
 

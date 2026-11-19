@@ -42,6 +42,7 @@ from tools.video import edit  # noqa: E402
 
 WORDS_PER_SECOND = 2.6          # a spoken line's length when it is not synthesised
 VISITOR_LAG = 1.0               # seconds between the visitor's last word and the log's UserUtterance (the recording stops, then it is transcribed)
+MIC_GAIN_DB = -10              # the microphone is much louder than the speaker recording (it is next to the visitor, and clips): brought down to match
 STAND_IN_PITCH = 1.22           # the stand-in for the visitor is the TTS voice raised by this factor, so it is not mistaken for Stuart
 
 
@@ -124,7 +125,15 @@ def mix_recorded_sound(sound: Path, take: Path, t0: float, duration: float, offs
         labels.append(f"[s{i}]")
     if not labels:
         raise SystemExit(f"recordings/{sound.name} has no audio.wav or mic.wav that recorded (see its meta.json)")
-    graph.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0,apad=whole_dur={duration:.3f}[out]")
+    if len(labels) == 2:
+        # The microphone also hears Stuart through the room, a little late: it would double his voice. Whenever Stuart's own speaker
+        # recording is loud, the microphone is turned down (sidechain), so Stuart is the clean speaker signal and the visitor is the microphone.
+        graph.append("[s0]asplit=2[stuart][key]")
+        graph.append(f"[s1]volume={MIC_GAIN_DB}dB[quiet]")
+        graph.append("[quiet][key]sidechaincompress=threshold=0.003:ratio=20:attack=5:release=250:makeup=1[visitor]")
+        graph.append(f"[stuart][visitor]amix=inputs=2:normalize=0,apad=whole_dur={duration:.3f}[out]")
+    else:
+        graph.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0,apad=whole_dur={duration:.3f}[out]")
     edit.run_ffmpeg([*inputs, "-filter_complex", ";".join(graph), "-map", "[out]", "-t", f"{duration:.3f}", str(take / "audio.wav")], "the recorded sound")
     meta_take = json.loads((take / "meta.json").read_text())
     meta_take["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None,
@@ -243,6 +252,8 @@ def main(argv=None) -> int:
     p.add_argument("--sound-take", help="recordings/<name>: sound recorded by `film.py record --sources audio,mic` during the run; it is "
                                         "put under the picture as it is (no TTS, no stand-in)")
     p.add_argument("--sound-offset", type=float, default=0.0, help="seconds to move that sound later (negative: earlier) if it is out of step")
+    p.add_argument("--visitor-starts", help="picture seconds at which the visitor began each spoken line, comma separated (with --sound-take): the log "
+                                            "only knows when the words were recognised, seconds after they were said, and the captions follow these times")
     p.add_argument("--source", default="screen", help="the name of the recording in the take (default %(default)s)")
     args = p.parse_args(argv)
     if args.remix:
@@ -258,6 +269,11 @@ def main(argv=None) -> int:
     take.mkdir(parents=True, exist_ok=True)
     shutil.copy(video, take / f"{args.source}.mp4")
     events, replies = events_from_log(rows, t0, t0 + info["duration"])
+    if args.visitor_starts:
+        starts = [float(x) for x in args.visitor_starts.split(",")]
+        spoken = [e for e in events if e["type"] == "speech_in" and e.get("source") == "mic"]
+        for e, at in zip(spoken, starts):
+            e["t"] = round(t0 + at, 3)
     meta = {"take": args.take, "start_time": t0, "clock": "time.time()", "from_log": str(args.log),
             "sources": {args.source: {"file": f"{args.source}.mp4", "started": t0, "error": None}}}
     pieces, speak = [], []
@@ -295,7 +311,7 @@ def main(argv=None) -> int:
         use_recorded_sound(video, take, t0)
         meta = json.loads((take / "meta.json").read_text())
     print(f"recordings/{args.take}/: {args.source}.mp4 ({info['duration']:.1f} s), {len(events)} events, {len(speak)} spoken line(s)"
-          + (", audio.wav (TTS voice)" if "audio" in meta["sources"] else ""))
+          + (", audio.wav" if "audio" in meta["sources"] else ""))
     for e in events:
         if e["type"] in ("person_detected", "speech_in", "speak", "rfid_read"):
             print(f"  {e['t'] - t0:6.1f}  {e['type']:16} {(e.get('text') or e.get('title') or '')[:80]}")
