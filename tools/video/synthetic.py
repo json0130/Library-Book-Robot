@@ -85,6 +85,7 @@ segments:
     speed: 4
     text: Libraries have quiet zones and lively zones.
     vo: Libraries are not one kind of space.
+    inset: {{src: {out}/phone.mp4, in: 1, out: 9, speed: 8, at: 0.5, width: 300, label: A pop-up}}
   - type: split
     zone: common
     left: {{take: common1, source: camera, in: "event:greeting-1s", out: "event:reply#2+3s", label: Robot}}

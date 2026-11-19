@@ -168,31 +168,23 @@ segments:
     audio: mute
     badge: "Live view. Visitor's words typed by the operator"
 
+  # The CAD simulation of the lift taking a book out (video/footage/cad_book_retrieve_original.webm), played in reverse so the book
+  # goes in (tools/video/reverse.py: cropped to the 3D view, all 37.6 s, here at x4): a pop-up in the corner of the live scene, from the
+  # moment the reader has read the book. A real shot of the book being loaded can replace it later.
   - id: live-scan
     type: clip
     zone: common
     take: rfid1
     source: screen
     in: 40.5
-    out: 51.6
+    out: 52.0
     crop: [84, 116, 1820, 930]
     valign: bottom
     voice: {take: rfid1, source: audio}
     auto_captions: true
     badge: "Live view: the RFID reader reads the book"
-
-  # The CAD simulation of the lift taking a book out (video/footage/cad_book_retrieve_original.webm), played in reverse so the book
-  # goes in: cropped to the 3D view, 10.4 s at normal speed. A real shot of the book being loaded can replace it later.
-  - id: loading
-    type: clip
-    src: video/footage/cad_book_return.mp4
-    in: 0
-    out: end
-    speed: 1
-    duration: 10.4
-    label: "Book stored (CAD simulation)"
-    badge: "CAD simulation"
-    placeholder: "Later: the returned book goes into the robot's storage (loading)"
+    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 1.6, width: 560,
+            label: "Loading the book (CAD simulation)"}
 
   # ---- Stuart takes the book to Fiction and heads back (18 Nov clips). The map next to each clip replays the real track of that drive
   # from the robot's session log (video/takes/trips_18nov.json), so the dot is where the robot was. The phone clips start at 18:27:36 and

@@ -228,6 +228,26 @@ class StoryboardTest(unittest.TestCase):
         settings, segs = self.board("segments:\n  - {type: photo, image: nothere.jpg, duration: 3, placeholder: a photo of a library}")
         self.assertEqual((segs[0].kind, settings["placeholders"][0][2]), ("title", "nothere.jpg"))        # a card, not an error
 
+    def test_inset_pop_up_on_a_clip(self):
+        settings, segs = self.board("""
+            segments:
+              - {type: clip, src: phone.mp4, in: 0, out: 20, duration: 12, inset: {src: phone.mp4, in: 0, out: 20, speed: 4, at: 3, label: CAD}}
+        """)
+        seg = segs[0]
+        self.assertEqual((seg.inset.duration, seg.inset_at), (5.0, 3.0))
+        self.assertEqual(settings["notes"], [])
+        _, segs = self.board("""
+            segments:
+              - {type: clip, src: phone.mp4, in: 0, out: 20, duration: 6, inset: {src: phone.mp4, in: 0, out: 20, speed: 1, at: 3}}
+        """)
+        self.assertEqual(segs[0].inset_at, 3.0)
+        for bad, word in (("{type: title, duration: 3, inset: {src: phone.mp4}}", "only goes on a clip"),
+                          ("{type: clip, src: phone.mp4, inset: {src: phone.mp4, at: 99}}", "outside the segment"),
+                          ("{type: clip, src: phone.mp4, inset: nope}", "must be a mapping")):
+            with self.assertRaises(StoryboardError) as cm:
+                self.board(f"segments:\n  - {bad}")
+            self.assertIn(word, str(cm.exception))
+
     def test_a_storyboard_over_three_minutes_is_refused_before_rendering(self):
         path = self.dir / "long.yaml"
         path.write_text("segments:\n" + "".join("  - {type: title, duration: 50, title: x}\n" for _ in range(4)))
@@ -289,6 +309,14 @@ class SyntheticRenderTest(unittest.TestCase):
                                       str(out)], capture_output=True, text=True).stdout
             self.assertIn("960,540,30/1", streams)
             self.assertTrue((out.parent / "stills" / "still_001.00s.png").exists())
+            # the clip starts at 4.0 s; its pop-up is there from 0.5 s to 1.5 s into it, in the top right corner, and gone before and after
+            from PIL import Image
+            import numpy as np
+            edit.export_stills(out, [4.2, 4.9, 5.8], out.parent / "inset")
+            corner = [np.asarray(Image.open(out.parent / "inset" / f"still_{t:06.2f}s.png").convert("L"), dtype=float)[60:260, -300:-20]
+                      for t in (4.2, 4.9, 5.8)]
+            self.assertGreater(np.abs(corner[1] - corner[0]).mean(), 8)
+            self.assertLess(np.abs(corner[2] - corner[0]).mean(), 8)
 
 
 if __name__ == "__main__":

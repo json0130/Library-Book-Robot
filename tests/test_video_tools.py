@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import math
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -203,3 +204,30 @@ class BuildVoiceoverTest(unittest.TestCase):
         self.assertAlmostEqual(edit.probe(out)["duration"], 8.0, delta=0.2)
         # the second line waited for the first (6.5 s long from 0.3 s) rather than speaking over it
         self.assertTrue(any("two:" in w and "late" in w for w in warnings), warnings)
+
+
+class ReverseClipTest(unittest.TestCase):
+    def test_piece_bounds_cover_the_clip(self):
+        from tools.video.reverse import piece_bounds
+        self.assertEqual(piece_bounds(10.0, 4.0), [(0.0, 4.0), (4.0, 4.0), (8.0, 2.0)])
+        self.assertEqual(piece_bounds(4.0, 4.0), [(0.0, 4.0)])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_the_clip_plays_backwards_in_pieces(self):
+        from tools.video.reverse import reverse_clip, duration
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d) / "a.mp4", Path(d) / "b.mp4"
+            # red for the first 2 s, then blue for 2 s: reversed it is blue first
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=64x48:r=30:d=2", "-f", "lavfi", "-i",
+                            "color=blue:s=64x48:r=30:d=2", "-filter_complex", "[0][1]concat=n=2:v=1:a=0", "-pix_fmt", "yuv420p", str(src)], check=True)
+            reverse_clip(src, dst, piece=1.5)
+            self.assertAlmostEqual(duration(dst), 4.0, delta=0.15)
+            def pixel(t):
+                raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(dst), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                                     capture_output=True).stdout
+                return raw[0], raw[2]                              # red, blue of the first pixel
+            r0, b0 = pixel(0.3)
+            r1, b1 = pixel(3.7)
+            self.assertGreater(b0, 150)
+            self.assertLess(r0, 100)
+            self.assertGreater(r1, 150)

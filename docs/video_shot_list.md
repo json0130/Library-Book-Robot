@@ -3,7 +3,7 @@
 The story, from the paper: **Stuart changes how it communicates by zone, not what it does.** Common area: it greets, speaks aloud, and the
 screen shows only its face. Quiet zone: it never starts, answers as text on the screen, and makes no sound.
 
-The cut is `video/storyboard.yaml` (176.8 s now). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
+The cut is `video/storyboard.yaml` (166.8 s now). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
 placeholder (a "Shot needed" card of the planned length). Drop a shot's file in place, render again, and nothing else changes.
 
 ## The cut, in order
@@ -14,15 +14,14 @@ placeholder (a "Shot needed" card of the planned length). Drop a shot's file in 
 | 0:13 | title | "Stuart" | drawn | done |
 | 0:17 | robot | "So we present Stuart, the library robot ...": concept (AI-generated), CAD model, CAD render, prototype | the paper's figures | done |
 | 0:27 | styles | the common-area and quiet-zone interaction | Fig. 6 of the paper, cropped | done |
-| 0:34 | system, parts | system diagram; the prototype photo with its parts named; the RFID reader photo | drawn + your photos | done |
+| 0:34 | system, parts | system diagram; the prototype photo with its parts named, and three close-ups: the LiDAR, the face screen, the RFID reader | drawn + your photos | done |
 | 0:52 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
-| 1:04 | common area | the live operator view: the webcam with the face found, Stuart's face, the state machine; a person walks up, Stuart greets, the request is typed, the RFID reader reads the book, Stuart confirms (the waits are sped up) | **your screen recording of 19 Nov** + the robot's session log | done |
-| 1:44 | loading | the book goes into the robot | your CAD simulation, played in reverse, normal speed (10.4 s) | done (a real shot can replace it) |
-| 1:55 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was | your 18 Nov clip + the replay of that drive's real track | done |
-| 2:13 | unload | the books go into the return tray | your clip, later | placeholder |
-| 2:18 | trip back | back to the station, same two views (the clip is the last 26 s of that drive) | your 18 Nov clip + the real track | done |
-| 2:27 | quiet zone | another person asks questions (no return): the robot's face with the answers as text, no sound | simulated visit; **the webcam half is a placeholder** | see below |
-| 2:53 | end | "Stuart. A library robot that reads the room." and "CARES Lab, University of Auckland" | drawn | done |
+| 1:04 | common area | the live operator view: the webcam with the face found, Stuart's face, the state machine; a person walks up, Stuart greets, the request is typed, the RFID reader reads the book, Stuart confirms (the waits are sped up). **When the book is read, a pop-up in the top right corner, "Loading the book (CAD simulation)", shows the whole CAD clip in reverse: the lift takes the book from the top and pushes it into the storage slot (x4, 9.4 s)** | **your screen recording of 19 Nov** + the robot's session log; the CAD simulation | done (the live scene will be re-filmed) |
+| 1:45 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was | your 18 Nov clip + the replay of that drive's real track | done |
+| 2:04 | unload | the books go into the return tray | your clip, later | placeholder |
+| 2:09 | trip back | back to the station, same two views (the clip is the last 26 s of that drive) | your 18 Nov clip + the real track | done |
+| 2:17 | quiet zone | another person asks questions (no return): the robot's face with the answers as text, no sound | simulated visit; **the webcam half is a placeholder** | see below |
+| 2:43 | end | "Stuart. A library robot that reads the room." and "CARES Lab, University of Auckland" | drawn | done |
 
 What is simulated or added, and says so on the frame (paper, section 5):
 - The common-area scene is a real run. The visitor's words are **typed by the operator** (speech recognition is not wired in): badge.
@@ -52,8 +51,11 @@ its name; check it against a state change you can see in both). Then in `video/s
 ### 2. The unload (later) - `video/footage/unload.mp4`, about 5 s
 At the Fiction return tray, the books go in (by hand: the lift is not built; the cut marks it "Operator-driven").
 
-### 3. Close-ups of the parts (optional) - `video/assets/parts/lidar.jpg`, `screen.jpg`
-The RFID reader photo (`rfid_reader.jpg`, the RC522 on its Arduino) is in. Then `python tools/video/make_assets.py`.
+### 3. Close-ups of the parts: done
+`video/assets/parts/` has `lidar.jpg`, `screen.jpg` and `rfid_reader.jpg` (the originals are in `video/footage/originals/`). To change one, replace the file and run `python tools/video/make_assets.py`.
+
+### The re-film of the common area
+When you film the common area again the pop-up comes with it: in `video/storyboard.yaml` the `live-scan` segment has an `inset:` (the CAD clip, `at:` = seconds into the segment when it appears, `speed`, `width`, `label`, `top:` to move it down). Point `in:`/`out:` of the segment at the new take (`take: ..., source: screen`) and set `at:` to when the reader has read the book (`python tools/video/session_to_take.py` prints the `rfid_read` time).
 
 ## The voiceover
 You record it; the TTS narration stays as the backup.
@@ -79,8 +81,10 @@ silent there.
   in the dell-link worktree); `python tools/video/sim_take.py nav --take nav2 --zone quiet --sources map --no-speak --no-llm --replay
   video/takes/trips_18nov.json` records the map page while a simulated base replays them. The phone clips start at 18:27:36 and 18:29:06.
 - **The simulated quiet visit**: `python tools/video/sim_take.py quiet --take quiet3 --zone quiet --no-llm` (`video/takes/quiet.txt`).
-- **The CAD clip**: `video/footage/cad_book_retrieve_original.webm` is your screen recording; `cad_book_return.mp4` is its last 10.4 s (the lift
-  taking the book out), cropped to the 3D view and reversed so the book goes in.
+- **The CAD clip**: `video/footage/cad_book_retrieve_original.webm` is your screen recording (37.6 s: the lift goes to the slot, pushes the book out, lifts it
+  to the top). `python tools/video/reverse.py video/footage/cad_book_retrieve_original.webm video/footage/cad_book_return_full.mp4 --crop 1060:924:640:222 --width 800`
+  cuts it to the 3D view and plays all of it backwards (in pieces, to spare memory): the book comes down from the top, is pushed into the slot and the
+  lift goes home. The first, shorter version (`cad_book_return.mp4`, only the last 10.4 s) is kept.
 - The services these use (a separate display page on 8775, the local AI on 7898) are the commands in `docs/local_ai.md` and `python -m
   display.server --port 8775 --host 127.0.0.1`.
 

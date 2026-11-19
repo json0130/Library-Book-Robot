@@ -219,6 +219,8 @@ class Segment:
     meter: list = field(default_factory=list)          # (time, dB) for the sound meter
     vo: str = ""
     voice: Optional[Pane] = None                        # the sound from another recording (film.py's audio.wav), lined up
+    inset: Optional[Pane] = None                        # a small pop-up clip in a corner of a clip segment (inset: in the storyboard)
+    inset_at: float = 0.0                               # seconds into the segment when the pop-up appears
 
     @property
     def name(self) -> str:
@@ -227,13 +229,15 @@ class Segment:
 
 def probe(path: Path) -> dict:
     """Duration and whether there is sound, from ffprobe."""
-    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", str(path)],
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", str(path)],
                          capture_output=True, text=True)
     if out.returncode != 0:
         raise StoryboardError(f"ffprobe cannot read {path}: {out.stderr.strip()[:200]}")
     data = json.loads(out.stdout or "{}")
     kinds = [s.get("codec_type") for s in data.get("streams", [])]
-    return {"duration": float((data.get("format") or {}).get("duration") or 0), "audio": "audio" in kinds, "video": "video" in kinds}
+    size = next(((s.get("width"), s.get("height")) for s in data.get("streams", []) if s.get("codec_type") == "video"), (None, None))
+    return {"duration": float((data.get("format") or {}).get("duration") or 0), "audio": "audio" in kinds, "video": "video" in kinds,
+            "width": size[0], "height": size[1]}
 
 
 def make_pane(spec: dict, where: str, probe_fn=probe, root: Path = ROOT, takes: Optional[dict] = None,
@@ -420,6 +424,18 @@ def load_storyboard(path: Path, probe_fn=probe, root: Path = ROOT, takes: Option
             src = seg.panes[1] if spec.get("captions_from") == "right" and len(seg.panes) > 1 else seg.panes[0]
             seg.captions += [c for c in auto_captions(src, quiet) if c[0] < seg.duration]
         seg.captions.sort()
+        if spec.get("inset"):
+            if kind != "clip":
+                raise StoryboardError(f"{where}: inset: only goes on a clip")
+            ispec = spec["inset"]
+            if not isinstance(ispec, dict):
+                raise StoryboardError(f"{where}: inset must be a mapping (src, in, out, speed, at, label ...)")
+            seg.inset = make_pane(ispec, f"{where} inset", probe_fn, root, takes, rec)
+            seg.inset_at = float(ispec.get("at", 0))
+            if not 0 <= seg.inset_at < seg.duration:
+                raise StoryboardError(f"{where}: inset at {seg.inset_at:g} s is outside the segment ({seg.duration:g} s)")
+            if seg.inset_at + seg.inset.duration > seg.duration + 0.05:
+                notes.append((i, spec.get("id") or where, f"the inset ({seg.inset.duration:.1f} s from {seg.inset_at:g} s) is cut off at the end of the segment ({seg.duration:g} s)"))
         if seg.panes and spec.get("voice"):
             seg.voice = voice_pane(spec["voice"], seg, f"{where} voice", probe_fn, takes, rec)
         if seg.panes and spec.get("sound_meter"):
@@ -557,6 +573,24 @@ def title_card(path: Path, title: str, subtitle: str = "", footer: str = "", siz
     return path
 
 
+def right_badges(seg: Segment) -> list:
+    """[(text, colour)] of the pills down the right edge: the speed (if every pane has the same one), operator-driven, the segment's badge."""
+    speeds = {p.speed for p in seg.panes if not p.placeholder}
+    speed = speeds.pop() if len(speeds) == 1 else 1.0
+    out = []
+    if speed != 1:
+        out.append((f"x{speed:g}", "#1f2933"))
+    if seg.spec.get("operator_driven"):
+        out.append(("Operator-driven", "#7a2e8e"))
+    if seg.spec.get("badge"):
+        out.append((str(seg.spec["badge"]), "#3d4b59"))
+    return out
+
+
+def badge_count(seg: Segment) -> int:
+    return len(right_badges(seg))
+
+
 def overlay_png(path: Path, seg: Segment, size=(W, H)) -> Path:
     """Everything drawn over a clip or split: the zone badge, the speed label, the operator-driven badge, pane labels, the big text."""
     from PIL import Image, ImageDraw
@@ -568,15 +602,8 @@ def overlay_png(path: Path, seg: Segment, size=(W, H)) -> Path:
     if spec.get("zone"):
         colour, label = ZONE_COLOURS[spec["zone"]]
         pill(d, (int(36 * k), int(32 * k)), label, mid, colour)
-    right = []
     speeds = {p.speed for p in seg.panes if not p.placeholder}
-    speed = speeds.pop() if len(speeds) == 1 else 1.0
-    if speed != 1:
-        right.append((f"x{speed:g}", "#1f2933"))
-    if spec.get("operator_driven"):
-        right.append(("Operator-driven", "#7a2e8e"))
-    if spec.get("badge"):
-        right.append((str(spec["badge"]), "#3d4b59"))
+    right = right_badges(seg)
     y = int(32 * k)
     for text, colour in right:
         pill(d, (size[0] - int(36 * k) - pill_width(d, text, mid), y), text, mid, colour)
@@ -822,10 +849,20 @@ def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path =
     inputs += ["-i", str(overlay)]
     if seg.voice is not None:
         inputs += ["-i", str(seg.voice.file)]
+    inset_index = None
+    if seg.inset is not None and seg.kind == "clip":
+        panel = inset_panel(seg, work, q)
+        inset_index = n + 1 + (1 if seg.voice is not None else 0)
+        inputs += ["-i", str(panel)]
     ass = write_ass(work / f"{seg.name}.ass", seg, q.size)
     if seg.kind == "clip":
         graph = pane_video_filter(0, seg.panes[0], w, h, seg.duration)
         graph += f";[v0][{n}:v]overlay=0:0[o]"
+        if inset_index is not None:
+            pw = probe(work / f"{seg.name}-inset.mp4")["width"]
+            x, y = inset_position(seg, q, pw, badge_count(seg))
+            graph += (f";[{inset_index}:v]setpts=PTS-STARTPTS+{seg.inset_at:.3f}/TB[pop];"
+                      f"[o][pop]overlay={x}:{y}:eof_action=pass[o]")
         audio = pane_audio_filter(0, seg.panes[0], seg.duration, keep)
     else:
         pw = w // 2
@@ -840,6 +877,55 @@ def render_segment(seg: Segment, out: Path, work: Path, q: Quality, root: Path =
     graph += ";" + subtitle_filter(ass, "o", "v") + ";" + audio
     run_ffmpeg([*inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]", *encode_args(q, seg.duration), str(out)], seg.name)
     return out
+
+
+INSET_WIDTH = 560                 # px of a 1080p frame
+INSET_HEADER = 52
+
+
+def inset_panel(seg: Segment, work: Path, q: Quality) -> Path:
+    """The pop-up as its own silent clip: the footage in a white frame with a header strip, ready to overlay. Sized for the render quality."""
+    from PIL import Image, ImageDraw
+    k = q.size[1] / H
+    pane, spec = seg.inset, seg.spec["inset"]
+    pw = int(int(spec.get("width", INSET_WIDTH)) * k) // 2 * 2
+    border, head = max(2, int(5 * k)), int(INSET_HEADER * k)
+    src_w, src_h = (pane.crop[2], pane.crop[3]) if pane.crop else (None, None)
+    if src_w is None:
+        info = probe(pane.file)
+        src_w, src_h = info.get("width") or 16, info.get("height") or 9
+    vw = pw - 2 * border
+    vh = int(vw * src_h / src_w)
+    vh += (vh + head + border) % 2                       # the whole panel needs an even height
+    total_w, total_h = pw, vh + head + border
+    frame = Image.new("RGBA", (total_w, total_h), "#f7f4ee")
+    d = ImageDraw.Draw(frame)
+    d.rectangle((0, 0, total_w, head), fill="#1f2933")
+    label = str(spec.get("label", ""))
+    if pane.speed != 1:
+        label += f"  x{pane.speed:g}"
+    f = font(int(26 * k), True)
+    while d.textlength(label, font=f) > total_w - 24 * k and f.size > 12:
+        f = font(f.size - 1, True)
+    d.text((total_w / 2, head / 2), label, font=f, fill="#ffffff", anchor="mm")
+    png = work / f"{seg.name}-inset.png"
+    frame.convert("RGB").save(png)
+    cut = f",crop={pane.crop[2]}:{pane.crop[3]}:{pane.crop[0]}:{pane.crop[1]}" if pane.crop else ""
+    out = work / f"{seg.name}-inset.mp4"
+    graph = (f"[0:v]trim=start={pane.start:.3f}:end={pane.end:.3f},setpts=(PTS-STARTPTS)/{pane.speed:g}{cut},scale={vw}:{vh},setsar=1,fps={FPS}[v];"
+             f"[1:v][v]overlay={border}:{head}:shortest=1[o]")
+    run_ffmpeg(["-i", str(pane.file), "-loop", "1", "-framerate", str(FPS), "-i", str(png), "-filter_complex", graph, "-map", "[o]", "-an",
+                "-t", f"{pane.duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(out)], seg.name + " inset")
+    return out
+
+
+def inset_position(seg: Segment, q: Quality, panel_w: int, right_badges: int) -> tuple:
+    """x, y of the pop-up: the top right corner, under the badges (each is 70 px of a 1080p frame)."""
+    k = q.size[1] / H
+    spec = seg.spec["inset"]
+    margin = int(36 * k)
+    below = int((32 + 70 * right_badges + 10) * k)
+    return q.size[0] - panel_w - margin, int(spec.get("top", 0) * k) or below
 
 
 def concat(parts: list, out: Path, work: Path) -> Path:
