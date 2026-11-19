@@ -202,7 +202,7 @@ def main(argv=None) -> int:
             note = "" if length <= r["slot"] + 0.3 else f"  (longer than the {r['slot']:.1f} s it has: it will run into the next line)"
             print(f"    {length:.1f} s saved{note}")
             if silent(target):
-                print(f"    NOTHING WAS HEARD from {mic}. This is not the microphone you speak into: `list-mics` shows them, then run again with "
+                print(f"    NOTHING WAS HEARD from {mic}. If you were speaking, this is not the microphone you speak into: `list-mics` shows them, then run again with "
                       f"--mic <part of its name>, for example --mic MV_USB for the USB microphone.")
                 if args.seconds:
                     break
