@@ -9,10 +9,15 @@ this makes recordings/<take>/ from the two: events.jsonl (person_detected, speec
 GNOME screencast, "17-19-57"), and screen.mp4. The editor then captions Stuart's lines at the moments he said them, and can crop the
 recording to the part worth showing (crop: in the storyboard).
 
+A recording that has sound of its own keeps it: nothing is added then (no TTS, no stand-in), and that sound is the take's audio.wav.
+
 --voice: a screen recording usually has no sound, so Stuart is silent in it. With --voice each line he said is made again with the TTS
 and placed where the log says he started it (the state that first showed the words), sped up a little if it is longer than the robot's own
-voice was (the log notes a reply when it has been spoken), giving recordings/<take>/audio.wav
-to use as `voice: {take: ..., source: audio}`. The words and the timing are the robot's; the voice is the TTS (the AI server's, or the
+voice was (the log notes a reply when it has been spoken), giving recordings/<take>/stuart.wav. What the visitor SAID (speech_in from the microphone; a typed line makes no sound) is added
+where the log says they spoke, to give recordings/<take>/audio.wav, to use as `voice: {take: ..., source: audio}`: the visitor's own recording
+(recordings/<take>/visitor/<n>.wav, made with `python tools/video/voiceover.py visitor --take <take>`) where there is one, else a
+pitched-up stand-in voice. `--remix` makes audio.wav again after a recording changes. Nothing of the real voice was recorded: the robot
+does not keep the microphone's sound. The words and the timing are the robot's; the voice is the TTS (the AI server's, or the
 local Piper voice), not a recording of the run: say so if it matters.
 """
 
@@ -32,6 +37,8 @@ sys.path.insert(0, str(ROOT))
 from tools.video import edit  # noqa: E402
 
 WORDS_PER_SECOND = 2.6          # a spoken line's length when it is not synthesised
+VISITOR_LAG = 1.0               # seconds between the visitor's last word and the log's UserUtterance (the recording stops, then it is transcribed)
+STAND_IN_PITCH = 1.22           # the stand-in for the visitor is the TTS voice raised by this factor, so it is not mistaken for Stuart
 
 
 def read_log(path: Path) -> list:
@@ -77,6 +84,86 @@ def fit_to_slot(wav: Path, slot: float, longest_speedup: float = 1.5) -> Path:
     return out
 
 
+def has_audio(path: Path) -> bool:
+    import subprocess
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True)
+    return "audio" in out.stdout
+
+
+def use_recorded_sound(video: Path, take: Path, t0: float) -> Path:
+    """The recording has its own sound: that is the voice (Stuart's and the visitor's), so nothing is synthesised. It becomes audio.wav."""
+    import subprocess
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "48000", str(take / "audio.wav")], check=True)
+    meta = json.loads((take / "meta.json").read_text())
+    meta["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None, "note": "the sound of the screen recording itself"}
+    (take / "meta.json").write_text(json.dumps(meta, indent=2))
+    return take / "audio.wav"
+
+
+def visitor_lines(events: list) -> list:
+    """[(number, end, text)] of what the visitor SAID (the microphone: a typed line makes no sound), end = when the last word was spoken, on
+    the same clock as the events."""
+    spoken = [e for e in events if e["type"] == "speech_in" and e.get("source") == "mic"]
+    return [(n, e["t"] - VISITOR_LAG, e["text"]) for n, e in enumerate(spoken, 1)]
+
+
+def wav_rate(path: Path) -> int:
+    with wave.open(str(path)) as w:
+        return w.getframerate()
+
+
+def stand_in(text: str, path: Path) -> bool:
+    """The visitor's line with the TTS, pitched up: only so the conversation can be heard until the visitor records their own words."""
+    import subprocess
+    raw = path.with_name(path.stem + "_raw.wav")
+    if not edit.tts_line(text, raw):
+        return False
+    rate = wav_rate(raw)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(raw), "-filter:a",
+                    f"asetrate={int(rate * STAND_IN_PITCH)},aresample={rate},atempo={1 / STAND_IN_PITCH:.4f}", str(path)], check=True)
+    raw.unlink()
+    return True
+
+
+def visitor_pieces(take: Path, events: list, t0: float) -> list:
+    """[(start seconds into the take's recording, wav)] for what the visitor said: the visitor's own recording
+    (recordings/<take>/visitor/<n>.wav, from `voiceover.py visitor`) if there is one, else the stand-in voice (made once, kept next to it)."""
+    folder = take / "visitor"
+    out = []
+    for n, end, text in visitor_lines(events):
+        wav = edit.find_recording(folder, str(n))
+        if wav is None:
+            wav = folder / f"standin_{n}.wav"
+            if not wav.is_file():
+                folder.mkdir(parents=True, exist_ok=True)
+                if not stand_in(text, wav):
+                    raise SystemExit("the TTS is not reachable, so the visitor's stand-in voice cannot be made (start the local AI: docs/local_ai.md)")
+        length = edit.probe(wav)["duration"]
+        out.append((max(0.0, end - t0 - length), wav))
+    return out
+
+
+def mix_take_audio(take: Path) -> Path:
+    """recordings/<take>/audio.wav = Stuart's lines (stuart.wav) + what the visitor said (their own recordings, else the stand-in voice)."""
+    meta = json.loads((take / "meta.json").read_text())
+    t0 = meta["start_time"]
+    events = [json.loads(l) for l in (take / "events.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    pieces = []
+    if (take / "stuart.wav").is_file():
+        pieces.append((0.0, take / "stuart.wav"))
+    pieces += visitor_pieces(take, events, t0)
+    if not pieces:
+        raise SystemExit("nothing to mix: no stuart.wav and no spoken visitor lines")
+    duration = edit.probe(take / meta["sources"]["screen"]["file"])["duration"]
+    edit.mix_at(pieces, take / "audio.wav", duration)
+    meta["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None,
+                                "note": "Stuart's lines made again with the TTS where the log says he spoke, and the visitor's words: their own recording "
+                                        "where there is one (visitor/<n>.wav), else a pitched-up stand-in (visitor/standin_<n>.wav)"}
+    (take / "meta.json").write_text(json.dumps(meta, indent=2))
+    return take / "audio.wav"
+
+
 def events_from_log(rows: list, t0: float, t1: float) -> tuple:
     """(events, replies): the events of the log in [t0, t1] as film events, and the spoken replies as (start, end, text) for the voice."""
     events, replies, last_screen = [], [], ""
@@ -114,14 +201,20 @@ def events_from_log(rows: list, t0: float, t1: float) -> tuple:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="session_to_take.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--log", required=True)
-    p.add_argument("--video", required=True)
-    p.add_argument("--start", required=True, help="local time the first frame was recorded, HH:MM:SS[.fraction] (a GNOME screencast's name is "
+    p.add_argument("--log")
+    p.add_argument("--video")
+    p.add_argument("--start", help="local time the first frame was recorded, HH:MM:SS[.fraction] (a GNOME screencast's name is "
                                                   "about 0.5 s early: 17-19-57; check it against a state change seen in both)")
     p.add_argument("--take", required=True)
+    p.add_argument("--remix", action="store_true", help="only make recordings/<take>/audio.wav again (Stuart's lines + the visitor's recordings)")
     p.add_argument("--voice", action="store_true", help="make Stuart's lines with the TTS and place them (the recording has no sound)")
     p.add_argument("--source", default="screen", help="the name of the recording in the take (default %(default)s)")
     args = p.parse_args(argv)
+    if args.remix:
+        print(f"wrote {mix_take_audio(ROOT / 'recordings' / args.take)}")
+        return 0
+    if not (args.log and args.video and args.start):
+        p.error("--log, --video and --start are needed (or --remix)")
     rows = read_log(Path(args.log))
     video = Path(args.video)
     t0 = start_epoch(rows, args.start)
@@ -133,10 +226,16 @@ def main(argv=None) -> int:
     meta = {"take": args.take, "start_time": t0, "clock": "time.time()", "from_log": str(args.log),
             "sources": {args.source: {"file": f"{args.source}.mp4", "started": t0, "error": None}}}
     pieces, speak = [], []
+    own_sound = has_audio(video)
+    if own_sound and args.voice:
+        print("the recording has its own sound: it is used as it is and nothing is synthesised (no TTS, no stand-in)")
+        args.voice = False
     for begin, end, text in replies:
         wav = Path(tempfile.mkdtemp()) / "line.wav"
         slot = max(0.5, end - begin)                                     # how long the robot's own voice took
-        if args.voice and edit.tts_line(text, wav):
+        if args.voice:
+            if not edit.tts_line(text, wav):
+                raise SystemExit("--voice: the TTS is not reachable (start the local AI: docs/local_ai.md); nothing was written")
             wav = fit_to_slot(wav, slot)
             length = min(wav_seconds(wav), slot) if slot else wav_seconds(wav)
             pieces.append((max(0.0, begin - t0), wav))
@@ -144,13 +243,17 @@ def main(argv=None) -> int:
             length = len(text.split()) / WORDS_PER_SECOND + 0.3
         speak.append({"t": round(begin, 3), "type": "speak", "text": text, "seconds": round(length, 2)})
     if args.voice and pieces:
-        edit.mix_at(pieces, take / "audio.wav", info["duration"])
-        meta["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None,
-                                    "note": "Stuart's lines made again with the TTS, placed where the log says they ended"}
+        edit.mix_at(pieces, take / "stuart.wav", info["duration"])
     events += speak
     events.sort(key=lambda e: e["t"])
     (take / "events.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events), encoding="utf-8")
     (take / "meta.json").write_text(json.dumps(meta, indent=2))
+    if args.voice:
+        mix_take_audio(take)
+        meta = json.loads((take / "meta.json").read_text())
+    elif own_sound:
+        use_recorded_sound(video, take, t0)
+        meta = json.loads((take / "meta.json").read_text())
     print(f"recordings/{args.take}/: {args.source}.mp4 ({info['duration']:.1f} s), {len(events)} events, {len(speak)} spoken line(s)"
           + (", audio.wav (TTS voice)" if "audio" in meta["sources"] else ""))
     for e in events:

@@ -1,6 +1,6 @@
 # Voiceover script
 
-13 lines, 206 words (the limit is 250). Read each at a calm pace, about 140 words a minute, starting at the time on
+13 lines, 197 words (the limit is 250). Read each at a calm pace, about 140 words a minute, starting at the time on
 its left. Stay silent in between, above all in the common-area visit, where Stuart speaks. Save each line as the file named in the table
 (`python tools/video/voiceover.py record` does that for you); a line you record replaces the TTS narration for that line, the others keep
 the TTS (a backup copy of the narration is in `video/voiceover_tts/`). The times come from `python tools/video/edit.py --plan` and move
@@ -15,12 +15,12 @@ if the footage changes: `python tools/video/voiceover.py cues --write` makes thi
 | 0:34.5 | `system.wav` | 8.5 s | 7.8 s | A Jetson handles the conversation and the screen. A TurtleBot base handles navigation and measures the sound level. |
 | 0:43.0 | `parts.wav` | 9.0 s | 9.6 s (tight) | Books are read by an RFID reader, obstacles are seen by a LiDAR, and Stuart's face is shown on a small screen. |
 | 0:52.0 | `maps.wav` | 12.0 s | 11.3 s | As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas. |
-| 1:04.0 | `common-card.wav` | 54.9 s | 3.9 s | In the common area, Stuart greets people and talks. |
-| 1:58.9 | `trip-out.wav` | 15.7 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
-| 2:14.6 | `unload.wav` | 5.0 s | 4.8 s (tight) | and unloads them into a tray for a librarian to shelve. |
-| 2:19.6 | `trip-back.wav` | 8.8 s | 3.0 s | Then it heads back to its station. |
-| 2:28.4 | `quiet.wav` | 25.0 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
-| 2:53.5 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
+| 1:04.0 | `common-card.wav` | 61.6 s | 3.9 s | In the common area, Stuart greets people and talks. |
+| 2:05.6 | `trip-out.wav` | 11.8 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
+| 2:17.3 | `trip-back.wav` | 6.6 s | 3.0 s | and then heads back to its station. |
+| 2:23.9 | `quiet.wav` | 25.0 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
+| 2:49.0 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
+| 2:53.0 | `thanks.wav` | 2.5 s | 0.9 s | Thank you. |
 
 ## The whole script
 
@@ -42,10 +42,10 @@ In the common area, Stuart greets people and talks.
 
 When the patron leaves, Stuart drives the returned books to their section,
 
-and unloads them into a tray for a librarian to shelve.
-
-Then it heads back to its station.
+and then heads back to its station.
 
 On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working.
 
 Stuart: a library robot that reads the room.
+
+Thank you.

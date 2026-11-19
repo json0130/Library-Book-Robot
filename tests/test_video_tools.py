@@ -187,6 +187,30 @@ class SessionToTakeTest(unittest.TestCase):
         self.assertEqual(session_to_take.fit_to_slot(wav, 7.0), wav)                       # shorter: left alone
         self.assertGreater(session_to_take.wav_seconds(session_to_take.fit_to_slot(wav, 2.0)), 3.9)    # never faster than x1.5
 
+    def test_only_what_the_visitor_said_aloud_gets_a_voice(self):
+        events = [{"t": 30.0, "type": "speech_in", "text": "Can I return a book?", "source": "mic"},
+                  {"t": 40.0, "type": "speech_in", "text": "typed by the operator", "source": "operator"},
+                  {"t": 50.0, "type": "speech_in", "text": "Thank you", "source": "mic"}]
+        lines = session_to_take.visitor_lines(events)
+        self.assertEqual([(n, text) for n, _, text in lines], [(1, "Can I return a book?"), (2, "Thank you")])
+        self.assertAlmostEqual(lines[0][1], 30.0 - session_to_take.VISITOR_LAG)        # their last word came just before the log's time
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_a_recording_with_its_own_sound_keeps_it_and_nothing_is_added(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        loud, silent = d / "loud.mp4", d / "silent.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x48:d=2", "-f", "lavfi", "-i", "sine=f=440:d=2",
+                        "-shortest", str(loud)], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x48:d=2", str(silent)], check=True)
+        self.assertTrue(session_to_take.has_audio(loud))
+        self.assertFalse(session_to_take.has_audio(silent))
+        take = d / "take"
+        take.mkdir()
+        (take / "meta.json").write_text('{"sources": {}}')
+        wav = session_to_take.use_recorded_sound(loud, take, 0.0)
+        self.assertGreater(session_to_take.wav_seconds(wav), 1.5)
+
 
 if __name__ == "__main__":
     unittest.main()

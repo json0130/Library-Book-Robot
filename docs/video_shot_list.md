@@ -3,7 +3,7 @@
 The story, from the paper: **Stuart changes how it communicates by zone, not what it does.** Common area: it greets, speaks aloud, and the
 screen shows only its face. Quiet zone: it never starts, answers as text on the screen, and makes no sound.
 
-The cut is `video/storyboard.yaml` (177.5 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
+The cut is `video/storyboard.yaml` (175.5 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
 placeholder (a "Shot needed" card of the planned length). Drop a shot's file in place, render again, and nothing else changes.
 
 ## The cut, in order
@@ -17,11 +17,11 @@ placeholder (a "Shot needed" card of the planned length). Drop a shot's file in 
 | 0:34 | system, parts | system diagram; the prototype photo with its parts named, and three close-ups: the LiDAR, the face screen, the RFID reader | drawn + your photos | done |
 | 0:52 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
 | 1:04 | common area | the live operator view (the webcam with the face found, Stuart's face, the state machine): a person walks up, Stuart greets and offers, the visitor asks about Dune (answered), then asks to return a book, the RFID reader reads Clean Code, Stuart confirms, and the visitor says goodbye. **When the book is read, a pop-up in the top right corner, "Loading the book (CAD simulation)", shows the whole CAD clip in reverse (x4, 9.4 s).** Slow stretches are sped up. **Cut:** after "Is there anything else I can help with?" the reader read the book a second time and Stuart asked about it again (64 s to 80 s of the recording): that part is left out and the scene jumps to the goodbye | **your screen recording of 19 Nov, 20:47** (`video/footage/common2_screencast.mp4`) + the robot's session log | done |
-| 1:59 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was (x3) | your 18 Nov clip + the replay of that drive's real track | done |
-| 2:15 | unload | the books go into the return tray | your clip, later | placeholder |
-| 2:20 | trip back | back to the station, same two views (the clip is the last 26 s of that drive) | your 18 Nov clip + the real track | done |
+| 1:59 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was (x4) | your 18 Nov clip + the replay of that drive's real track | done |
+| 2:20 | trip back | back to the station, same two views (the clip is the last 26 s of that drive, x4) | your 18 Nov clip + the real track | done |
 | 2:28 | quiet zone | another person walks up; the face screen shows the greeting and the answers as text, nothing is said aloud: asks about Dune, asks to be shown the way, says thanks. Slow stretches are sped up | **your screen recording of 19 Nov, 21:06** (`video/footage/quiet2_screencast.mp4`) + the robot's session log | done |
-| 2:54 | end | "Stuart. A library robot that reads the room." and "CARES Lab, University of Auckland" | drawn | done |
+| 2:51 | end | "Stuart. A library robot that reads the room." and "CARES Lab, University of Auckland" | drawn | done |
+| 2:55 | thanks | "Thank you" | drawn | done |
 
 What is simulated or added, and says so on the frame (paper, section 5):
 - The common-area scene is a real run. The visitor's words there were **spoken** (the robot's microphone recognised them); in the quiet scene
@@ -29,13 +29,19 @@ What is simulated or added, and says so on the frame (paper, section 5):
 - **Stuart's voice in the common scene is the TTS**, made again from the log's text, started where the log says he started each line (and
   sped up a little if the TTS is slower than the robot's own voice was): the screen recording has no sound. The words and timing are the
   robot's, the voice is not a recording of that run. The quiet scene is silent, as the robot was.
+- **The visitor's voice in the common scene**: the visitor spoke into the robot's microphone, but nothing of that sound was kept. Until you
+  record the three lines yourself (`python tools/video/voiceover.py visitor --take rfid2`) a **stand-in** is used: the TTS voice, pitched
+  up, ending 1 s before the log says the robot heard the line. A screen recording that has its own sound is never given a synthetic voice:
+  `session_to_take.py` uses that sound as it is.
+- The unloading shot is **left out** for now (the lift is not built); the narration does not mention it.
 - The maps beside the drive clips replay the robot's real tracks from its session log on the real floor plan (a simulated robot following
   recorded poses; nothing drives). The CAD clip says "CAD simulation"; the drives started by an operator say so.
 
 ## What is left to film
 
-### 1. The unload (later) - `video/footage/unload.mp4`, about 5 s
-At the Fiction return tray, the books go in (by hand: the lift is not built; the cut marks it "Operator-driven").
+### 1. The unload (later, optional)
+Left out of the cut. To add it back: a `clip` segment `unload` between `trip-out` and `trip-back` (`src: video/footage/unload.mp4`, about 5 s,
+`operator_driven: true`) and a line in the narration; the cut then needs 5 s from somewhere else.
 
 ### Close-ups of the parts: done
 `video/assets/parts/` has `lidar.jpg`, `screen.jpg` and `rfid_reader.jpg` (the originals are in `video/footage/originals/`). To change one, replace the file and run `python tools/video/make_assets.py`.
@@ -59,9 +65,10 @@ silent there.
 
 ## Already made, and how to redo it
 - **The common-area scene**: `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261119-204713.jsonl --video
-  video/footage/common2_screencast.mp4 --start 20:47:19.55 --take rfid2 --voice` (the local AI must be up for `--voice`: only its TTS is used). It
+  video/footage/common2_screencast.mp4 --start 20:47:19.55 --take rfid2 --voice` (the local AI must be up for `--voice`: only its TTS is used, and `AI_HOST=127.0.0.1 AI_PORT=7898` points the robot's settings at it; without it the run now stops instead of silently making no sound, which is how the first cut of this scene came out silent). It
   writes `recordings/rfid2/` (events, the video, Stuart's voice) from the robot's log and the screen recording; the editor crops it to the operator
-  page, speeds up the waits and leaves out 64.3 s to 80.2 s.
+  page, speeds up the waits and leaves out 64.3 s to 77.0 s. It also writes `stuart.wav` (Stuart's lines), `visitor/standin_<n>.wav` and `audio.wav` (both mixed;
+  `--remix` makes it again after you record `visitor/<n>.wav`).
 - **The quiet scene**: `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261119-210607.jsonl --video
   video/footage/quiet2_screencast.mp4 --start 21:06:15.55 --take quiet4` (no `--voice`: the robot said nothing). The start time is the file name's
   time plus 0.55 s (a GNOME screencast begins that long after its name; checked against the first state change in the picture).

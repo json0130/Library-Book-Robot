@@ -4,6 +4,7 @@
     python tools/video/voiceover.py cues --write         # also writes video/voiceover.md (the script to read from)
     python tools/video/voiceover.py record               # read the lines one by one: Enter starts, Enter stops, r retries
     python tools/video/voiceover.py record --only robot-concept --mic USB_MIC
+    python tools/video/voiceover.py visitor --take rfid2    # record what the visitor says in the common-area run (your own voice)
     python tools/video/voiceover.py list-mics
 
 A line you record is saved as video/voiceover/<segment id>.wav and replaces that line of the TTS narration in the next render
@@ -108,6 +109,38 @@ def record_one(path: Path, mic: str, seconds: float = 0.0) -> float:
     return length
 
 
+def record_visitor(take: str, mic: str, redo: bool, seconds: float = 0.0) -> int:
+    """The visitor's spoken lines of a take (the robot's microphone heard them; its sound was not kept): read each, in your own voice, at the
+    moment it was said. They are saved as recordings/<take>/visitor/<n>.wav and mixed into the take's audio.wav (with Stuart's lines)."""
+    from tools.video import session_to_take as stt
+    folder = ROOT / "recordings" / take
+    if not (folder / "events.jsonl").is_file():
+        raise SystemExit(f"no take recordings/{take} (made with tools/video/session_to_take.py)")
+    meta = __import__("json").loads((folder / "meta.json").read_text())
+    events = [__import__("json").loads(l) for l in (folder / "events.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = stt.visitor_lines(events)
+    if not lines:
+        raise SystemExit("the visitor said nothing aloud in this take (a typed line makes no sound)")
+    print(f"microphone: {mic}\n{len(lines)} visitor line(s) in {take}. Say each one as a visitor would (a few words, natural pace); the first\n"
+          f"Enter starts the recording, the second stops it. Stand-in voice is used for any line you skip.\n")
+    for n, end, text in lines:
+        target = folder / "visitor" / f"{n}.wav"
+        if target.is_file() and not redo:
+            print(f"[{n}/{len(lines)}] already recorded ({target.name}); --redo records it again")
+            continue
+        while True:
+            print(f"[{n}/{len(lines)}] at {clock(end - meta['start_time'])} in the recording:\n\n    {text}\n")
+            if not seconds and input("    Enter = start recording, s = skip: ").strip().lower() == "s":
+                break
+            length = record_one(target, mic, seconds)
+            print(f"    {length:.1f} s saved")
+            if seconds or input("    Enter = keep, r = record again: ").strip().lower() != "r":
+                break
+    print(f"\nmixed into {stt.mix_take_audio(folder)}")
+    print("Render with: python tools/video/edit.py --preview")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="voiceover.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--storyboard", default=str(ROOT / "video" / "storyboard.yaml"))
@@ -119,11 +152,18 @@ def main(argv=None) -> int:
     r.add_argument("--mic", help="part of a microphone's name (list-mics)")
     r.add_argument("--redo", action="store_true", help="also the lines already recorded")
     r.add_argument("--seconds", type=float, default=0.0, help="record each line for this long without pressing Enter (for tests)")
+    v = sub.add_parser("visitor", help="record what the visitor says in a take (the lines the robot's microphone heard)")
+    v.add_argument("--take", required=True)
+    v.add_argument("--mic", help="part of a microphone's name (list-mics)")
+    v.add_argument("--redo", action="store_true", help="also the lines already recorded")
+    v.add_argument("--seconds", type=float, default=0.0, help="record each line for this long without pressing Enter (for tests)")
     sub.add_parser("list-mics", help="the microphones PulseAudio sees")
     args = p.parse_args(argv)
     if args.cmd == "list-mics":
         print("\n".join(mic_sources()))
         return 0
+    if args.cmd == "visitor":
+        return record_visitor(args.take, pick_mic(args.mic), args.redo, args.seconds)
     settings, segments, rec_dir = load(Path(args.storyboard))
     rows = cue_rows(segments, rec_dir)
     if args.cmd == "cues":

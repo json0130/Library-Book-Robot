@@ -10,7 +10,7 @@
 #   2. How Stuart works: the robot (CAD, prototype), the two interaction styles, the system, the parts, the sound map.
 #   3. Common area: a person approaches (webcam with the face found + the robot's face), asks to return a book, the webcam view
 #      swaps to the RFID reader scanning it, Stuart answers aloud; the person leaves.
-#   4. Stuart drives the book to the Fiction section (the 18 Nov clip + a simulated map), unloads, and heads back.
+#   4. Stuart drives the book to the Fiction section (the 18 Nov clip + a simulated map) and heads back. The unloading shot is left out for now.
 #   5. On the way, a person in a quiet zone asks questions (no return): the same views, answers as text, no sound. The end.
 # Disclosures (paper, section 5): the face screen and the maps are simulated or recorded from a simulated robot, and say so.
 
@@ -124,7 +124,7 @@ segments:
     zone: common
     take: rfid2
     source: screen
-    in: 6.4
+    in: 6.9
     out: 17.8
     crop: [84, 116, 1820, 930]
     valign: bottom
@@ -138,7 +138,7 @@ segments:
     take: rfid2
     source: screen
     in: 17.8
-    out: 25.0
+    out: 20.9
     speed: 6
     crop: [84, 116, 1820, 930]
     valign: bottom
@@ -150,7 +150,7 @@ segments:
     zone: common
     take: rfid2
     source: screen
-    in: 25.0
+    in: 20.9
     out: 42.4
     crop: [84, 116, 1820, 930]
     valign: bottom
@@ -164,7 +164,7 @@ segments:
     take: rfid2
     source: screen
     in: 42.4
-    out: 46.6
+    out: 44.6
     speed: 5
     crop: [84, 116, 1820, 930]
     valign: bottom
@@ -176,7 +176,7 @@ segments:
     zone: common
     take: rfid2
     source: screen
-    in: 46.6
+    in: 44.6
     out: 50.0
     crop: [84, 116, 1820, 930]
     valign: bottom
@@ -220,8 +220,8 @@ segments:
     zone: common
     take: rfid2
     source: screen
-    in: 80.2
-    out: 85.6
+    in: 77.0
+    out: 84.5
     crop: [84, 116, 1820, 930]
     valign: bottom
     voice: {take: rfid2, source: audio}
@@ -233,29 +233,21 @@ segments:
   # 18:29:06; the replays start at 18:27:35 and 18:28:38, so the second clip is the last 26 s of its drive.
   - id: trip-out
     type: split
-    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 3, label: "Stuart driving to Fiction"}
-    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 3, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 4, label: "Stuart driving to Fiction"}
+    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 4, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
     vo: "When the patron leaves, Stuart drives the returned books to their section,"
 
-  - id: unload
-    type: clip
-    src: video/footage/unload.mp4
-    duration: 5
-    operator_driven: true
-    placeholder: "Later: at the Fiction return tray the books are unloaded (by hand, operator-driven)"
-    vo: "and unloads them into a tray for a librarian to shelve."
-
   - id: trip-back
     type: split
-    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 3, label: "Back to its station"}
-    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 3, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 4, label: "Back to its station"}
+    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 4, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
-    vo: "Then it heads back to its station."
+    vo: "and then heads back to its station."
 
   # ---- Quiet zone, on the way back: the 21:06 run of 19 Nov (recordings/quiet4: the screen recording + the robot's session log). Nothing is
   # said aloud: the face screen shows the answers as text. The visitor's words are typed by the operator. Slow stretches are sped up.
@@ -363,3 +355,10 @@ segments:
     subtitle: A library robot that reads the room
     footer: "CARES Lab, University of Auckland"
     vo: "Stuart: a library robot that reads the room."
+
+  # The last word, as a plain card after the end card.
+  - id: thanks
+    type: title
+    duration: 2.5
+    title: Thank you
+    vo: "Thank you."
