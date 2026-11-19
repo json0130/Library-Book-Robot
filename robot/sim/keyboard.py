@@ -323,7 +323,8 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                   auto_scan: bool = False, settle_s: float = SETTLE_S, persist_storage: bool = True,
                   local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None,
                   base: Optional[str] = None, base_url: Optional[str] = None, base_speed: float = 1.0,
-                  force_zone: Optional[str] = None, film_take: Optional[str] = None, record_path: Optional[str] = None) -> int:
+                  force_zone: Optional[str] = None, film_take: Optional[str] = None, record_path: Optional[str] = None,
+                  base_replay: Optional[str] = None) -> int:
     """force_zone, film_take and record_path are film mode (robot/film.py, docs/video_shot_list.md): hold one zone for the take,
     log timestamped events to recordings/<take>/events.jsonl, and write the boxed camera frames to an mp4. All off by default."""
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
@@ -353,7 +354,9 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             try:
                 if base == "fake":
                     from robot.sim.base import start_fake_base
-                    fake_base = start_fake_base(cfg, speed=1.0, time_scale=base_speed)
+                    from robot.sim.base import load_replay
+                    fake_base = start_fake_base(cfg, speed=1.0, time_scale=base_speed,
+                                                **({"replay": load_replay(base_replay)} if base_replay else {}))
                     link = fake_base.make_link(cfg)
                 else:
                     from robot.app import build_link

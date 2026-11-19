@@ -59,6 +59,8 @@ def main(argv=None) -> int:
                       help="hold this zone for the whole take, over the sound map, the noise and the operator")
     film.add_argument("--film", metavar="TAKE", default=None,
                       help="log timestamped events (greeting, replies, book read, goals, sound level...) to recordings/TAKE/events.jsonl")
+    film.add_argument("--base-replay", metavar="FILE", default=None,
+                      help="with --base fake: each drive replays a track recorded on the real robot (tools/video/trajectory.py), in real time")
     film.add_argument("--record", metavar="PATH", default=None,
                       help="write the camera picture with the faces boxed to this mp4 (needs --camera; the webcam is not opened twice)")
     states = sub.add_parser("states", help="print the state machine from its transition table")
@@ -112,7 +114,7 @@ def main(argv=None) -> int:
                                      persist_storage=not args.no_persist,
                                      local_faces=args.local_faces, base=args.base, base_url=args.base_url,
                                      base_speed=args.base_speed, force_zone=args.zone, film_take=args.film,
-                                     record_path=args.record))
+                                     record_path=args.record, base_replay=args.base_replay))
         except KeyboardInterrupt:
             # run_sim's cleanup has run. Exit without Python's shutdown, which can abort or hang while
             # the keyboard reader thread is still blocked in stdin.readline().

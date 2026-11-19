@@ -24,3 +24,5 @@ video/footage/
 video/build/
 video/out/
 video/voiceover.wav
+video/voiceover/
+video/voiceover_tts/

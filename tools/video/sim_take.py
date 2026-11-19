@@ -37,11 +37,11 @@ def script_lines(name: str) -> str:
 FACE_ONLY = ["--config-set", "styles.common_alone.screen_content=false", "--config-set", "styles.common_group.screen_content=false"]
 
 
-def sim_command(take: str, zone: str, port: int, speak: bool, llm: bool, face_only: bool = True) -> list:
+def sim_command(take: str, zone: str, port: int, speak: bool, llm: bool, face_only: bool = True, replay: str = "") -> list:
     """face_only: in the common area the screen shows only the face (the paper's design, `screen_content` in config/styles.yaml)."""
     return [sys.executable, "-m", "robot", "sim", "--base", "fake", "--zone", zone, "--film", take, "--no-persist", "--no-log",
             "--settle", "0", "--config-set", f"display.port={port}", *(FACE_ONLY if face_only else []),
-            *(["--speak"] if speak else []), *(["--llm"] if llm else [])]
+            *(["--base-replay", replay] if replay else []), *(["--speak"] if speak else []), *(["--llm"] if llm else [])]
 
 
 def main(argv=None) -> int:
@@ -53,6 +53,7 @@ def main(argv=None) -> int:
     p.add_argument("--port", type=int, default=8775, help="the display server the robot and the recording use")
     p.add_argument("--no-speak", action="store_true")
     p.add_argument("--no-llm", action="store_true", help="answer from the catalogue text only")
+    p.add_argument("--replay", default="", help="a trajectory file (tools/video/trajectory.py): each `drive` replays a track recorded on the real robot")
     p.add_argument("--common-cards", action="store_true",
                    help="let the common area's screen show book cards too (the robot's default today); without it only the face")
     p.add_argument("--force", action="store_true", help="passed to film.py record (little free memory)")
@@ -80,8 +81,8 @@ def main(argv=None) -> int:
         rec.kill()
         return 1
     time.sleep(1.0)
-    print(f"  [sim] {' '.join(sim_command(take, args.zone, args.port, not args.no_speak, not args.no_llm, not args.common_cards))}", flush=True)
-    sim = subprocess.run(sim_command(take, args.zone, args.port, not args.no_speak, not args.no_llm, not args.common_cards), cwd=ROOT, env=env, input=stdin,
+    print(f"  [sim] {' '.join(sim_command(take, args.zone, args.port, not args.no_speak, not args.no_llm, not args.common_cards, args.replay))}", flush=True)
+    sim = subprocess.run(sim_command(take, args.zone, args.port, not args.no_speak, not args.no_llm, not args.common_cards, args.replay), cwd=ROOT, env=env, input=stdin,
                          text=True, capture_output=True)
     (ROOT / "recordings" / take / "sim.log").write_text(sim.stdout + sim.stderr)
     time.sleep(1.5)                                            # the last words leave the speaker

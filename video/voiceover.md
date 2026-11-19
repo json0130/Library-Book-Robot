@@ -1,28 +1,26 @@
-# Voiceover (under 250 words)
+# Voiceover script
 
-Read it at a calm pace, about 140 words a minute, and save it as `video/voiceover.wav` (48 kHz WAV, mono or stereo, starting at 0:00 of
-the video). Each line starts at the time on its left; stay silent in between, above all in the common-area visit (1:08 to 1:43), where Stuart
-speaks. Until the file exists, `tools/video/edit.py` uses each segment's `vo` line from `video/storyboard.yaml` (the same words) as a placeholder.
-The times are from `python tools/video/edit.py --plan`; they move if the footage changes.
+13 lines, 206 words (the limit is 250). Read each at a calm pace, about 140 words a minute, starting at the time on
+its left. Stay silent in between, above all in the common-area visit, where Stuart speaks. Save each line as the file named in the table
+(`python tools/video/voiceover.py record` does that for you); a line you record replaces the TTS narration for that line, the others keep
+the TTS (a backup copy of the narration is in `video/voiceover_tts/`). The times come from `python tools/video/edit.py --plan` and move
+if the footage changes: `python tools/video/voiceover.py cues --write` makes this page again.
 
-| Starts | Over | Line |
-|---|---|---|
-| 0:00 | quiet library photo | Libraries are not one kind of space. Some rooms are silent, |
-| 0:06 | lively library photo | others are lively, and people expect different behaviour in each. Service robots usually behave the same everywhere. Stuart doesn't. |
-| 0:19 | the robot: concept, CAD, prototype | Stuart is a library robot that returns books and helps patrons, working alongside librarians. |
-| 0:29 | common vs quiet interaction | It changes how it communicates, not what it does, depending on where it is. |
-| 0:37 | system diagram | A Jetson handles the conversation and the screen. A TurtleBot base handles navigation and measures the sound level. |
-| 0:46 | the parts, labelled | Books are read by an RFID reader, obstacles are seen by a LiDAR, and Stuart's face is shown on a small screen. |
-| 0:55 | navigation map + sound map | As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas. |
-| 1:08 | "Common area" card (3 s, then Stuart speaks: stay silent) | In the common area, Stuart greets people and talks. |
-| 1:43 | driving to Fiction | When the patron leaves, Stuart drives the returned books to their section, |
-| 2:03 | unloading | and unloads them into a tray for a librarian to shelve. |
-| 2:08 | heading back | Then it heads back to its station. |
-| 2:17 | the quiet zone: questions, answers as text (Stuart is silent) | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
-| 2:48 | end card | Stuart: a library robot that reads the room. |
-
-Notes: the RFID line from the first draft is out until the reader and its clip are in the cut; the quiet-zone line comes while the
-person asks questions (the quiet visit has no spoken words, so the voiceover can run over it).
+| Starts | File (video/voiceover/) | Time it has | About | Line |
+|---|---|---|---|---|
+| 0:00.0 | `hook-quiet.wav` | 5.5 s | 4.8 s | Libraries are not one kind of space. Some rooms are silent, |
+| 0:05.5 | `hook-lively.wav` | 12.0 s | 8.3 s | others are lively, and people expect different behaviour in each. Service robots usually behave the same everywhere. Stuart doesn't. |
+| 0:17.5 | `robot-concept.wav` | 10.0 s | 7.0 s | So we present Stuart, the library robot that returns books and helps patrons, working alongside librarians. |
+| 0:27.5 | `styles.wav` | 7.0 s | 6.1 s | It changes how it communicates, not what it does, depending on where it is. |
+| 0:34.5 | `system.wav` | 8.5 s | 7.8 s | A Jetson handles the conversation and the screen. A TurtleBot base handles navigation and measures the sound level. |
+| 0:43.0 | `parts.wav` | 9.0 s | 9.6 s (tight) | Books are read by an RFID reader, obstacles are seen by a LiDAR, and Stuart's face is shown on a small screen. |
+| 0:52.0 | `maps.wav` | 12.0 s | 11.3 s | As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas. |
+| 1:04.0 | `common-card.wav` | 50.7 s | 3.9 s | In the common area, Stuart greets people and talks. |
+| 1:54.7 | `trip-out.wav` | 18.8 s | 5.2 s | When the patron leaves, Stuart drives the returned books to their section, |
+| 2:13.5 | `unload.wav` | 5.0 s | 4.8 s (tight) | and unloads them into a tray for a librarian to shelve. |
+| 2:18.5 | `trip-back.wav` | 8.8 s | 3.0 s | Then it heads back to its station. |
+| 2:27.3 | `quiet.wav` | 25.5 s | 14.3 s | On the way, Stuart meets someone in a quiet zone. It never starts the conversation, and its answers appear as text on the screen, with no sound, so students nearby can keep working. |
+| 2:52.8 | `end.wav` | 4.0 s | 3.5 s | Stuart: a library robot that reads the room. |
 
 ## The whole script
 
@@ -30,7 +28,7 @@ Libraries are not one kind of space. Some rooms are silent,
 
 others are lively, and people expect different behaviour in each. Service robots usually behave the same everywhere. Stuart doesn't.
 
-Stuart is a library robot that returns books and helps patrons, working alongside librarians.
+So we present Stuart, the library robot that returns books and helps patrons, working alongside librarians.
 
 It changes how it communicates, not what it does, depending on where it is.
 

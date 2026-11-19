@@ -3,90 +3,92 @@
 The story, from the paper: **Stuart changes how it communicates by zone, not what it does.** Common area: it greets, speaks aloud, and the
 screen shows only its face. Quiet zone: it never starts, answers as text on the screen, and makes no sound.
 
-The cut is `video/storyboard.yaml` (173.5 s now). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
+The cut is `video/storyboard.yaml` (176.8 s now). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
 placeholder (a "Shot needed" card of the planned length). Drop a shot's file in place, render again, and nothing else changes.
 
 ## The cut, in order
 
 | Time | Segment | What it shows | Source | State |
 |---|---|---|---|---|
-| 0:00 | hook | a quiet library, then a lively one; narration explains | Wikimedia Commons photos (credited on frame) | done |
-| 0:15 | title | "Stuart" | drawn | done |
-| 0:19 | robot | concept (AI-generated), CAD model, CAD render, prototype | the paper's figures | done |
-| 0:29 | styles | the common-area and quiet-zone interaction | Fig. 6 of the paper, cropped | done |
-| 0:37 | system, parts | system diagram; the prototype photo with its parts named | drawn + your photo | done; RFID reader photo missing |
-| 0:55 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
-| 1:08 | common area | a person approaches (webcam with the face found + the robot's face), asks to return a book | webcam **to film**; face screen simulated | webcam = placeholder |
-| 1:24 | common area | the webcam view swaps to the RFID reader scanning the book; Stuart answers aloud | RFID clip **from you**; face screen simulated | RFID = placeholder |
-| 1:38 | loading | the book goes into the robot | your CAD simulation, played in reverse, x2 | done (a real shot can replace it) |
-| 1:43 | trip to Fiction | Stuart drives to the Fiction section (phone) + the map | your 18 Nov clip + a simulated map | done |
-| 2:03 | unload | the books go into the return tray | your clip, later | placeholder |
-| 2:08 | trip back | back to the station, same two views | your 18 Nov clip + a simulated map | done |
-| 2:17 | quiet zone | another person asks questions (no return): webcam, then the robot's face with the answers as text, no sound | webcam **to film**; face screen simulated | webcam = placeholder |
-| 2:48 | end | title, the team, the photo credits | drawn | done |
+| 0:00 | hook | a quiet library, then a lively one; narration explains | Wikimedia Commons photos, credited on the frame | done |
+| 0:13 | title | "Stuart" | drawn | done |
+| 0:17 | robot | "So we present Stuart, the library robot ...": concept (AI-generated), CAD model, CAD render, prototype | the paper's figures | done |
+| 0:27 | styles | the common-area and quiet-zone interaction | Fig. 6 of the paper, cropped | done |
+| 0:34 | system, parts | system diagram; the prototype photo with its parts named; the RFID reader photo | drawn + your photos | done |
+| 0:52 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
+| 1:04 | common area | the live operator view: the webcam with the face found, Stuart's face, the state machine; a person walks up, Stuart greets, the request is typed, the RFID reader reads the book, Stuart confirms (the waits are sped up) | **your screen recording of 19 Nov** + the robot's session log | done |
+| 1:44 | loading | the book goes into the robot | your CAD simulation, played in reverse, normal speed (10.4 s) | done (a real shot can replace it) |
+| 1:55 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was | your 18 Nov clip + the replay of that drive's real track | done |
+| 2:13 | unload | the books go into the return tray | your clip, later | placeholder |
+| 2:18 | trip back | back to the station, same two views (the clip is the last 26 s of that drive) | your 18 Nov clip + the real track | done |
+| 2:27 | quiet zone | another person asks questions (no return): the robot's face with the answers as text, no sound | simulated visit; **the webcam half is a placeholder** | see below |
+| 2:53 | end | "Stuart. A library robot that reads the room." and "CARES Lab, University of Auckland" | drawn | done |
 
-What is simulated, and says so on the frame (paper, section 5): the face screens come from the robot program run on a fake base, with the
-visitor's lines typed (speech recognition is not wired in); the maps next to the drive clips show a simulated robot on the real floor plan
-and the real sound map. The CAD clip says "CAD simulation"; the drive started by an operator says so.
+What is simulated or added, and says so on the frame (paper, section 5):
+- The common-area scene is a real run. The visitor's words are **typed by the operator** (speech recognition is not wired in): badge.
+- **Stuart's voice in that scene is the TTS**, made again from the log's text and placed where the log says he finished each line: the screen
+  recording has no sound. The words and timing are the robot's, the voice is not a recording of that run.
+- The maps beside the drive clips replay the robot's real tracks from its session log on the real floor plan (a simulated robot following
+  recorded poses; nothing drives). The CAD clip says "CAD simulation"; the drives started by an operator say so.
+- The quiet-zone visit is a simulated robot (fake base, visitor's lines typed).
 
 ## What is left to film
 
-### 1. The two webcam takes (you and I, at the Jetson)
-These replace the "Shot needed" cards on the left at 1:08 and 2:17: the robot's own webcam, with the person's face boxed. Nobody is saved
-but the take you choose to keep (`recordings/` is not in git); the paper says no images are stored, so delete a take you do not use.
+### 1. The quiet zone, like the common one (you, at the Jetson)
+Record the live operator page the same way you did for the common area, with `--zone quiet`: someone walks up, you type what they ask
+(`tell me about Dune`, `where is the science section?`, `thanks, that's all`), nothing is returned, no sound. Steps:
+```
+python -m display.server                                  # the robot's page on 8765, as for the first recording
+python -m robot sim --zone quiet --camera --faces --local-faces --config-set returning.auto_start=false    # no --speak: it stays silent
+# open http://localhost:8765/operator, screen-record it (Ctrl+Alt+Shift+R in GNOME), do the visit, stop the recording
+python tools/video/session_to_take.py --log data/logs/session-<the run>.jsonl --video "<the screencast>.mp4" --start HH:MM:SS.ss --take quiet4
+```
+`--start` is the time of the recording's first frame: the file name's time plus about half a second (a GNOME screencast starts 0.5 s after
+its name; check it against a state change you can see in both). Then in `video/storyboard.yaml` replace the `quiet` segment by a `clip` of
+`take: quiet4, source: screen` with the same `crop: [84, 116, 1820, 930]` and `valign: bottom` as the live ones, `zone: quiet`,
+`auto_captions: true` (the answers are captioned "(shown on screen, no sound)"). If the recording is a different screen size the crop changes.
+- **Retake if:** any sound from the robot, the face box flickers off the person, someone else walks through, an answer is cut off.
 
-Before filming (once), three terminals on the Jetson (a separate display page on 8775, so a running robot's page on 8765 is never touched):
-```
-python -m display.server --port 8775 --host 127.0.0.1
-cd ~/lbr-local-ai && scripts/start_local_ai.sh          # the local AI (LLM, voice); or the commands in docs/local_ai.md
-python tools/get_face_models.py                          # only if models/face/ is empty: the face numbers ("person 1")
-```
-**Common area** (someone walks up to the robot, Stuart greets, the person says `hi Stuart, can I return this book?` which you type,
-then holds the printed Cosmos barcode `data/test_barcodes/9780345539434-cosmos.png` up to the webcam, which plays the RFID scan; Stuart
-confirms; the person says `no thanks, that's all` and walks away):
-```
-python tools/video/film.py record --take common8 --sources face,audio --port 8775
-AI_HOST=127.0.0.1 AI_PORT=7898 python -m robot sim --base fake --zone common --film common8 --camera --faces --local-faces \
-    --record recordings/common8/camera.mp4 --speak --no-persist --no-log \
-    --config-set display.port=8775 --config-set styles.common_alone.screen_content=false --config-set styles.common_group.screen_content=false
-```
-**Quiet zone** (someone walks up, Stuart waits and then shows text; they ask `tell me about Dune`, `where is the science section?`, then
-`thanks, that's all`; they never return a book; no sound at all):
-```
-python tools/video/film.py record --take quiet4 --sources face,audio --port 8775
-AI_HOST=127.0.0.1 AI_PORT=7898 python -m robot sim --base fake --zone quiet --film quiet4 --camera --faces --local-faces \
-    --record recordings/quiet4/camera.mp4 --no-persist --no-log --config-set display.port=8775
-```
-Type each line into the sim terminal after the person says it. Enter in the film.py terminal stops the recording, `quit` stops the sim.
-Then in `video/storyboard.yaml` change `common7` to `common8` and `quiet3` to `quiet4` (the face and the voice come from the same take).
-- **Retake if:** the box flickers off the person, the face screen is hidden, someone else walks through the shot, the barcode takes more
-  than 5 s to read, or any sound comes from the robot in the quiet take (its audio.wav must be silent).
+### 2. The unload (later) - `video/footage/unload.mp4`, about 5 s
+At the Fiction return tray, the books go in (by hand: the lift is not built; the cut marks it "Operator-driven").
 
-### 2. The RFID clip (from you) - `video/footage/rfid_scan.mp4`
-The book on the RFID reader, with the UI showing which book was scanned; about 13 s, filmed with the phone or a screen recording. Set
-`in:`/`out:` in the storyboard if it is longer. The line in the narration that mentions the reader is already there.
+### 3. Close-ups of the parts (optional) - `video/assets/parts/lidar.jpg`, `screen.jpg`
+The RFID reader photo (`rfid_reader.jpg`, the RC522 on its Arduino) is in. Then `python tools/video/make_assets.py`.
 
-### 3. Photos of the parts (optional, from you) - `video/assets/parts/`
-`rfid_reader.jpg` is needed (its tile says "photo needed"); `lidar.jpg` and `screen.jpg` add close-ups. Then `python tools/video/make_assets.py`.
-
-### 4. The unload (later) - `video/footage/unload.mp4`, about 5 s
-At the Fiction return tray, the books go in (by hand: the lift is not built; the cut marks it "Operator-driven"). The loading shot can be
-replaced the same way: put a real clip at `video/footage/cad_book_return.mp4`.
+## The voiceover
+You record it; the TTS narration stays as the backup.
+```
+python tools/video/voiceover.py cues --write      # the script, with the time each line starts and how long it has -> video/voiceover.md
+python tools/video/voiceover.py record            # reads each line to you: Enter starts, Enter stops, r records again
+python tools/video/edit.py --preview              # hear it in the cut
+```
+Each line is saved as `video/voiceover/<segment id>.wav`; a line you recorded replaces the TTS for that line, and a line you have not recorded
+keeps the TTS. (Record elsewhere if you like: save each line under that name, any of .wav .m4a .mp3 .flac .ogg, or the whole thing as one
+`video/voiceover.wav` from 0:00.) The render warns if a line is longer than the time it has. To go back to the TTS for a line, rename its file.
+The TTS lines are kept in `video/voiceover_tts/`, and the first version of the whole video with the TTS narration is
+`video/out/backup/stuart_hri2027_sdc_v1_tts_narration.mp4`. Leave Stuart's own speech in the common-area scene alone: the narration is
+silent there.
 
 ## Already made, and how to redo it
-- **Simulated visits** (the face screens): `python tools/video/sim_take.py common --take common7 --zone common --no-llm` and
-  `... quiet --take quiet3 --zone quiet --no-llm`; the visits are `video/takes/common.txt` and `quiet.txt`. `--no-llm` words the answers from
-  the catalogue: the local Qwen3 once described A Brief History of Time with Cosmos's summary.
-- **Simulated map** (`recordings/nav1`): `python tools/video/sim_take.py nav --take nav1 --zone quiet --sources map --no-speak --no-llm`.
-  The simulated robot drives to the taught Fiction shelf and back on the real floor plan and sound map. Nothing drives.
-- **CAD clip**: `video/footage/cad_book_retrieve_original.webm` is your screen recording; `cad_book_return.mp4` is its last 10.4 s (the lift
-  taking the book out), cropped to the 3D view (no browser tabs) and reversed so the book goes in.
+- **The common-area scene**: `python tools/video/session_to_take.py --log ~/Library-Book-Robot/data/logs/session-20261119-171941.jsonl --video
+  "Screencast from 2026-11-19 17-19-57.mp4" --start 17:19:57.55 --take rfid1 --voice` (the local AI must be up for `--voice`). It writes
+  `recordings/rfid1/` (events, the video, Stuart's voice) from the robot's log and the screen recording; the editor crops it to the operator
+  page and speeds up the waits.
+- **The replayed drives**: `python tools/video/trajectory.py <log> --window 18:27:35-18:28:26 --name to_fiction --window 18:28:38-18:29:35
+  --name back_to_station -o video/takes/trips_18nov.json` makes the tracks from the 18 Nov session log (`data/logs/session-20261118-182712.jsonl`
+  in the dell-link worktree); `python tools/video/sim_take.py nav --take nav2 --zone quiet --sources map --no-speak --no-llm --replay
+  video/takes/trips_18nov.json` records the map page while a simulated base replays them. The phone clips start at 18:27:36 and 18:29:06.
+- **The simulated quiet visit**: `python tools/video/sim_take.py quiet --take quiet3 --zone quiet --no-llm` (`video/takes/quiet.txt`).
+- **The CAD clip**: `video/footage/cad_book_retrieve_original.webm` is your screen recording; `cad_book_return.mp4` is its last 10.4 s (the lift
+  taking the book out), cropped to the 3D view and reversed so the book goes in.
+- The services these use (a separate display page on 8775, the local AI on 7898) are the commands in `docs/local_ai.md` and `python -m
+  display.server --port 8775 --host 127.0.0.1`.
 
 ## Credits and licences
 Hook photos from Wikimedia Commons: Suzzallo Reading Room, University of Washington, by Guywelch2000 (CC BY 4.0); Seattle Central
-Library, by brewbooks (CC BY-SA 2.0). Each carries its credit on the frame and in the end card; `video/assets/photos/credits.json` has the
-file pages. CC BY-SA asks for derivatives to be shared alike: a still photo inside a video is normally a collection, but check this with
-the competition rules, or swap that photo for a public-domain or your own one.
+Library, by brewbooks (CC BY-SA 2.0). Each carries its credit on the frame; `video/assets/photos/credits.json` has the file pages. The end card
+shows only the lab, as asked. CC BY-SA asks for derivatives to be shared alike: a still photo inside a video is normally a collection, but
+check this with the competition rules, or swap that photo for a public-domain or your own one.
 
 ## Rendering
 ```
@@ -94,11 +96,10 @@ python tools/video/edit.py --plan          # timing, and every shot still missin
 python tools/video/edit.py --preview       # 540p check, about 2 minutes
 python tools/video/edit.py                 # 1080p final -> video/out/stuart_hri2027_sdc.mp4 (fails above 180 s)
 ```
-The voiceover: record `video/voiceover.md` as `video/voiceover.wav` (48 kHz, from 0:00). Until then the render uses the local TTS for each
-line (the AI server's if `AI_HOST` points at it), or silence when no voice is reachable.
 
 ## What the editor checks for you
-- Every word Stuart says is captioned (each sentence as it starts playing); what the visitor types is captioned "Visitor: ...", and a
-  quiet-zone answer is captioned "(shown on screen, no sound)".
+- Every word Stuart says is captioned (each sentence as it starts); what the visitor types is captioned "Visitor: ...", and a quiet-zone answer
+  is captioned "(shown on screen, no sound)".
+- A recorded voiceover line longer than its time is reported; a line never talks over the one before it.
 - The dB meter is drawn only from levels the real base measured: a take from a fake base gets none.
 - A storyboard over 180 s is refused before anything is rendered.

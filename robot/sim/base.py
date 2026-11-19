@@ -30,6 +30,13 @@ class FakeBaseHandle:
         self.server.stop()
 
 
+def load_replay(path) -> list:
+    """The tracks of a trajectory file made by tools/video/trajectory.py: [[[seconds, x, y, yaw], ...], ...]."""
+    import json
+    data = json.load(open(path, encoding="utf-8"))
+    return [t["points"] for t in data["tracks"]]
+
+
 def start_fake_base(cfg: Config, speed: float = 1.0, time_scale: float = 1.0, **options) -> FakeBaseHandle:
     """Start the stand-in for the Dell on a free local port. `speed` is its driving speed in m/s, `time_scale` multiplies
     it (scenario runs); `options` are FakeBase's (fail_rate, seed, unlocalised_for, uncalibrated...)."""

@@ -1,0 +1,205 @@
+"""The tools around the editor: replaying a real drive, the trajectory from a log, voiceover cues and recordings, a take from a session log."""
+
+import datetime as dt
+import json
+import math
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from tools.fake_base import FakeBase, replay_pose
+from tools.video import edit, session_to_take, trajectory, voiceover
+from tests.test_video_edit import START, fake_probe, write_take
+
+
+class ReplayPoseTest(unittest.TestCase):
+    TRACK = [[0, 0.0, 0.0, 0.0], [10, 1.0, 2.0, 1.0], [20, 1.0, 2.0, 1.0]]
+
+    def test_straight_lines_between_the_samples_and_staying_put_at_the_ends(self):
+        self.assertEqual(replay_pose(self.TRACK, -5), (0.0, 0.0, 0.0))
+        x, y, a = replay_pose(self.TRACK, 5)
+        self.assertEqual((round(x, 3), round(y, 3), round(a, 3)), (0.5, 1.0, 0.5))
+        self.assertEqual(replay_pose(self.TRACK, 99), (1.0, 2.0, 1.0))
+
+    def test_the_heading_turns_the_short_way_round(self):
+        a = replay_pose([[0, 0, 0, 3.0], [10, 0, 0, -3.0]], 5)[2]
+        self.assertGreater(abs(a), 3.0)                         # through pi, not back through 0
+
+
+class FakeBaseReplayTest(unittest.TestCase):
+    def base(self, track):
+        now = [100.0]
+        b = FakeBase("t", clock=lambda: now[0], wall=lambda: now[0], replay=[track])
+        b.last_heartbeat = now[0]
+        return b, now
+
+    def test_a_goal_follows_the_recorded_track_at_its_own_speed_then_succeeds(self):
+        b, now = self.base([[0, 0.0, 0.0, 0.0], [10, 0.0, 4.0, 1.5], [12, 0.1, 4.0, 1.5]])
+        status, body = b.send_goal("g-1", 0.0, 4.0, 1.5)
+        self.assertTrue(body["accepted"])
+        now[0] += 5.0
+        b.last_heartbeat = now[0]
+        b.update()
+        self.assertEqual((round(b.x, 2), round(b.y, 2)), (0.0, 2.0))
+        self.assertEqual(b.goal["status"], "active")
+        now[0] += 8.0
+        b.last_heartbeat = now[0]
+        b.update()
+        self.assertEqual((round(b.x, 2), round(b.y, 2), b.goal["status"]), (0.1, 4.0, "succeeded"))
+
+    def test_without_a_track_it_still_drives_in_a_straight_line(self):
+        now = [100.0]
+        b = FakeBase("t", clock=lambda: now[0], wall=lambda: now[0], speed=1.0)
+        b.last_heartbeat = now[0]
+        b.send_goal("g-1", 3.0, 0.0, 0.0)
+        now[0] += 1.0
+        b.last_heartbeat = now[0]
+        b.update()
+        self.assertAlmostEqual(b.x, 1.0, places=2)
+
+
+class TrajectoryTest(unittest.TestCase):
+    def log(self, d):
+        base = dt.datetime(2026, 11, 18, 18, 27, 0).timestamp()
+        rows = [{"t": base + 30, "event": "PoseUpdated", "data": {"x": 0.0, "y": 0.0, "yaw": 0.0, "localised": True}},
+                {"t": base + 35, "event": "NavProgress", "data": {"goal_id": "g-1", "distance_left": 4.0}},
+                {"t": base + 40, "event": "PoseUpdated", "data": {"x": 0.0, "y": 1.0, "yaw": 1.5, "localised": True}},
+                {"t": base + 45, "event": "PoseUpdated", "data": {"x": 0.0, "y": 2.0, "yaw": 1.5, "localised": True}},
+                {"t": base + 50, "event": "NavArrived", "data": {"goal_id": "g-1"}},
+                {"t": base + 60, "event": "PoseUpdated", "data": {"x": 0.0, "y": 2.2, "yaw": 1.5, "localised": True}}]
+        path = Path(d) / "log.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return path, base
+
+    def test_a_window_becomes_a_track_from_where_the_robot_stood(self):
+        with tempfile.TemporaryDirectory() as d:
+            path, base = self.log(d)
+            rows = trajectory.read_log(path)
+            self.assertEqual(trajectory.drives(rows)[0][0], "g-1")
+            t0, t1 = trajectory.parse_window("18:27:35-18:27:55", trajectory.local_day(rows))
+            self.assertEqual((t0, t1), (base + 35, base + 55))
+            tr = trajectory.track(rows, t0, t1, "out")
+            self.assertEqual(tr["points"][0], [0.0, 0.0, 0.0, 0.0])             # the pose before the window
+            self.assertEqual([p[0] for p in tr["points"]], [0.0, 5.0, 10.0, 20.0])   # then the poses inside, then it waits until the end
+            self.assertEqual(tr["points"][-1][1:], tr["points"][-2][1:])
+            with self.assertRaises(ValueError):
+                trajectory.track([], 1.0, 2.0)
+
+    def test_the_cli_writes_the_file_the_sim_reads(self):
+        from robot.sim.base import load_replay
+        with tempfile.TemporaryDirectory() as d:
+            path, _ = self.log(d)
+            out = Path(d) / "t.json"
+            self.assertEqual(trajectory.main([str(path), "--window", "18:27:35-18:27:55", "-o", str(out)]), 0)
+            self.assertEqual(len(load_replay(out)), 1)
+
+
+class CropAndVoiceoverTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        write_take(self.dir / "rec", "t1")
+        (self.dir / "a.png").write_bytes(b"")
+
+    def board(self, body):
+        path = self.dir / "b.yaml"
+        path.write_text(f"recordings: {self.dir / 'rec'}\n" + body)
+        return edit.load_storyboard(path, probe_fn=fake_probe(30.0), root=self.dir)
+
+    def test_a_crop_is_kept_on_the_pane_and_checked(self):
+        _, segs = self.board("segments:\n  - {type: clip, take: t1, source: face, in: 1, out: 5, crop: [10, 20, 300, 200]}\n")
+        self.assertEqual(segs[0].panes[0].crop, (10, 20, 300, 200))
+        self.assertIn("crop=300:200:10:20", edit.pane_video_filter(0, segs[0].panes[0], 960, 540, 4.0))
+        with self.assertRaises(edit.StoryboardError):
+            self.board("segments:\n  - {type: clip, take: t1, source: face, crop: [1, 2, 3]}\n")
+
+    def test_a_line_has_the_time_until_the_next_line_not_just_its_segment(self):
+        _, segs = self.board("""segments:
+  - {id: a, type: title, duration: 4, title: x, vo: first}
+  - {id: b, type: title, duration: 3, title: y}
+  - {id: c, type: title, duration: 5, title: z, vo: second}
+  - {id: d, type: title, duration: 2, title: w}
+""")
+        self.assertEqual(edit.vo_slots(segs), {0: 7.0, 2: 7.0})
+
+    def test_a_recording_is_found_by_the_segment_id_with_any_audio_extension(self):
+        d = self.dir / "voice"
+        d.mkdir()
+        self.assertIsNone(edit.find_recording(d, "robot-concept"))
+        (d / "robot-concept.m4a").write_bytes(b"x")
+        self.assertEqual(edit.find_recording(d, "robot-concept").name, "robot-concept.m4a")
+
+    def test_the_cue_sheet_names_each_file_and_marks_the_recorded_ones(self):
+        _, segs = self.board("""segments:
+  - {id: first, type: title, duration: 4, title: x, vo: "one two three"}
+  - {id: second, type: title, duration: 5, title: y, vo: "four five"}
+""")
+        d = self.dir / "voice"
+        d.mkdir()
+        (d / "second.wav").write_bytes(b"x")
+        rows = voiceover.cue_rows(segs, d)
+        self.assertEqual([(r["id"], r["recorded"], r["slot"]) for r in rows], [("first", False, 4.0), ("second", True, 5.0)])
+        sheet = voiceover.cue_sheet(rows)
+        self.assertIn("`first.wav`", sheet)
+        self.assertIn("`second.wav` ✓", sheet)
+        self.assertIn("5 words", voiceover.script_md(rows))
+
+
+class SessionToTakeTest(unittest.TestCase):
+    def test_a_session_log_becomes_events_with_the_voice_lines_ending_when_the_log_says(self):
+        t0 = dt.datetime(2026, 11, 19, 17, 19, 57).timestamp()
+        ctx = {"zone": "common"}
+        style = {"channels": ["speech", "screen"]}
+        rows = [{"t": t0 + 1, "event": "ContextChanged", "data": {}, "context": ctx, "style": style},
+                {"t": t0 + 8.5, "event": "PersonEngaged", "data": {"source": "sensor"}, "context": ctx, "style": style},
+                {"t": t0 + 11.6, "event": "ReplySentence", "data": {"text": "Hello! My name is Stuart."}, "context": ctx, "style": style},
+                {"t": t0 + 30.5, "event": "UserUtterance", "data": {"text": "i would like to return the book", "source": "operator"}, "context": ctx, "style": style},
+                {"t": t0 + 42.3, "event": "BookIdentified", "data": {"title": "Dune", "isbn": "9780441172719"}, "context": ctx, "style": style}]
+        events, replies = session_to_take.events_from_log(rows, t0, t0 + 70)
+        kinds = [e["type"] for e in events]
+        self.assertEqual(kinds[:2], ["start", "zone"])
+        for kind in ("person_detected", "reply", "speech_in", "rfid_read"):
+            self.assertIn(kind, kinds)
+        self.assertEqual(replies, [(t0 + 11.6, "Hello! My name is Stuart.")])
+        self.assertEqual(next(e for e in events if e["type"] == "reply")["channel"], "speech")
+        self.assertAlmostEqual(session_to_take.start_epoch(rows, "17:19:57.55"), t0 + 0.55, places=2)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+def have_ffmpeg() -> bool:
+    return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+
+@unittest.skipUnless(have_ffmpeg(), "needs ffmpeg")
+class BuildVoiceoverTest(unittest.TestCase):
+    def tone(self, path: Path, seconds: float) -> Path:
+        import subprocess
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", str(path)], check=True)
+        return path
+
+    def test_a_recorded_line_replaces_the_tts_and_a_long_one_warns(self):
+        import hashlib
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        (d / "t.png").write_bytes(b"")
+        board = d / "b.yaml"
+        board.write_text("segments:\n  - {id: one, type: title, duration: 4, title: x, vo: hello there}\n"
+                         "  - {id: two, type: title, duration: 4, title: y, vo: second line}\n")
+        _, segs = edit.load_storyboard(board, probe_fn=fake_probe(), root=d)
+        tts = d / "tts"
+        tts.mkdir()
+        for seg in segs:                                           # the TTS is already made (cached): no server needed
+            self.tone(tts / f"{seg.spec['id']}.{hashlib.sha1(seg.vo.encode()).hexdigest()[:8]}.wav", 1.0)
+        rec = d / "rec"
+        rec.mkdir()
+        self.tone(rec / "one.wav", 6.5)                            # your recording: longer than its 4 s
+        out, how, warnings = edit.build_voiceover(segs, d / "mix.wav", 8.0, d, {"dir": "rec", "tts_dir": "tts"})
+        self.assertEqual(how, "1 line(s) recorded by you, 1 from the TTS")
+        self.assertTrue(any("one:" in w and "6.5 s" in w for w in warnings), warnings)
+        self.assertAlmostEqual(edit.probe(out)["duration"], 8.0, delta=0.2)
+        # the second line waited for the first (6.5 s long from 0.3 s) rather than speaking over it
+        self.assertTrue(any("two:" in w and "late" in w for w in warnings), warnings)

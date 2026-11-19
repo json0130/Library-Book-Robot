@@ -24,7 +24,7 @@ segments:
   - id: hook-quiet
     type: photo
     image: video/assets/photos/library_quiet.jpg
-    duration: 6
+    duration: 5.5
     zone: quiet
     text: "Libraries have quiet zones and lively zones."
     credit: "Photo: Guywelch2000, CC BY 4.0, Wikimedia Commons"
@@ -33,7 +33,7 @@ segments:
   - id: hook-lively
     type: photo
     image: video/assets/photos/library_lively.jpg
-    duration: 9
+    duration: 8
     zone: common
     text: "Robots usually behave the same everywhere."
     credit: "Photo: brewbooks, CC BY-SA 2.0, Wikimedia Commons"
@@ -52,7 +52,7 @@ segments:
     fit: contain
     duration: 2.5
     label: "Concept (AI-generated image)"
-    vo: "Stuart is a library robot that returns books and helps patrons, working alongside librarians."
+    vo: "So we present Stuart, the library robot that returns books and helps patrons, working alongside librarians."
 
   - id: robot-cad
     type: photo
@@ -77,7 +77,7 @@ segments:
 
   - id: styles
     type: stills
-    duration: 8
+    duration: 7
     images: [video/assets/paper/fig6_common.png, video/assets/paper/fig6_quiet.png]
     labels: [Common area, Quiet zone]
     text: "The same task, two styles"
@@ -86,7 +86,7 @@ segments:
   # ---- How Stuart works, scene 2: the system and its parts ----
   - id: system
     type: stills
-    duration: 9
+    duration: 8.5
     images: [video/assets/system.png]
     vo: "A Jetson handles the conversation and the screen. A TurtleBot base handles navigation and measures the sound level."
 
@@ -99,13 +99,16 @@ segments:
   # ---- The two maps (images from the paper, Fig. 3) ----
   - id: maps
     type: stills
-    duration: 13
+    duration: 12
     images: [video/assets/paper/nav_map.png, video/assets/paper/sound_map.png]
     labels: ["Map Stuart navigates on", "Sound levels recorded on it"]
     text: "Learning the zones"
     vo: "As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas."
 
-  # ---- Common area: the person approaches, asks to return a book, the RFID reader scans it ----
+  # ---- Common area: the real run (19 Nov): the operator page showing the webcam with the face found, Stuart's face and the state machine.
+  # A person walks up, Stuart greets and offers, the visitor's request is typed by the operator (speech input is not wired in), the book
+  # is read by the RFID reader, and Stuart confirms. recordings/rfid1 is made by tools/video/session_to_take.py from the robot's session
+  # log and the screen recording (no sound in it: Stuart's lines are made again with the TTS and placed where the log says he said them).
   - id: common-card
     type: title
     duration: 3
@@ -113,52 +116,92 @@ segments:
     subtitle: Stuart greets people and speaks
     vo: "In the common area, Stuart greets people and talks."
 
-  - id: common-approach
-    type: split
+  - id: live-approach
+    type: clip
     zone: common
-    duration: 13.2
-    left: {take: common7, source: camera, in: "event:person_detected-1s", label: "Webcam: person detected",
-           placeholder: "Film live: sim --camera --faces --record (a person walks up to the robot)"}
-    right: {take: common7, source: face, in: "event:person_detected-1s", label: "Face screen",
-            placeholder: "recordings/common7/face.mp4"}
-    voice: {take: common7, source: audio}
+    take: rfid1
+    source: screen
+    in: 4.5
+    out: 19.5
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: rfid1, source: audio}
     auto_captions: true
-    captions_from: right
-    badge: "Face screen: simulated visit"
+    badge: "Live view. Visitor's words typed by the operator"
 
-  - id: common-rfid
-    type: split
+  - id: live-wait
+    type: clip
     zone: common
-    duration: 13.4
-    left: {src: video/footage/rfid_scan.mp4, label: "RFID reader",
-           placeholder: "Your clip: the book on the RFID reader, the title shown in the UI"}
-    right: {take: common7, source: face, in: "event:speech_in+3s", label: "Face screen",
-            placeholder: "recordings/common7/face.mp4"}
-    voice: {take: common7, source: audio}
+    take: rfid1
+    source: screen
+    in: 19.5
+    out: 29.0
+    speed: 4
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: live-ask
+    type: clip
+    zone: common
+    take: rfid1
+    source: screen
+    in: 29.0
+    out: 36.5
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: rfid1, source: audio}
     auto_captions: true
-    captions_from: right
-    badge: "Face screen: simulated visit"
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: live-hold
+    type: clip
+    zone: common
+    take: rfid1
+    source: screen
+    in: 36.5
+    out: 40.5
+    speed: 3
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    audio: mute
+    badge: "Live view. Visitor's words typed by the operator"
+
+  - id: live-scan
+    type: clip
+    zone: common
+    take: rfid1
+    source: screen
+    in: 40.5
+    out: 51.6
+    crop: [84, 116, 1820, 930]
+    valign: bottom
+    voice: {take: rfid1, source: audio}
+    auto_captions: true
+    badge: "Live view: the RFID reader reads the book"
 
   # The CAD simulation of the lift taking a book out (video/footage/cad_book_retrieve_original.webm), played in reverse so the book
-  # goes in: cropped to the 3D view, 10.4 s at x2. A real shot of the book being loaded can replace it later.
+  # goes in: cropped to the 3D view, 10.4 s at normal speed. A real shot of the book being loaded can replace it later.
   - id: loading
     type: clip
     src: video/footage/cad_book_return.mp4
     in: 0
     out: end
-    speed: 2
-    duration: 5.2
+    speed: 1
+    duration: 10.4
     label: "Book stored (CAD simulation)"
     badge: "CAD simulation"
     placeholder: "Later: the returned book goes into the robot's storage (loading)"
 
-  # ---- Stuart takes the book to Fiction (the 18 Nov clip) with a simulated map, unloads, heads back ----
+  # ---- Stuart takes the book to Fiction and heads back (18 Nov clips). The map next to each clip replays the real track of that drive
+  # from the robot's session log (video/takes/trips_18nov.json), so the dot is where the robot was. The phone clips start at 18:27:36 and
+  # 18:29:06; the replays start at 18:27:35 and 18:28:38, so the second clip is the last 26 s of its drive.
   - id: trip-out
     type: split
-    duration: 20
-    left: {src: video/footage/trip_to_fiction.mp4, in: 1, out: 41, speed: 2, label: "Stuart driving to Fiction"}
-    right: {take: nav1, source: map, in: "event:drive_started-1s", out: "event:goal_reached+1s", label: "Map (simulated robot)",
-            placeholder: "recordings/nav1/map.mp4"}
+    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 2.5, label: "Stuart driving to Fiction"}
+    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 2.5, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+            placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
     vo: "When the patron leaves, Stuart drives the returned books to their section,"
@@ -173,10 +216,9 @@ segments:
 
   - id: trip-back
     type: split
-    duration: 8.7
-    left: {src: video/footage/trip_back.mp4, in: 0, out: 26, speed: 3, label: "Back to its station"}
-    right: {take: nav1, source: map, in: "event:drive_started#2-1s", out: "event:goal_reached#2+1s", speed: 3, label: "Map (simulated robot)",
-            placeholder: "recordings/nav1/map.mp4"}
+    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 3, label: "Back to its station"}
+    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 3, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+            placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
     vo: "Then it heads back to its station."
@@ -185,7 +227,7 @@ segments:
   - id: quiet
     type: split
     zone: quiet
-    duration: 31
+    duration: 25.5
     left: {take: quiet3, source: camera, in: "event:person_detected-1s", label: "Webcam: person detected",
            placeholder: "Film live: sim --camera --faces --record --zone quiet (a person walks up and asks questions)"}
     right: {take: quiet3, source: face, in: "event:person_detected-1s", label: "Face screen",
@@ -200,8 +242,8 @@ segments:
   # ---- The end ----
   - id: end
     type: title
-    duration: 6
+    duration: 4
     title: Stuart
     subtitle: A library robot that reads the room
-    footer: "Junhu Song, Albert Paik, Hyeonjoon Lee, Brian Wang, Ho Seok Ahn - CARES, University of Auckland.  Photos: Guywelch2000 (CC BY 4.0), brewbooks (CC BY-SA 2.0), Wikimedia Commons."
+    footer: "CARES Lab, University of Auckland"
     vo: "Stuart: a library robot that reads the room."

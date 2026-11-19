@@ -14,7 +14,9 @@ Storyboard (YAML)
     output: video/out/stuart_hri2027_sdc.mp4
     max_seconds: 180
     recordings: recordings                                  # where the takes are (default: the repo's recordings/)
-    voiceover: {wav: video/voiceover.wav, duck_db: 14}      # if the wav is missing, a placeholder is made from each segment's `vo`
+    voiceover: {wav: video/voiceover.wav, duck_db: 14}      # the whole voiceover, if you have it as one file; else per line (below)
+    # per line: video/voiceover/<segment id>.wav replaces that segment's `vo` line; lines you have not recorded use the TTS
+    # (cached in video/voiceover_tts/). `python tools/video/voiceover.py cues` lists the lines, times and file names.
     segments:
       - {type: title, duration: 4, title: Stuart, subtitle: "A library robot that reads the room"}
       - type: clip
@@ -22,6 +24,8 @@ Storyboard (YAML)
         in: 2.0                              # seconds, "1:05.5", "event:rfid_read-2s", "event:reply#2+1s", "end-3s"
         out: 20
         speed: 4                             # shows an "x4" label; the clip's sound is dropped when sped up
+        crop: [84, 116, 1820, 930]           # x, y, width, height of the source picture to keep (a screen recording's relevant part)
+        valign: bottom                       # a picture that does not fill the frame sits at the bottom (the badges use the top strip)
         zone: common                         # the zone badge (orange "Common area" / blue "Quiet zone")
         operator_driven: true                # a "Operator-driven" badge (the paper says so for teleoperated parts)
         badge: "Simulated: screen recording"  # any other disclosure, as a grey badge
@@ -184,6 +188,8 @@ class Pane:
     source: Optional[str] = None
     has_audio: bool = True
     placeholder: str = ""              # not filmed yet: a "Shot needed" panel with this text instead of the footage
+    crop: Optional[tuple] = None       # (x, y, w, h) of the source picture to keep, e.g. just the robot's pages of a screen recording
+    valign: str = "center"             # where a picture that does not fill the frame sits: center, or bottom (leaves the top strip for the badges)
 
     @property
     def duration(self) -> float:
@@ -262,7 +268,14 @@ def make_pane(spec: dict, where: str, probe_fn=probe, root: Path = ROOT, takes: 
     speed = float(spec.get("speed", 1) or 1)
     if speed <= 0:
         raise StoryboardError(f"{where}: speed must be above 0")
-    return Pane(path, start, end, speed, spec.get("label", ""), take, source, info["audio"])
+    crop = spec.get("crop")
+    if crop is not None and not (isinstance(crop, (list, tuple)) and len(crop) == 4 and all(isinstance(v, (int, float)) for v in crop)):
+        raise StoryboardError(f"{where}: crop must be [x, y, w, h] in pixels of the source picture")
+    valign = spec.get("valign", "center")
+    if valign not in ("center", "bottom"):
+        raise StoryboardError(f"{where}: valign must be center or bottom")
+    return Pane(path, start, end, speed, spec.get("label", ""), take, source, info["audio"],
+                crop=tuple(int(v) for v in crop) if crop else None, valign=valign)
 
 
 def auto_captions(pane: Pane, quiet: bool) -> list:
@@ -704,16 +717,18 @@ def encode_args(q: Quality, duration: float) -> list:
             "-threads", str(q.threads), "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart"]
 
 
-def fit_filter(w: int, h: int, label_in: str, label_out: str) -> str:
+def fit_filter(w: int, h: int, label_in: str, label_out: str, valign: str = "center") -> str:
     """Scale to fit w x h keeping the aspect ratio, pad with the background colour (phone clips are rotated by ffmpeg itself)."""
-    return (f"[{label_in}]scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={BG},"
+    y = "oh-ih" if valign == "bottom" else "(oh-ih)/2"
+    return (f"[{label_in}]scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={w}:{h}:(ow-iw)/2:{y}:color={BG},"
             f"setsar=1,fps={FPS}[{label_out}]")
 
 
 def pane_video_filter(i: int, pane: Pane, w: int, h: int, duration: float) -> str:
     """Trim, speed, fit, and hold the last frame if the pane is shorter than the segment."""
-    chain = (f"[{i}:v]trim=start={pane.start:.3f}:end={pane.end:.3f},setpts=(PTS-STARTPTS)/{pane.speed:g}[t{i}];"
-             + fit_filter(w, h, f"t{i}", f"f{i}"))
+    cut = f",crop={pane.crop[2]}:{pane.crop[3]}:{pane.crop[0]}:{pane.crop[1]}" if pane.crop else ""
+    chain = (f"[{i}:v]trim=start={pane.start:.3f}:end={pane.end:.3f},setpts=(PTS-STARTPTS)/{pane.speed:g}{cut}[t{i}];"
+             + fit_filter(w, h, f"t{i}", f"f{i}", pane.valign))
     pad = max(0.0, duration - pane.duration)
     chain += f";[f{i}]tpad=stop_mode=clone:stop_duration={pad + 0.1:.3f},trim=duration={duration:.3f}[v{i}]"
     return chain
@@ -757,18 +772,22 @@ def contain_png(src: Path, dst: Path, size: tuple, share: float = 0.86) -> Path:
 
 
 def render_photo(seg: Segment, out: Path, work: Path, q: Quality, root: Path = ROOT) -> Path:
-    """A still photo filling the frame with a slow push-in (Ken Burns), then the badges, text and credit, then the captions."""
+    """A still photo filling the frame (or a slow push-in with zoom: 0.1), then the badges, text and credit, then the captions."""
     w, h = q.size
     spec = seg.spec
     src = Path(spec["image"]) if Path(spec["image"]).is_absolute() else root / spec["image"]
-    big = (round(w * 1.25), round(h * 1.25))                           # the zoom crops into this, so it stays sharp
+    zoom = float(spec.get("zoom", 0.0))                               # 0: the photo stands still (a push-in made the frame shake)
+    big = (round(w * 1.25), round(h * 1.25)) if zoom else (w, h)       # a zoom crops into this, so it stays sharp
     png = (contain_png if spec.get("fit") == "contain" else cover_png)(src, work / f"{seg.name}-photo.png", big)
     over = overlay_png(work / f"{seg.name}-over.png", seg, q.size)
     frames = max(1, round(seg.duration * FPS))
-    zoom = float(spec.get("zoom", 0.10))
     ass = write_ass(work / f"{seg.name}.ass", seg, q.size)
-    graph = (f"[0:v]zoompan=z='1+{zoom}*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={w}x{h}:fps={FPS}[z];"
-             f"[z][1:v]overlay=0:0[o];" + subtitle_filter(ass, "o", "v"))
+    if zoom:
+        picture = (f"[0:v]zoompan=z='1+{zoom}*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={w}x{h}:fps={FPS}[z];"
+                   f"[z][1:v]overlay=0:0[o];")
+    else:
+        picture = f"[0:v]fps={FPS},format=yuv420p[z];[z][1:v]overlay=0:0[o];"
+    graph = picture + subtitle_filter(ass, "o", "v")
     run_ffmpeg(["-loop", "1", "-framerate", str(FPS), "-i", str(png), "-i", str(over), "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
                 "-filter_complex", graph, "-map", "[v]", "-map", "2:a", *encode_args(q, seg.duration), str(out)], seg.name)
     return out
@@ -841,7 +860,7 @@ def silence_wav(path: Path, seconds: float, rate: int = 48000) -> Path:
 
 
 def tts_line(text: str, path: Path) -> bool:
-    """One voiceover line with the robot's TTS (Kokoro on the AI server, services/speech.py). False if it is not reachable."""
+    """One voiceover line with the robot's TTS (Kokoro on the AI server, or the local Piper voice: services/speech.py). False if it is not reachable."""
     try:
         from robot.config import load_config
         from robot.services.speech import Speech
@@ -855,32 +874,92 @@ def tts_line(text: str, path: Path) -> bool:
         return False
 
 
-def placeholder_voiceover(segments, path: Path, work: Path, total: float) -> tuple:
-    """Each segment's `vo` line spoken at the segment's start (TTS if reachable, else silence). (path, how)."""
+VOICE_EXTS = (".wav", ".m4a", ".mp3", ".flac", ".ogg", ".aac")
+
+
+def segment_starts(segments) -> list:
     starts, t = [], 0.0
     for s in segments:
         starts.append(t)
         t += s.duration
-    pieces, free_at = [], 0.0
-    for s, start in zip(segments, starts):
-        if s.vo:
-            wav = work / f"vo-{s.index:02d}.wav"
-            if tts_line(s.vo, wav):
-                at = max(start + 0.3, free_at + 0.3)              # never on top of the line before
-                pieces.append((at, wav))
-                with wave.open(str(wav)) as w:
-                    free_at = at + w.getnframes() / float(w.getframerate())
+    return starts
+
+
+def vo_slots(segments) -> dict:
+    """The time each narrated segment's line has: from its start to the start of the next narrated segment (or the end), so a line may
+    run across the silent segments that follow it. {segment index: seconds}."""
+    starts = segment_starts(segments)
+    total = starts[-1] + segments[-1].duration if segments else 0.0
+    voiced = [i for i, s in enumerate(segments) if s.vo]
+    return {i: (starts[voiced[k + 1]] if k + 1 < len(voiced) else total) - starts[i] for k, i in enumerate(voiced)}
+
+
+def find_recording(folder: Path, name: str) -> Optional[Path]:
+    """video/voiceover/<segment id>.wav (or .m4a, .mp3 ...): a line you recorded yourself."""
+    for ext in VOICE_EXTS:
+        if (folder / f"{name}{ext}").is_file():
+            return folder / f"{name}{ext}"
+    return None
+
+
+def tts_cached(text: str, folder: Path, name: str) -> Optional[Path]:
+    """The TTS for this exact text, kept in video/voiceover_tts/ so the placeholder narration is always there as a backup."""
+    import hashlib
+    path = folder / f"{name}.{hashlib.sha1(text.encode('utf-8')).hexdigest()[:8]}.wav"
+    if path.is_file():
+        return path
+    folder.mkdir(parents=True, exist_ok=True)
+    return path if tts_line(text, path) else None
+
+
+def build_voiceover(segments, path: Path, total: float, root: Path = ROOT, cfg: Optional[dict] = None) -> tuple:
+    """The voiceover track: each segment's `vo` line at the segment's start. A recording in video/voiceover/<id>.wav is used when there
+    is one, else the TTS (cached in video/voiceover_tts/), else nothing. Lines never overlap (the next waits for the last to end).
+    Returns (path, how, warnings)."""
+    cfg = cfg or {}
+    rec_dir = Path(cfg.get("dir", "video/voiceover"))
+    rec_dir = rec_dir if rec_dir.is_absolute() else root / rec_dir
+    tts_dir = Path(cfg.get("tts_dir", "video/voiceover_tts"))
+    tts_dir = tts_dir if tts_dir.is_absolute() else root / tts_dir
+    pieces, warnings, free_at, recorded, spoken = [], [], 0.0, 0, 0
+    slots = vo_slots(segments)
+    for i, (s, start) in enumerate(zip(segments, segment_starts(segments))):
+        if not s.vo:
+            continue
+        name = s.spec.get("id") or s.name
+        line = find_recording(rec_dir, name)
+        source = "recorded"
+        if line is None:
+            line, source = tts_cached(s.vo, tts_dir, name), "tts"
+        if line is None:
+            continue
+        length = probe(line)["duration"]
+        at = max(start + float(s.spec.get("vo_at", 0.3)), free_at + 0.2)
+        if at > start + 0.31:
+            warnings.append(f"{name}: starts {at - start:.1f} s late because the line before it is still going")
+        if length > slots[i] + 0.3 and source == "recorded":
+            warnings.append(f"{name}: your recording is {length:.1f} s but the line has {slots[i]:.1f} s (it runs into the next one)")
+        free_at = at + length
+        pieces.append((at, line))
+        recorded += source == "recorded"
+        spoken += 1
     if not pieces:
-        return silence_wav(path, total), "silent (no TTS reachable: record video/voiceover.wav, or start the AI server)"
+        return silence_wav(path, total), "silent (no recordings, and no TTS reachable)", warnings
+    mix_at(pieces, path, total)
+    return path, f"{recorded} line(s) recorded by you, {spoken - recorded} from the TTS", warnings
+
+
+def mix_at(pieces: list, path: Path, total: float) -> Path:
+    """One mono 48 kHz WAV of `total` seconds with each (start seconds, audio file) of `pieces` placed at its start."""
     inputs, labels, graph = [], [], []
-    for i, (start, wav) in enumerate(pieces):
-        inputs += ["-i", str(wav)]
+    for i, (start, line) in enumerate(pieces):
+        inputs += ["-i", str(line)]
         ms = int(start * 1000)
         graph.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=mono,adelay={ms}|{ms}[p{i}]")
         labels.append(f"[p{i}]")
     graph.append("".join(labels) + f"amix=inputs={len(pieces)}:normalize=0,apad=whole_dur={total:.3f}[vo]")
-    run_ffmpeg([*inputs, "-filter_complex", ";".join(graph), "-map", "[vo]", "-t", f"{total:.3f}", str(path)], "the placeholder voiceover")
-    return path, f"placeholder TTS, {len(pieces)} line(s)"
+    run_ffmpeg([*inputs, "-filter_complex", ";".join(graph), "-map", "[vo]", "-t", f"{total:.3f}", str(path)], "the audio mix")
+    return path
 
 
 def finish_audio(video: Path, voiceover: Optional[Path], out: Path, duck_db: float = 14.0) -> Path:
@@ -953,7 +1032,9 @@ def render(storyboard: Path, preview: bool = False, stills=(), out=sys.stdout, r
         if vo_path.is_file():
             voiceover, how = vo_path, f"recorded ({vo_path.name})"
         elif any(s.vo for s in segments):
-            voiceover, how = placeholder_voiceover(segments, work / "voiceover_placeholder.wav", work, total)
+            voiceover, how, warnings = build_voiceover(segments, work / "voiceover_mix.wav", total, root, vo_cfg)
+            for w in warnings:
+                print(f"  voiceover warning: {w}", file=out)
         else:
             voiceover, how = None, "none"
         print(f"  voiceover: {how}", file=out)

@@ -2,10 +2,10 @@
 # Stuart waits, answers on the screen and makes no sound. The waits give the screen time to be read.
 wait 2
 engage
-wait 5
-hi Stuart, can you tell me about Dune?
-wait 9
-where is the science section?
-wait 9
-thanks, that's all
 wait 4
+hi Stuart, can you tell me about Dune?
+wait 8
+where is the science section?
+wait 7
+thanks, that's all
+wait 3

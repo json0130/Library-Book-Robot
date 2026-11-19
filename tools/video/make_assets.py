@@ -89,20 +89,25 @@ def parts(path: Path, size=(1920, 1080)) -> Path:
         d.rounded_rectangle((text_at[0] - 12, text_at[1], text_at[0] + d.textlength(label, font=f(34, True)) + 22, text_at[1] + 46),
                             radius=23, fill=CARD, outline=colour, width=3)
         d.text((text_at[0] + 5, text_at[1] + 6), label, font=f(34, True), fill=INK)
-    tx, ty = px + photo.width + 60, py + 560
-    tiles = [("RFID reader", "rfid_reader.jpg"), ("Hokuyo LiDAR", "lidar.jpg"), ("Face screen", "screen.jpg")]
-    shown = [(label, name) for label, name in tiles if name == "rfid_reader.jpg" or (PARTS_DIR / name).is_file()]
+    # the RFID reader (not on the prototype yet) has its own slot on the right, as large as the free space allows
+    rfid_file = PARTS_DIR / "rfid_reader.jpg"
+    rx, ry, rw, rh = 1520, py + 20, 360, 520
+    if rfid_file.is_file():
+        t = Image.open(rfid_file).convert("RGB")
+        t.thumbnail((rw, rh))
+        img.paste(t, (rx + (rw - t.width) // 2, ry))
+        d.text((rx + rw // 2, ry + t.height + 14), "RFID reader (RC522)", font=f(30, True), fill=INK, anchor="ma")
+    else:
+        d.rounded_rectangle((rx, ry, rx + rw, ry + 300), radius=14, outline=LINE, width=3)
+        d.text((rx + rw // 2, ry + 140), "photo needed", font=f(28), fill=MUTED, anchor="mm")
+        d.text((rx + rw // 2, ry + 314), "RFID reader", font=f(30, True), fill=INK, anchor="ma")
+    tx, ty = px + photo.width + 60, py + 600                          # optional close-ups of the other parts
+    shown = [(label, name) for label, name in (("Hokuyo LiDAR", "lidar.jpg"), ("Face screen", "screen.jpg")) if (PARTS_DIR / name).is_file()]
     for i, (label, name) in enumerate(shown):
         x = tx + i * 330
-        box = (x, ty, x + 300, ty + 230)
-        file = PARTS_DIR / name
-        if file.is_file():
-            t = Image.open(file).convert("RGB")
-            t.thumbnail((300, 230))
-            img.paste(t, (x + (300 - t.width) // 2, ty + (230 - t.height) // 2))
-        else:
-            d.rounded_rectangle(box, radius=14, outline=LINE, width=3)
-            d.text(((box[0] + box[2]) / 2, ty + 105), "photo needed", font=f(28), fill=MUTED, anchor="mm")
+        t = Image.open(PARTS_DIR / name).convert("RGB")
+        t.thumbnail((300, 230))
+        img.paste(t, (x + (300 - t.width) // 2, ty + (230 - t.height) // 2))
         d.text((x + 150, ty + 245), label, font=f(28, True), fill=INK, anchor="ma")
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path)

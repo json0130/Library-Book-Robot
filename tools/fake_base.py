@@ -77,12 +77,27 @@ def read_sections(floorplan_path, shelves_path) -> tuple:
     return plan, zones
 
 
+def replay_pose(track: list, t: float) -> tuple:
+    """(x, y, yaw) of a recorded track at `t` seconds: straight lines between the samples, the shorter way round for the heading.
+    track is [[seconds, x, y, yaw], ...] in time order; before the first sample or after the last it stays there."""
+    if t <= track[0][0]:
+        return tuple(track[0][1:4])
+    for (t0, x0, y0, a0), (t1, x1, y1, a1) in zip(track, track[1:]):
+        if t <= t1:
+            f = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            turn = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
+            return (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f, (a0 + turn * f + math.pi) % (2 * math.pi) - math.pi)
+    return tuple(track[-1][1:4])
+
+
 class FakeBase:
     def __init__(self, token: str = "test-token", plan=None, section_zone: Optional[dict] = None,
                  start: Optional[tuple] = None, speed: float = 0.5, fail_rate: float = 0.0, seed: int = 1,
                  unlocalised_for: float = 0.0, uncalibrated: bool = False, level: Optional[int] = None, time_scale: float = 1.0,
-                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time,
+                 replay: Optional[list] = None):
         self.token, self.plan, self.section_zone = token, plan, dict(section_zone or {})
+        self.replay = [list(t) for t in (replay or [])]  # recorded tracks ([[s, x, y, yaw], ...]): each accepted goal replays the next one, in real time
         self.clock, self.wall = clock, wall
         self.lock = threading.RLock()
         self.rng = random.Random(seed)
@@ -134,6 +149,14 @@ class FakeBase:
                 return
             if not self.localised:
                 self.finish("failed", "lost_localisation")
+                return
+            track = g.get("replay")
+            if track:                                        # a recorded drive: follow it exactly, at the speed it had
+                elapsed = now - g["accepted"]
+                self.x, self.y, self.yaw = replay_pose(track, elapsed)
+                if elapsed >= track[-1][0]:
+                    self.finish("succeeded", "")
+                    self.note(f"arrived at ({self.x:.2f}, {self.y:.2f}) for goal {g['goal_id']} (replayed)")
                 return
             step = min(self.speed, self.max_speed) * self.time_scale * dt
             dx, dy = g["x"] - self.x, g["y"] - self.y
@@ -274,6 +297,11 @@ class FakeBase:
             self.goal = {"goal_id": goal_id, "x": x, "y": y, "yaw": yaw, "status": "active", "reason": "", "total": total,
                          "accepted": self.clock(), "fail_at": self.rng.uniform(0.2, 0.8) * total if fail else None,
                          "fail_reason": self.rng.choice(FAIL_REASONS)}
+            if self.replay:
+                track = self.replay.pop(0)
+                self.goal["replay"], self.goal["fail_at"] = track, None
+                self.x, self.y, self.yaw = track[0][1:4]
+                self.note(f"goal {goal_id} will replay a recorded drive of {track[-1][0]:.0f} s")
             self.known[goal_id] = self.goal
             while len(self.known) > KNOWN_GOALS:
                 self.known.popitem(last=False)
