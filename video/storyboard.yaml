@@ -52,7 +52,7 @@ segments:
     fit: contain
     duration: 2.5
     label: "Concept (AI-generated image)"
-    vo: "So we present Stuart, the library robot that returns books and helps patrons, working alongside librarians."
+    vo: "Meet Stuart, a library robot that returns books and helps patrons, working alongside librarians."
 
   - id: robot-cad
     type: photo
@@ -87,7 +87,7 @@ segments:
     type: stills
     duration: 9
     images: [video/assets/parts.png]
-    vo: "Books are read by an RFID reader, obstacles are seen by a LiDAR, and Stuart's face is shown on a small screen."
+    vo: "An RFID reader identifies books, a LiDAR sees obstacles, and a small screen shows Stuart's face."
 
   # ---- The two maps (images from the paper, Fig. 3) ----
   - id: maps
@@ -96,7 +96,7 @@ segments:
     images: [video/assets/paper/nav_map.png, video/assets/paper/sound_map.png]
     labels: ["Map Stuart navigates on", "Sound levels recorded on it"]
     text: "Learning the zones"
-    vo: "As it maps the library, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas."
+    vo: "As it drives around, Stuart measures the sound level and builds a sound map. Quiet places become quiet zones, and lively places become common areas."
 
   # ---- Common area: the real run (19 Nov): the operator page showing the webcam with the face found, Stuart's face and the state machine.
   # A person walks up, Stuart greets and offers, the visitor's request is typed by the operator (speech input is not wired in), the book
@@ -241,7 +241,7 @@ segments:
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
-    vo: "When the patron leaves, Stuart drives the returned books to their section,"
+    vo: "When the patron leaves, Stuart carries the returned books to their section, here Fiction,"
 
   - id: trip-back
     type: split
@@ -267,7 +267,7 @@ segments:
     audio: mute
     auto_captions: true
     badge: "Live view. Visitor's words typed by the operator"
-    vo: "On the way, Stuart meets someone in a quiet zone. Here it makes no sound: its greeting and its answers appear as text on the screen, so students nearby can keep working."
+    vo: "On the way, Stuart enters a quiet zone, which it knows from its sound map. Here it never calls out. It waits for someone to come to it, then greets them and answers in text on the screen, with no sound, so students nearby can keep working. Same task, different style."
 
   - id: quiet-wait
     type: clip
