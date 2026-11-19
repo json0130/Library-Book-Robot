@@ -18,6 +18,10 @@ Sources
     screen  the real desktop ($DISPLAY) with x11grab -> screen.mp4, for anything shown in a normal window.
     audio   Stuart's own speaker output from the PulseAudio monitor of its sink (`devices.speaker` in config/robot.yaml) with
             parecord -> audio.wav: its voice without the room.
+    mic     the robot's microphone (`devices.mic`, else the system default input) with parecord -> mic.wav: what the visitor says. The
+            robot does not keep the sound it hears, so this is the only recording of the visitor's voice. Both audio files are checked
+            when the recording stops: a silent one is reported. Record these two beside a screen recording made with another tool
+            (GNOME's Ctrl+Shift+Alt+R has no sound), then `session_to_take.py --sound-take <take>` puts them in the picture.
 
 The camera with the faces boxed is recorded by the robot itself (`python -m robot sim --camera --faces --record ...`), so the
 webcam is never opened twice. Nothing here moves the robot: it only opens pages and records.
@@ -45,7 +49,7 @@ sys.path.insert(0, str(ROOT))
 RECORDINGS = ROOT / "recordings"
 # snap Firefox can only read and write inside the home folder's snap area, so its throwaway profiles live there
 PROFILES = Path.home() / "snap" / "firefox" / "common" / "lbr-film"
-SOURCES = ("face", "map", "screen", "audio")
+SOURCES = ("face", "map", "screen", "audio", "mic")
 SIZES = {"face": (1024, 600), "map": (1920, 1080)}
 FPS = 30
 
@@ -102,6 +106,27 @@ def speaker_monitor(fragment: Optional[str]) -> Optional[str]:
             return sinks_matching[0] + ".monitor"
     default = run_text(["pactl", "get-default-sink"]).strip()
     return default + ".monitor" if default else None
+
+
+def mic_input(fragment: Optional[str]) -> Optional[str]:
+    """The input source (not a monitor) whose name contains `fragment` (devices.mic), else the system default input."""
+    inputs = [name for name, monitor in pulse_sources() if not monitor]
+    if fragment:
+        hit = [n for n in inputs if fragment.lower() in n.lower()]
+        if hit:
+            return hit[0]
+    default = run_text(["pactl", "get-default-source"]).strip()
+    return default if default and not default.endswith(".monitor") else (inputs[0] if inputs else None)
+
+
+def sound_level(path: Path) -> Optional[tuple]:
+    """(mean dB, peak dB) of a recorded sound file, or None if it cannot be read: a way to tell that the microphone really heard something."""
+    import re
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    mean, peak = re.search(r"mean_volume: (-?[\d.]+|-inf) dB", out), re.search(r"max_volume: (-?[\d.]+|-inf) dB", out)
+    if not (mean and peak):
+        return None
+    return float(mean.group(1)), float(peak.group(1))
 
 
 def x_display_ok(display: Optional[str]) -> bool:
@@ -161,6 +186,10 @@ def check(host: Optional[str] = None, port: Optional[int] = None, out=sys.stdout
     mon = speaker_monitor(speaker)
     say(f"  -> Stuart's voice would be recorded from: {mon or 'NONE (no sink)'} (devices.speaker = {speaker!r})")
     problems += 0 if mon else 1
+    mic_wanted = (load_config().robot.get("devices") or {}).get("mic")
+    mic_dev = mic_input(mic_wanted)
+    say(f"  -> the visitor's voice would be recorded from: {mic_dev or 'NONE (no input)'} (devices.mic = {mic_wanted!r})")
+    problems += 0 if mic_dev else 1
     free = available_mb()
     say(f"memory: {free} MB available (each browser source needs about {BROWSER_MB} MB)")
     display = os.environ.get("DISPLAY")
@@ -241,11 +270,11 @@ def screen_cmd(output: Path, display: str, fps: int = FPS) -> list:
             "-pix_fmt", "yuv420p", str(output)]
 
 
-def audio_cmd(output: Path, monitor: str) -> list:
-    return ["parecord", f"--device={monitor}", "--rate=48000", "--channels=2", "--format=s16le", "--file-format=wav", str(output)]
+def audio_cmd(output: Path, monitor: str, channels: int = 2) -> list:
+    return ["parecord", f"--device={monitor}", "--rate=48000", f"--channels={channels}", "--format=s16le", "--file-format=wav", str(output)]
 
 
-def plan_sources(names, take_path: Path, base_url: str, speaker: Optional[str]) -> list:
+def plan_sources(names, take_path: Path, base_url: str, speaker: Optional[str], mic: Optional[str] = None) -> list:
     """The Source objects for the names asked for, with their commands; raises ValueError for an unknown name."""
     sources = []
     display_no = None
@@ -262,6 +291,12 @@ def plan_sources(names, take_path: Path, base_url: str, speaker: Optional[str]) 
             display = os.environ.get("DISPLAY", ":0")
             src = Source(name, take_path / "screen.mp4", stop_with_q=True)
             src.cmds = [screen_cmd(src.output, display)]
+        elif name == "mic":
+            device = mic_input(mic)
+            src = Source(name, take_path / "mic.wav")
+            if device is None:
+                src.error = "no microphone to record from"
+            src.cmds = [audio_cmd(src.output, device or "none", 1)]
         else:
             monitor = speaker_monitor(speaker)
             src = Source(name, take_path / "audio.wav")
@@ -394,10 +429,10 @@ def write_meta(take_path: Path, take: str, sources: list, started: float, stoppe
 
 
 def record(take: str, names, base_url: str, speaker: Optional[str], duration: Optional[float] = None,
-           wait: Optional[Callable[[], None]] = None, out=sys.stdout, force: bool = False) -> int:
+           wait: Optional[Callable[[], None]] = None, out=sys.stdout, force: bool = False, mic: Optional[str] = None) -> int:
     from robot.film import take_dir
     take_path = take_dir(take, RECORDINGS)
-    sources = plan_sources(names, take_path, base_url, speaker)
+    sources = plan_sources(names, take_path, base_url, speaker, mic)
     short = memory_check(names)
     if short and force:
         print(f"  warning: {short}. Going ahead (--force): the recording is the first thing the kernel would stop.", file=out)
@@ -440,6 +475,14 @@ def record(take: str, names, base_url: str, speaker: Optional[str], duration: Op
     for s in sources:
         size = s.output.stat().st_size if s.output.exists() else 0
         print(f"  {s.name:7} {s.output} {size / 1e6:.1f} MB" + (f"  ({s.error})" if s.error else ""), file=out)
+    for s in sources:
+        if s.name in ("audio", "mic") and s.error is None and s.output.exists():
+            level = sound_level(s.output)
+            if level is None or level[1] < -50:
+                print(f"  WARNING {s.name}: nothing was heard (peak {'?' if level is None else f'{level[1]:.0f}'} dB). Check the device: `film.py check`", file=out)
+                s.error = "silent"
+            else:
+                print(f"  {s.name:7} heard: peak {level[1]:.0f} dB, average {level[0]:.0f} dB", file=out)
     print(f"  meta: {meta}", file=out)
     return 0 if all(s.error is None for s in sources) else 2
 
@@ -463,6 +506,7 @@ def main(argv=None) -> int:
     r.add_argument("--host", help="the display server's host (default display.host in config/robot.yaml)")
     r.add_argument("--port", type=int)
     r.add_argument("--duration", type=float, help="stop by itself after this many seconds")
+    r.add_argument("--mic", help="part of the microphone's name, the one the robot listens with (default devices.mic, else the system default input)")
     r.add_argument("--force", action="store_true",
                    help="record a browser source even with little free memory (it runs with the highest OOM score, so it goes first)")
     d = sub.add_parser("dell-command", help="print the command to film the map on the Dell")
@@ -477,7 +521,8 @@ def main(argv=None) -> int:
     speaker = (load_config().robot.get("devices") or {}).get("speaker")
     names = [n.strip() for n in args.sources.split(",") if n.strip()]
     try:
-        return record(args.take, names, display_base(args.host, args.port), speaker, args.duration, force=args.force)
+        return record(args.take, names, display_base(args.host, args.port), speaker, args.duration, force=args.force,
+                      mic=args.mic or (load_config().robot.get("devices") or {}).get("mic"))
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1

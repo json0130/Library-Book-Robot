@@ -9,6 +9,10 @@ this makes recordings/<take>/ from the two: events.jsonl (person_detected, speec
 GNOME screencast, "17-19-57"), and screen.mp4. The editor then captions Stuart's lines at the moments he said them, and can crop the
 recording to the part worth showing (crop: in the storyboard).
 
+A run recorded WITH sound: start `python tools/video/film.py record --take rfid3 --sources audio,mic` just before the run (Stuart's
+speaker and the microphone, with the same clock as the log), press Enter when it is over (it says whether each heard anything), then
+add `--sound-take rfid3` here. That is the real voice of both; `--sound-offset` nudges it if the lip movement is out of step.
+
 A recording that has sound of its own keeps it: nothing is added then (no TTS, no stand-in), and that sound is the take's audio.wav.
 
 --voice: a screen recording usually has no sound, so Stuart is silent in it. With --voice each line he said is made again with the TTS
@@ -98,6 +102,34 @@ def use_recorded_sound(video: Path, take: Path, t0: float) -> Path:
     meta = json.loads((take / "meta.json").read_text())
     meta["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None, "note": "the sound of the screen recording itself"}
     (take / "meta.json").write_text(json.dumps(meta, indent=2))
+    return take / "audio.wav"
+
+
+def mix_recorded_sound(sound: Path, take: Path, t0: float, duration: float, offset: float = 0.0) -> Path:
+    """The sound that film.py recorded beside the screen recording (recordings/<sound>/audio.wav = Stuart's speaker, mic.wav = the visitor's
+    microphone), lined up with the picture by the start times in its meta.json (`offset` seconds later if the picture runs ahead of it), as
+    the take's audio.wav. Nothing is synthesised."""
+    meta = json.loads((sound / "meta.json").read_text())
+    inputs, graph, labels = [], [], []
+    for name in ("audio", "mic"):
+        info = meta.get("sources", {}).get(name)
+        if not info or info.get("error") or not (sound / info["file"]).is_file():
+            continue
+        shift = info["started"] - t0 + offset                   # seconds after the picture's first frame that this sound starts
+        i = len(labels)
+        inputs += ["-i", str(sound / info["file"])]
+        trim = f"atrim=start={-shift:.3f},asetpts=PTS-STARTPTS," if shift < 0 else ""
+        delay = f",adelay={int(shift * 1000)}|{int(shift * 1000)}" if shift > 0 else ""
+        graph.append(f"[{i}:a]{trim}aresample=48000,aformat=channel_layouts=mono{delay}[s{i}]")
+        labels.append(f"[s{i}]")
+    if not labels:
+        raise SystemExit(f"recordings/{sound.name} has no audio.wav or mic.wav that recorded (see its meta.json)")
+    graph.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0,apad=whole_dur={duration:.3f}[out]")
+    edit.run_ffmpeg([*inputs, "-filter_complex", ";".join(graph), "-map", "[out]", "-t", f"{duration:.3f}", str(take / "audio.wav")], "the recorded sound")
+    meta_take = json.loads((take / "meta.json").read_text())
+    meta_take["sources"]["audio"] = {"file": "audio.wav", "started": t0, "error": None,
+                                     "note": f"the real sound, recorded by film.py in recordings/{sound.name} ({', '.join(n for n in ('audio', 'mic') if n in meta.get('sources', {}))})"}
+    (take / "meta.json").write_text(json.dumps(meta_take, indent=2))
     return take / "audio.wav"
 
 
@@ -208,6 +240,9 @@ def main(argv=None) -> int:
     p.add_argument("--take", required=True)
     p.add_argument("--remix", action="store_true", help="only make recordings/<take>/audio.wav again (Stuart's lines + the visitor's recordings)")
     p.add_argument("--voice", action="store_true", help="make Stuart's lines with the TTS and place them (the recording has no sound)")
+    p.add_argument("--sound-take", help="recordings/<name>: sound recorded by `film.py record --sources audio,mic` during the run; it is "
+                                        "put under the picture as it is (no TTS, no stand-in)")
+    p.add_argument("--sound-offset", type=float, default=0.0, help="seconds to move that sound later (negative: earlier) if it is out of step")
     p.add_argument("--source", default="screen", help="the name of the recording in the take (default %(default)s)")
     args = p.parse_args(argv)
     if args.remix:
@@ -227,6 +262,8 @@ def main(argv=None) -> int:
             "sources": {args.source: {"file": f"{args.source}.mp4", "started": t0, "error": None}}}
     pieces, speak = [], []
     own_sound = has_audio(video)
+    if args.sound_take:
+        args.voice = False
     if own_sound and args.voice:
         print("the recording has its own sound: it is used as it is and nothing is synthesised (no TTS, no stand-in)")
         args.voice = False
@@ -250,6 +287,9 @@ def main(argv=None) -> int:
     (take / "meta.json").write_text(json.dumps(meta, indent=2))
     if args.voice:
         mix_take_audio(take)
+        meta = json.loads((take / "meta.json").read_text())
+    elif args.sound_take:
+        mix_recorded_sound(ROOT / "recordings" / args.sound_take, take, t0, info["duration"], args.sound_offset)
         meta = json.loads((take / "meta.json").read_text())
     elif own_sound:
         use_recorded_sound(video, take, t0)

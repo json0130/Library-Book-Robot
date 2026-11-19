@@ -48,7 +48,7 @@ segments:
   # ---- How Stuart works, scene 1: the robot (its design, in four pictures), then the two interaction styles ----
   - id: robot-concept
     type: photo
-    image: video/assets/paper/fig1_concept.jpg
+    image: video/assets/paper/concept_ai.png
     fit: contain
     duration: 2.5
     label: "Concept (AI-generated image)"
@@ -56,17 +56,10 @@ segments:
 
   - id: robot-cad
     type: photo
-    image: video/assets/paper/design_cad.png
+    image: video/assets/paper/cad_prototype.png
     fit: contain
-    duration: 2.5
-    label: "CAD model"
-
-  - id: robot-render
-    type: photo
-    image: video/assets/paper/design_render.png
-    fit: contain
-    duration: 2.5
-    label: "CAD render"
+    duration: 3.5
+    label: "CAD model of the prototype"
 
   - id: robot-prototype
     type: photo

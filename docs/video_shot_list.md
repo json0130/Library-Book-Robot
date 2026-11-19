@@ -3,7 +3,7 @@
 The story, from the paper: **Stuart changes how it communicates by zone, not what it does.** Common area: it greets, speaks aloud, and the
 screen shows only its face. Quiet zone: it never starts, answers as text on the screen, and makes no sound.
 
-The cut is `video/storyboard.yaml` (175.5 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
+The cut is `video/storyboard.yaml` (174.0 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
 placeholder (a "Shot needed" card of the planned length). Drop a shot's file in place, render again, and nothing else changes.
 
 ## The cut, in order
@@ -12,7 +12,7 @@ placeholder (a "Shot needed" card of the planned length). Drop a shot's file in 
 |---|---|---|---|---|
 | 0:00 | hook | a quiet library, then a lively one; narration explains | Wikimedia Commons photos, credited on the frame | done |
 | 0:13 | title | "Stuart" | drawn | done |
-| 0:17 | robot | "So we present Stuart, the library robot ...": concept (AI-generated), CAD model, CAD render, prototype | the paper's figures | done |
+| 0:17 | robot | "So we present Stuart, the library robot ...": the AI-generated concept image, the CAD model of the prototype, the prototype photo | `video/assets/paper/concept_ai.png`, `cad_prototype.png` (yours) + the paper's prototype photo | done |
 | 0:27 | styles | the common-area and quiet-zone interaction | Fig. 6 of the paper, cropped | done |
 | 0:34 | system, parts | system diagram; the prototype photo with its parts named, and three close-ups: the LiDAR, the face screen, the RFID reader | drawn + your photos | done |
 | 0:52 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
@@ -46,7 +46,22 @@ Left out of the cut. To add it back: a `clip` segment `unload` between `trip-out
 ### Close-ups of the parts: done
 `video/assets/parts/` has `lidar.jpg`, `screen.jpg` and `rfid_reader.jpg` (the originals are in `video/footage/originals/`). To change one, replace the file and run `python tools/video/make_assets.py`.
 
-### If the common area is filmed again
+### If the common area is filmed again, with the real voices
+The screen recording has no sound and the robot does not keep what its microphone hears, so record the sound beside it, in a second terminal,
+started just before the run:
+```
+python tools/video/film.py check                                      # the two lines "voice would be recorded from": Stuart's speaker and the microphone
+python tools/video/film.py record --take rfid3 --sources audio,mic    # --mic MV_USB if the robot listens with that microphone (devices.mic)
+#   ... start the screen recording, run the robot, do the visit, stop the screen recording ...
+#   press Enter in that terminal: it says whether each of the two heard anything (a silent one is flagged)
+python tools/video/session_to_take.py --log data/logs/session-....jsonl --video <the screencast> --start HH:MM:SS.55 --take rfid3 --sound-take rfid3
+```
+Rehearse first: `film.py record --take test --sources audio,mic --duration 5` while you speak, then play `recordings/test/mic.wav`. Use the same
+microphone as the robot (`--mic`): the default input of this Jetson is the analog jack, and it heard nothing when tested. If the voice is a
+fraction of a second off the picture, add `--sound-offset 0.3` (positive = the sound later). With `--sound-take` nothing is synthesised: the
+voice in the video is yours and the robot's own speaker. Then point the `live-*` segments at the new take.
+
+#### The pop-up
 The pop-up comes with it: in `video/storyboard.yaml` the `live-scan` segment has an `inset:` (the CAD clip, `at:` = seconds into the segment when it appears, `speed`, `width`, `label`, `top:` to move it down). Point `in:`/`out:` of the segment at the new take (`take: ..., source: screen`) and set `at:` to when the reader has read the book (`python tools/video/session_to_take.py` prints the `rfid_read` time).
 
 ## The voiceover

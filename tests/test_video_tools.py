@@ -211,6 +211,30 @@ class SessionToTakeTest(unittest.TestCase):
         wav = session_to_take.use_recorded_sound(loud, take, 0.0)
         self.assertGreater(session_to_take.wav_seconds(wav), 1.5)
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_sound_recorded_beside_the_screen_recording_is_lined_up_by_the_start_times(self):
+        import json
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        sound, take = d / "sound", d / "take"
+        sound.mkdir(), take.mkdir()
+        # a 1 s tone that starts 2 s after the picture, and a microphone file that failed
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=1", str(sound / "audio.wav")], check=True)
+        (sound / "meta.json").write_text(json.dumps({"sources": {"audio": {"file": "audio.wav", "started": 102.0, "error": None},
+                                                                  "mic": {"file": "mic.wav", "started": 100.0, "error": "no microphone"}}}))
+        (take / "meta.json").write_text(json.dumps({"sources": {}}))
+        out = session_to_take.mix_recorded_sound(sound, take, 100.0, 5.0)
+        self.assertAlmostEqual(session_to_take.wav_seconds(out), 5.0, delta=0.1)
+        levels = []
+        for a, b in ((0.0, 1.8), (2.2, 2.8), (3.3, 4.8)):
+            res = subprocess.run(["ffmpeg", "-hide_banner", "-ss", str(a), "-t", str(b - a), "-i", str(out), "-af", "volumedetect", "-f", "null", "-"],
+                                 capture_output=True, text=True).stderr
+            levels.append(float(res.split("max_volume: ")[1].split(" dB")[0]))
+        self.assertLess(levels[0], -60)          # nothing before it starts
+        self.assertGreater(levels[1], -30)       # heard at 2 s
+        self.assertLess(levels[2], -60)          # and over by 3 s
+        self.assertEqual(json.loads((take / "meta.json").read_text())["sources"]["audio"]["file"], "audio.wav")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -276,3 +300,29 @@ class ReverseClipTest(unittest.TestCase):
             self.assertGreater(b0, 150)
             self.assertLess(r0, 100)
             self.assertGreater(r1, 150)
+
+
+class FilmMicTest(unittest.TestCase):
+    def test_the_microphone_is_a_source_that_records_what_the_visitor_says(self):
+        from unittest import mock
+        from tools.video import film
+        self.assertIn("mic", film.SOURCES)
+        with mock.patch.object(film, "mic_input", return_value="alsa_input.usb-MV_USB_MIC") as pick:
+            sources = film.plan_sources(["mic", "audio"], Path("/tmp/take"), "http://x", "USB", "MV_USB")
+        pick.assert_called_once_with("MV_USB")
+        mic = sources[0]
+        self.assertEqual(mic.output.name, "mic.wav")
+        self.assertIn("--device=alsa_input.usb-MV_USB_MIC", mic.cmds[0])
+        self.assertIn("--channels=1", mic.cmds[0])
+        with mock.patch.object(film, "mic_input", return_value=None):
+            self.assertEqual(film.plan_sources(["mic"], Path("/tmp/take"), "http://x", None)[0].error, "no microphone to record from")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_a_silent_recording_is_told_from_one_that_heard_something(self):
+        from tools.video import film
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        for name, src in (("tone", "sine=f=440:d=1"), ("silence", "anullsrc=r=48000:cl=mono")):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", src, "-t", "1", str(d / f"{name}.wav")], check=True)
+        self.assertGreater(film.sound_level(d / "tone.wav")[1], -30)
+        self.assertLess(film.sound_level(d / "silence.wav")[1], -50)
