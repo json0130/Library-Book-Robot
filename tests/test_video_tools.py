@@ -312,8 +312,10 @@ class FilmMicTest(unittest.TestCase):
         pick.assert_called_once_with("MV_USB")
         mic = sources[0]
         self.assertEqual(mic.output.name, "mic.wav")
-        self.assertIn("--device=alsa_input.usb-MV_USB_MIC", mic.cmds[0])
-        self.assertIn("--channels=1", mic.cmds[0])
+        self.assertEqual(mic.cmds[0][0], "ffmpeg")                              # parecord loses the last 2 s of a recording
+        self.assertIn("alsa_input.usb-MV_USB_MIC", mic.cmds[0])
+        self.assertEqual(mic.cmds[0][mic.cmds[0].index("-ac") + 1], "1")
+        self.assertTrue(mic.stop_with_q)
         with mock.patch.object(film, "mic_input", return_value=None):
             self.assertEqual(film.plan_sources(["mic"], Path("/tmp/take"), "http://x", None)[0].error, "no microphone to record from")
 

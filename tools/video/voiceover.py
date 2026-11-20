@@ -105,21 +105,31 @@ def silent(path: Path, floor: float = -50.0) -> bool:
 
 
 def record_one(path: Path, mic: str, seconds: float = 0.0) -> float:
-    """Record 48 kHz mono WAV from the microphone until Enter (or for `seconds`); returns its length."""
+    """Record 48 kHz mono WAV from the microphone until Enter (or for `seconds`); returns its length. ffmpeg does it, and 'q' ends it: parecord
+    throws away the last ~2 s of every recording, which cut the ends of the lines."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp()) / "take.wav"
-    proc = subprocess.Popen(["parecord", f"--device={mic}", "--rate=48000", "--channels=1", "--format=s16le", "--file-format=wav", str(tmp)])
+    proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "pulse", "-i", mic, "-ac", "1", "-ar", "48000", str(tmp)],
+                            stdin=subprocess.PIPE)
+    time.sleep(0.7)                                           # the microphone is open a moment after ffmpeg starts: do not speak before this
     started = time.time()
     try:
         if seconds:
             time.sleep(seconds)
         else:
-            input("    recording... press Enter to stop ")
+            input("    RECORDING NOW. Speak, then press Enter to stop ")
+            time.sleep(0.3)                                   # the last word is not cut by the key press
     finally:
-        proc.terminate()
-        proc.wait()
+        try:
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+            proc.stdin.close()
+            proc.wait(timeout=8)
+        except (OSError, subprocess.SubprocessError):
+            proc.kill()
     length = time.time() - started
-    tmp.replace(path) if tmp.stat().st_size > 1000 else None
+    if tmp.exists() and tmp.stat().st_size > 1000:
+        tmp.replace(path)
     return length
 
 
@@ -201,6 +211,12 @@ def main(argv=None) -> int:
             length = record_one(target, mic, args.seconds)
             note = "" if length <= r["slot"] + 0.3 else f"  (longer than the {r['slot']:.1f} s it has: it will run into the next line)"
             print(f"    {length:.1f} s saved{note}")
+            peak = peak_db(target)
+            if peak is not None and peak >= -1.0 and not silent(target):
+                print("    TOO LOUD: the recording is clipping (distorted). Move back from the microphone or lower its volume "
+                      "(`pactl set-source-volume <source> 50%`), then record the line again.")
+                if not args.seconds and input("    Enter = record again, k = keep it anyway: ").strip().lower() != "k":
+                    continue
             if silent(target):
                 print(f"    NOTHING WAS HEARD from {mic}. If you were speaking, this is not the microphone you speak into: `list-mics` shows them, then run again with "
                       f"--mic <part of its name>, for example --mic MV_USB for the USB microphone.")

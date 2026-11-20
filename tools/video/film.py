@@ -271,7 +271,8 @@ def screen_cmd(output: Path, display: str, fps: int = FPS) -> list:
 
 
 def audio_cmd(output: Path, monitor: str, channels: int = 2) -> list:
-    return ["parecord", f"--device={monitor}", "--rate=48000", f"--channels={channels}", "--format=s16le", "--file-format=wav", str(output)]
+    """ffmpeg reading the PulseAudio source (stopped with 'q'). parecord was used first: it throws away the last ~2 s of every recording."""
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "pulse", "-i", monitor, "-ac", str(channels), "-ar", "48000", str(output)]
 
 
 def plan_sources(names, take_path: Path, base_url: str, speaker: Optional[str], mic: Optional[str] = None) -> list:
@@ -293,13 +294,13 @@ def plan_sources(names, take_path: Path, base_url: str, speaker: Optional[str], 
             src.cmds = [screen_cmd(src.output, display)]
         elif name == "mic":
             device = mic_input(mic)
-            src = Source(name, take_path / "mic.wav")
+            src = Source(name, take_path / "mic.wav", stop_with_q=True)
             if device is None:
                 src.error = "no microphone to record from"
             src.cmds = [audio_cmd(src.output, device or "none", 1)]
         else:
             monitor = speaker_monitor(speaker)
-            src = Source(name, take_path / "audio.wav")
+            src = Source(name, take_path / "audio.wav", stop_with_q=True)
             if monitor is None:
                 src.error = "no speaker sink to record from"
             src.cmds = [audio_cmd(src.output, monitor or "none")]
@@ -399,7 +400,7 @@ def start_source(src: Source, log_dir: Path, popen=subprocess.Popen, settle_s: f
 
 
 def stop_source(src: Source, timeout: float = 8.0) -> None:
-    """Stop the recorder first (cleanly: 'q' for ffmpeg, SIGINT for parecord), then the browser and the screen."""
+    """Stop the recorder first (cleanly: 'q' for ffmpeg), then the browser and the screen."""
     for i, proc in enumerate(reversed(src.procs)):
         if proc.poll() is not None:
             continue
