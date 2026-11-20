@@ -1009,6 +1009,32 @@ def tts_cached(text: str, folder: Path, name: str) -> Optional[Path]:
     return path if tts_line(text, path) else None
 
 
+def trim_silence(line: Path, out: Path, floor_db: float = -42.0, lead: float = 0.15, tail: float = 0.2) -> Path:
+    """A recording without the silence before the first word and after the last (a few tenths of a second are kept), so a line starts
+    where its slot starts however long you waited after pressing Enter."""
+    cut = f"silenceremove=start_periods=1:start_threshold={floor_db}dB:start_silence={{}}"
+    run_ffmpeg(["-i", str(line), "-af", cut.format(lead) + ",areverse," + cut.format(tail) + ",areverse", str(out)], "trimming a recording")
+    if not (out.is_file() and probe(out)["duration"] > 0.2):
+        return line
+    return match_level(out)
+
+
+def match_level(path: Path, target_db: float = -20.0, most: float = 9.0) -> Path:
+    """The line louder or quieter (at most `most` dB, with a limiter) so every recorded line has about the same average level: a short
+    line spoken softly ("Thank you.") would otherwise be heard much quieter than the rest."""
+    import re
+    res = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    hit = re.search(r"mean_volume: (-?[\d.]+) dB", res)
+    if not hit:
+        return path
+    gain = max(-most, min(most, target_db - float(hit.group(1))))
+    if abs(gain) < 0.5:
+        return path
+    out = path.with_name(path.stem + "-level.wav")
+    run_ffmpeg(["-i", str(path), "-af", f"volume={gain:.2f}dB,alimiter=limit=0.89", str(out)], "matching a recording's level")
+    return out if out.is_file() else path
+
+
 def build_voiceover(segments, path: Path, total: float, root: Path = ROOT, cfg: Optional[dict] = None) -> tuple:
     """The voiceover track: each segment's `vo` line at the segment's start. A recording in video/voiceover/<id>.wav is used when there
     is one, else the TTS (cached in video/voiceover_tts/), else nothing. Lines never overlap (the next waits for the last to end).
@@ -1026,6 +1052,8 @@ def build_voiceover(segments, path: Path, total: float, root: Path = ROOT, cfg: 
         name = s.spec.get("id") or s.name
         line = find_recording(rec_dir, name) if USE_RECORDINGS else None
         source = "recorded"
+        if line is not None:
+            line = trim_silence(line, path.with_name(f"trimmed-{name}.wav"))
         if line is None:
             line, source = tts_cached(s.vo, tts_dir, name), "tts"
         if line is None:

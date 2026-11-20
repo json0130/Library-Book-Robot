@@ -340,3 +340,18 @@ class SilentRecordingTest(unittest.TestCase):
         self.assertTrue(voiceover.silent(d / "quiet.wav"))
         self.assertFalse(voiceover.silent(d / "voice.wav"))
         self.assertEqual(voiceover.peak_db(d / "quiet.wav"), -91.0)
+
+
+class TrimSilenceTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+    def test_the_wait_before_the_first_word_and_after_the_last_is_cut(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "1.5", str(d / "a.wav")], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=2", str(d / "b.wav")], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "0.5", str(d / "c.wav")], check=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(d / "a.wav"), "-i", str(d / "b.wav"), "-i", str(d / "c.wav"), "-filter_complex",
+                        "[0][1][2]concat=n=3:v=0:a=1", str(d / "line.wav")], check=True)       # 1.5 s wait, 2 s of voice, 0.5 s wait
+        self.assertAlmostEqual(edit.probe(d / "line.wav")["duration"], 4.0, delta=0.05)
+        out = edit.trim_silence(d / "line.wav", d / "trimmed.wav")
+        self.assertAlmostEqual(edit.probe(out)["duration"], 2.0 + 0.15 + 0.2, delta=0.15)
