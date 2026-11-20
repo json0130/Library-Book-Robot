@@ -10,7 +10,7 @@
 #   2. How Stuart works: the robot (CAD, prototype), the two interaction styles, the system, the parts, the sound map.
 #   3. Common area: a person approaches (webcam with the face found + the robot's face), asks to return a book, the webcam view
 #      swaps to the RFID reader scanning it, Stuart answers aloud; the person leaves.
-#   4. Stuart drives the book to the Fiction section (the 18 Nov clip + a simulated map) and heads back. The unloading shot is left out for now.
+#   4. Stuart drives the book to the Fiction section (the 18 Nov clip + a simulated map) and heads back. The unloading (CAD simulation) sits between the two drives.
 #   5. On the way, a person in a quiet zone asks questions (no return): the same views, answers as text, no sound. The end.
 # Disclosures (paper, section 5): the face screen and the maps are simulated or recorded from a simulated robot, and say so.
 
@@ -241,17 +241,28 @@ segments:
   # 18:29:06; the replays start at 18:27:35 and 18:28:38, so the second clip is the last 26 s of its drive.
   - id: trip-out
     type: split
-    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 5, label: "Stuart driving to Fiction"}
-    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 5, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_to_fiction.mp4, in: 0, out: end, speed: 6, label: "Stuart driving to Fiction"}
+    right: {take: nav2, source: map, in: "event:drive_started+0.6s", out: "event:drive_started+47.6s", speed: 6, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"
     vo: "When the patron leaves, Stuart carries the returned books to their section, here Fiction,"
 
+  # The unloading (CAD simulation, 8.2 s at x2): the lift sets the returned book into the trolley at the Fiction section.
+  - id: unload
+    type: clip
+    zone: common
+    src: video/footage/cad_unloading.mp4
+    in: 0
+    out: end
+    speed: 2
+    audio: mute
+    badge: "CAD simulation of unloading the books"
+
   - id: trip-back
     type: split
-    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 5, label: "Back to its station"}
-    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 5, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
+    left: {src: video/footage/trip_back.mp4, in: 0, out: end, speed: 6, label: "Back to its station"}
+    right: {take: nav2, source: map, in: "event:drive_started#2+27.6s", out: "event:drive_started#2+54.1s", speed: 6, crop: [22, 10, 922, 1062], label: "Map (replay of this drive)",
             placeholder: "recordings/nav2/map.mp4"}
     audio_from: none
     badge: "Drive started by an operator"

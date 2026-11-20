@@ -3,7 +3,7 @@
 The story, from the paper: **Stuart changes how it communicates by zone, not what it does.** Common area: it greets, speaks aloud, and the
 screen shows only its face. Quiet zone: it never starts, answers as text on the screen, and makes no sound.
 
-The cut is `video/storyboard.yaml` (176.8 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
+The cut is `video/storyboard.yaml` (178.5 s now; the limit is 180). `python tools/video/edit.py --plan` prints the timing and every shot that is still a
 placeholder (a "Shot needed" card of the planned length). Drop a shot's file in place, render again, and nothing else changes.
 
 ## The cut, in order
@@ -35,8 +35,8 @@ What is simulated or added, and says so on the frame (paper, section 5):
 
 ## What is left to film
 
-### 1. The unload (later, optional)
-Left out of the cut. To add it back: a `clip` segment `unload` between `trip-out` and `trip-back` (`src: video/footage/unload.mp4`, about 5 s,
+### 1. The unload: done
+It is in the cut (`unload`, between the two drives; the drive clips went from x5 to x6 to make room). The old note, if you need it again: To add it back: a `clip` segment `unload` between `trip-out` and `trip-back` (`src: video/footage/unload.mp4`, about 5 s,
 `operator_driven: true`) and a line in the narration; the cut then needs 5 s from somewhere else.
 
 ### Close-ups of the parts: done
