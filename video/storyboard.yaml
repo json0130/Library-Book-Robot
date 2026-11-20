@@ -218,9 +218,8 @@ segments:
     valign: bottom
     voice: {take: live3, source: audio}
     auto_captions: true
-    caption_at: top
     badge: "Live view: the RFID reader reads the book"
-    inset: {src: video/footage/cad_book_return_full.mp4, in: 0, out: end, speed: 4, at: 0.7, width: 350, corner: bottom-left,
+    inset: {src: video/footage/cad_book_return_v2.mp4, in: 0, out: end, speed: 1, at: 0.7, width: 360,
             label: "Loading the book (CAD simulation)"}
 
   - id: live-goodbye

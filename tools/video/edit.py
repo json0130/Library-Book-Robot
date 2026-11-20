@@ -925,13 +925,15 @@ def inset_panel(seg: Segment, work: Path, q: Quality) -> Path:
 
 
 def inset_position(seg: Segment, q: Quality, panel_w: int, right_badges: int, panel_h: int = 0) -> tuple:
-    """x, y of the pop-up: the top right corner under the badges (each is 70 px of a 1080p frame), or `corner: bottom-left` (above the
+    """x, y of the pop-up: the top right corner under the badges (each is 70 px of a 1080p frame), or `corner: bottom-left` / `bottom-right` (above the
     captions' side margin, for a picture whose right side must stay visible)."""
     k = q.size[1] / H
     spec = seg.spec["inset"]
     margin = int(36 * k)
     if spec.get("corner") == "bottom-left":
         return margin, q.size[1] - panel_h - int(spec.get("bottom", 36) * k)
+    if spec.get("corner") == "bottom-right":
+        return q.size[0] - panel_w - margin, q.size[1] - panel_h - int(spec.get("bottom", 36) * k)
     below = int((32 + 70 * right_badges + 10) * k)
     return q.size[0] - panel_w - margin, int(spec.get("top", 0) * k) or below
 

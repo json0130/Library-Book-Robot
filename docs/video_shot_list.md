@@ -16,7 +16,7 @@ placeholder (a "Shot needed" card of the planned length). Drop a shot's file in 
 | 0:27 | styles | the common-area and quiet-zone interaction | Fig. 6 of the paper, cropped | done |
 | 0:34 | system, parts | system diagram; the prototype photo with its parts named, and three close-ups: the LiDAR, the face screen, the RFID reader | drawn + your photos | done |
 | 0:52 | maps | the map Stuart navigates on, and the sound map | the two images from the paper (Fig. 3) | done |
-| 1:02 | common area | the live operator view (the webcam with the face found, Stuart's face, the state machine): a person walks up, Stuart greets and offers, the visitor asks about Dune (answered), then asks to return a book, the RFID reader reads Clean Code, Stuart confirms, and the visitor says goodbye. **With the real voices**: Stuart's speaker and the microphone, as heard. **When the book is read, a pop-up in the top right corner, "Loading the book (CAD simulation)", shows the whole CAD clip in reverse (x4, 9.4 s).** Waits with nobody speaking are sped up; every stretch with a voice plays at normal speed | **your screen recording of 20 Nov, 11:31** (`video/footage/common3_screencast.mp4`) + the robot's session log + the sound recorded by `film.py` (`recordings/rfid3`) | done |
+| 1:02 | common area | the live operator view (the webcam with the face found, Stuart's face, the state machine): a person walks up, Stuart greets and offers, the visitor asks about Dune (answered), then asks to return a book, the RFID reader reads Clean Code, Stuart confirms, and the visitor says goodbye. **With the real voices**: Stuart's speaker and the microphone, as heard. **When the book is read, a pop-up in the top right corner, "Loading the book (CAD simulation)", plays the CAD clip of the book going in (9.4 s).** Waits with nobody speaking are sped up; every stretch with a voice plays at normal speed | **your screen recording of 20 Nov, 11:31** (`video/footage/common3_screencast.mp4`) + the robot's session log + the sound recorded by `film.py` (`recordings/rfid3`) | done |
 | 1:59 | trip to Fiction | Stuart drives to the Fiction section (phone) next to the floor plan, where the dot is where the robot was (x5) | your 18 Nov clip + the replay of that drive's real track | done |
 | 2:20 | trip back | back to the station, same two views (the clip is the last 26 s of that drive, x5) | your 18 Nov clip + the real track | done |
 | 2:28 | quiet zone | another person walks up; the face screen shows the greeting and the answers as text, nothing is said aloud: asks about Dune, asks to be shown the way, says thanks. Slow stretches are sped up | **your screen recording of 19 Nov, 21:06** (`video/footage/quiet2_screencast.mp4`) + the robot's session log | done |
@@ -87,10 +87,10 @@ silent there.
   --name back_to_station -o video/takes/trips_18nov.json` makes the tracks from the 18 Nov session log (`data/logs/session-20261118-182712.jsonl`
   in the dell-link worktree); `python tools/video/sim_take.py nav --take nav2 --zone quiet --sources map --no-speak --no-llm --replay
   video/takes/trips_18nov.json` records the map page while a simulated base replays them. The phone clips start at 18:27:36 and 18:29:06.
-- **The CAD clip**: `video/footage/cad_book_retrieve_original.webm` is your screen recording (37.6 s: the lift goes to the slot, pushes the book out, lifts it
-  to the top). `python tools/video/reverse.py video/footage/cad_book_retrieve_original.webm video/footage/cad_book_return_full.mp4 --crop 1060:924:640:222 --width 800`
-  cuts it to the 3D view and plays all of it backwards (in pieces, to spare memory): the book comes down from the top, is pushed into the slot and the
-  lift goes home. The first, shorter version (`cad_book_return.mp4`, only the last 10.4 s) is kept.
+- **The CAD clip**: your screen recording `storage.mp4` (20 Nov, 9.4 s: the book comes down into the slot, the lift moves) is kept in
+  `video/footage/originals/cad_storage_original.mp4`; `video/footage/cad_book_return_v2.mp4` is it cropped to the picture (664x720, no sound) and is
+  the pop-up on `live-scan`, top right under the badges (`corner: bottom-right` or `bottom-left` moves it). The earlier reversed clip
+  (`cad_book_return_full.mp4`, made with `tools/video/reverse.py`) is kept; the AI-voice file `stuart_hri2027_sdc_ai_voice.mp4` still has it.
 - The services these use (a separate display page on 8775, the local AI on 7898) are the commands in `docs/local_ai.md` and `python -m
   display.server --port 8775 --host 127.0.0.1`.
 
