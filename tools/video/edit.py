@@ -1011,6 +1011,56 @@ def tts_cached(text: str, folder: Path, name: str) -> Optional[Path]:
     return path if tts_line(text, path) else None
 
 
+def remove_clicks(line: Path, out: Path, lead: float = 0.12, tail: float = 0.1) -> Path:
+    """A recording without the key clicks of the recording itself (Enter pressed to start and to stop: a few tens of milliseconds of
+    sound before the first word and after the last). Speech is told from a click by being solid: a run of louder-than-the-room
+    windows (10 ms, runs closer than 80 ms are one) at least 0.15 s long and mostly loud. The line is cut to `lead` / `tail` seconds
+    around the first and last such run, so a click that is more than that away from the words is gone. Nothing inside the speech is
+    touched. A line with no such run is returned as it is."""
+    import numpy as np
+    wav = out.with_name(out.stem + "-mono.wav")
+    run_ffmpeg(["-i", str(line), "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)], "reading a recording")
+    if not wav.is_file():
+        return line
+    with wave.open(str(wav)) as w:
+        sr = w.getframerate()
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float64)
+    win = max(1, int(sr * 0.01))
+    n = len(x) // win
+    if n < 30:
+        return line
+    db = 20 * np.log10(np.sqrt((x[:n * win].reshape(n, win) ** 2).mean(1)) + 1.0)
+    loud = db > np.percentile(db, 10) + 6.0                       # louder than the room
+    runs, i = [], 0
+    while i < n:
+        if loud[i]:
+            j = i
+            while j + 1 < n and loud[j + 1]:
+                j += 1
+            if runs and i - runs[-1][1] - 1 < 8:                  # closer than 80 ms: the same run
+                runs[-1][1] = j
+            else:
+                runs.append([i, j])
+            i = j + 1
+        else:
+            i += 1
+    speech = [r for r in runs if r[1] - r[0] + 1 >= 15 and loud[r[0]:r[1] + 1].mean() >= 0.7]
+    if not speech:
+        return line
+    lo = max(0, int(speech[0][0] * 0.01 * sr) - int(lead * sr))
+    hi = min(len(x), int((speech[-1][1] + 1) * 0.01 * sr) + int(tail * sr))
+    y = x[lo:hi].copy()
+    f = min(len(y) // 2, int(0.01 * sr))                          # 10 ms fades, so the cut itself does not click
+    y[:f] *= np.linspace(0, 1, f)
+    y[-f:] *= np.linspace(1, 0, f)
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(y.astype(np.int16).tobytes())
+    return out
+
+
 def trim_silence(line: Path, out: Path, floor_db: float = -42.0, lead: float = 0.15, tail: float = 0.2) -> Path:
     """A recording without the silence before the first word and after the last (a few tenths of a second are kept), so a line starts
     where its slot starts however long you waited after pressing Enter."""
@@ -1055,6 +1105,7 @@ def build_voiceover(segments, path: Path, total: float, root: Path = ROOT, cfg: 
         line = find_recording(rec_dir, name) if USE_RECORDINGS else None
         source = "recorded"
         if line is not None:
+            line = remove_clicks(line, path.with_name(f"declicked-{name}.wav"))
             line = trim_silence(line, path.with_name(f"trimmed-{name}.wav"))
         if line is None:
             line, source = tts_cached(s.vo, tts_dir, name), "tts"

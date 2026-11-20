@@ -67,7 +67,7 @@ python tools/video/voiceover.py cues --write      # the script, with the time ea
 python tools/video/voiceover.py record            # reads each line to you: Enter starts, Enter stops, r records again
 python tools/video/edit.py --preview              # hear it in the cut
 ```
-Each line is saved as `video/voiceover/<segment id>.wav`; a line you recorded replaces the TTS for that line, and a line you have not recorded
+Each line is saved as `video/voiceover/<segment id>.wav` (the render cuts away the click of the Enter key before the first word and after the last, and the silence around the words, and evens out the levels; your files are not changed); a line you recorded replaces the TTS for that line, and a line you have not recorded
 keeps the TTS. (Record elsewhere if you like: save each line under that name, any of .wav .m4a .mp3 .flac .ogg, or the whole thing as one
 `video/voiceover.wav` from 0:00.) The render warns if a line is longer than the time it has. To go back to the TTS for a line, rename its file.
 The TTS lines are kept in `video/voiceover_tts/`, and the first version of the whole video with the TTS narration is

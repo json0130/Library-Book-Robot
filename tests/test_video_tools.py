@@ -355,3 +355,37 @@ class TrimSilenceTest(unittest.TestCase):
         self.assertAlmostEqual(edit.probe(d / "line.wav")["duration"], 4.0, delta=0.05)
         out = edit.trim_silence(d / "line.wav", d / "trimmed.wav")
         self.assertAlmostEqual(edit.probe(out)["duration"], 2.0 + 0.15 + 0.2, delta=0.15)
+
+
+class RemoveClicksTest(unittest.TestCase):
+    """The click of Enter before the first word and after the last (the recording's own) is cut away, the speech is not."""
+
+    def test_clicks_before_and_after_the_speech_are_cut(self):
+        import wave
+        import numpy as np
+        sr = 48000
+        rng = np.random.default_rng(1)
+        x = rng.normal(0, 8, sr * 6)                                         # the room, about -48 dBFS
+        x[int(0.4 * sr):int(0.43 * sr)] += rng.normal(0, 4000, int(0.03 * sr))              # a click at 0.4 s
+        t = np.arange(int(2.0 * sr)) / sr
+        x[int(1.5 * sr):int(3.5 * sr)] += 6000 * np.sin(2 * np.pi * 300 * t)                # 2 s of voice from 1.5 s
+        x[int(4.4 * sr):int(4.42 * sr)] += rng.normal(0, 6000, int(0.02 * sr))              # the click after the last word
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        with wave.open(str(d / "line.wav"), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(sr)
+            w.writeframes(x.astype(np.int16).tobytes())
+        out = edit.remove_clicks(d / "line.wav", d / "clean.wav")
+        with wave.open(str(out)) as w:
+            y = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(float)
+        self.assertAlmostEqual(len(y) / sr, 2.0 + 0.12 + 0.1, delta=0.1)
+        self.assertLess(np.abs(y[:int(0.1 * sr)]).max(), 400)                # nothing loud before the voice
+        self.assertLess(np.abs(y[-int(0.05 * sr):]).max(), 400)              # nothing loud after it
+
+    def test_a_line_that_is_all_noise_is_left_alone(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "2", str(d / "line.wav")], check=True)
+        self.assertEqual(edit.remove_clicks(d / "line.wav", d / "clean.wav"), d / "line.wav")
