@@ -20,14 +20,14 @@
   #conn.ok { color: var(--accent); }
   /* landscape: on the left the map and the sound map side by side, under them the camera and the face side by side, then the books and the log;
      on the right the state machines and the other controls */
-  /* three columns: the navigation (floor plan, sound map, base) | what the robot sees and shows (camera, face, books, log) | the visit
-     (state, what the visitor picks, says or types, and the settings). Narrower: the navigation goes across the top. */
-  main { display: grid; grid-template-columns: minmax(340px, 1.15fr) minmax(0, 1.25fr) minmax(300px, .9fr); gap: 12px; padding: 12px 16px;
-         align-items: start; }
-  .left, .mid, .col { display: grid; gap: 12px; min-width: 0; align-items: start; }
-  @media (max-width: 1300px) { main { grid-template-columns: minmax(0, 1.3fr) minmax(300px, 1fr); }
-                               .left { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 800px) { main, .left { grid-template-columns: 1fr; } }
+  /* three rows. 1: the webcam | the robot's face | the state and the visitor (talk, pick, type). 2: the floor plan (navigation) | the sound
+     map | the books on board. 3: everything else (the log, the base, the settings), as many across as fit. */
+  main { display: grid; gap: 12px; padding: 12px 16px; align-items: start; }
+  .r1, .r2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .8fr); gap: 12px; align-items: start; min-width: 0; }
+  .r3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; min-width: 0; }
+  .stack { display: grid; gap: 12px; min-width: 0; align-items: start; }
+  @media (max-width: 1100px) { .r1, .r2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .r1 > :last-child, .r2 > :last-child { grid-column: 1 / -1; } }
+  @media (max-width: 700px) { .r1, .r2 { grid-template-columns: 1fr; } }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
   h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
   h2.sub { margin-top: 12px; }
@@ -165,12 +165,12 @@
   #skipped { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--warn); font-size: .85rem; }
   /* film mode (/operator?film=map): only the floor plan with the robot and the sound map, side by side and large, for the
      competition video. Nothing can be clicked; nothing changes without the parameter. */
-  body.film-map header, body.film-map main > :not(.left), body.film-map .left > section:not(#planbox):not(#sndbox),
+  body.film-map header, body.film-map main > :not(.r2), body.film-map .r2 > section:not(#planbox):not(#sndbox),
   body.film-map .planbar, body.film-map #pl-go, body.film-map #pl-gostate, body.film-map #plancursor, body.film-map #pl-sel,
   body.film-map #pl-saverow, body.film-map #plannote, body.film-map #sn-cursor, body.film-map #sn-note { display: none !important; }
   body.film-map { pointer-events: none; }
   body.film-map main { grid-template-columns: 1fr; padding: 10px; }
-  body.film-map .left { grid-template-columns: 1fr 1fr; gap: 10px; }
+  body.film-map .r2 { grid-template-columns: 1fr 1fr; gap: 10px; }
   body.film-map #plan, body.film-map #snd { aspect-ratio: auto; height: calc(100vh - 118px); }
   body.film-map h2 { font-size: 1rem; }
 </style>
@@ -182,7 +182,42 @@
   <div id="meta"></div>
 </header>
 <main>
-  <div class="left">
+  <div class="r1">
+    <section>
+      <h2>Robot camera</h2>
+      <img id="camera" class="view" alt="robot camera">
+      <div id="camnote">Waiting for the camera (run the simulator with --camera).</div>
+    </section>
+    <section>
+      <h2>Face and screen (view only)</h2>
+      <iframe id="preview" class="view" src="/?preview=1" title="face and screen preview" loading="lazy"></iframe>
+      <div id="screen">–</div>
+    </section>
+    <div class="stack">
+    <section id="guide" hidden>
+      <h2>Test step <span id="guideno"></span></h2>
+      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
+      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
+    </section>
+    <section>
+      <h2>State</h2>
+      <div id="map"></div>
+      <h2 class="sub">What can happen next</h2>
+      <ul id="next"></ul>
+    </section>
+    <section>
+      <h2>The visitor picks</h2>
+      <div class="row" id="choices"><span class="hint">(no buttons on the screen right now)</span></div>
+      <div class="row talkrow"><button type="button" id="talk" title="Talk into the robot's microphone: one sentence, it stops when you pause">🎤 Talk</button></div>
+      <div id="mic" class="micline" hidden></div>
+      <details class="typed" open><summary>Type instead</summary>
+        <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
+          <button>Say</button></form>
+      </details>
+    </section>
+    </div>
+  </div>
+  <div class="r2">
     <section id="planbox">
       <h2>Floor plan and map <span id="planname"></span></h2>
       <div class="planbar">
@@ -249,6 +284,14 @@
       <div id="sn-cursor">Move the pointer over the map to read the sound level there. Mouse wheel zooms, drag pans.</div>
       <div id="sn-note"></div>
     </section>
+    <section>
+      <h2>Books on board <span id="count"></span></h2>
+      <ol id="books"></ol>
+      <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
+    </section>
+  </div>
+  <div class="r3">
+    <section><h2>Recent changes</h2><div id="log"></div></section>
     <section id="basebox" hidden>
       <h2>Base (the TurtleBot) <span id="baseurl"></span></h2>
       <dl id="base"></dl>
@@ -260,47 +303,6 @@
       <div id="maptarget">Click on the map to pick a place. Drag to turn the arrow (the way the robot should face when it gets there).</div>
       <div class="row"><button id="mapgo" disabled>Go there</button><button id="mapstop">STOP</button><button id="mapclear">Clear</button></div>
       <div id="mapnote"></div>
-    </section>
-  </div>
-  <div class="mid">
-    <section>
-      <h2>Robot camera</h2>
-      <img id="camera" class="view" alt="robot camera">
-      <div id="camnote">Waiting for the camera (run the simulator with --camera).</div>
-    </section>
-    <section>
-      <h2>Face and screen (view only)</h2>
-      <iframe id="preview" class="view" src="/?preview=1" title="face and screen preview" loading="lazy"></iframe>
-      <div id="screen">–</div>
-    </section>
-    <section>
-      <h2>Books on board <span id="count"></span></h2>
-      <ol id="books"></ol>
-      <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
-    </section>
-    <section><h2>Recent changes</h2><div id="log"></div></section>
-  </div>
-  <div class="col">
-    <section id="guide" hidden>
-      <h2>Test step <span id="guideno"></span></h2>
-      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
-      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
-    </section>
-    <section>
-      <h2>State</h2>
-      <div id="map"></div>
-      <h2 class="sub">What can happen next</h2>
-      <ul id="next"></ul>
-    </section>
-    <section>
-      <h2>The visitor picks</h2>
-      <div class="row" id="choices"><span class="hint">(no buttons on the screen right now)</span></div>
-      <div class="row talkrow"><button type="button" id="talk" title="Talk into the robot's microphone: one sentence, it stops when you pause">🎤 Talk</button></div>
-      <div id="mic" class="micline" hidden></div>
-      <details class="typed" open><summary>Type instead</summary>
-        <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
-          <button>Say</button></form>
-      </details>
     </section>
     <section>
       <h2>Screen the visitor sees</h2>
@@ -327,7 +329,7 @@
       <div class="row" style="margin-top:8px"><button id="reset" class="danger">Reset to IDLE</button>
         <button id="resetall" class="danger">Reset and empty storage</button></div>
     </section>
-      </div>
+  </div>
 </main>
 <script>
 "use strict";
