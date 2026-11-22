@@ -2,6 +2,7 @@
 
     cfg = load_config()                 # from config/ next to this repo
     cfg.robot["ai_server"]["host"]      # AI_HOST / AI_PORT environment variables override it
+    cfg.ai_mode                         # "remote" or "local" (ai_server.mode; the AI_MODE environment variable overrides it)
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
+AI_MODES = ("remote", "local")      # ai_server.mode: the AI server on the network, or the models on this computer (docs/local_ai.md)
 
 
 SIMILARITY_DEFAULTS = {             # see services/book_graph.py for what each component measures
@@ -169,6 +171,10 @@ class Config:
         return self.section("display", DISPLAY_DEFAULTS)
 
     @property
+    def ai_mode(self) -> str:
+        return self.robot["ai_server"].get("mode", "remote")
+
+    @property
     def ai_host(self) -> str:
         return self.robot["ai_server"]["host"]
 
@@ -199,6 +205,16 @@ def load_config(config_dir: Path | str = CONFIG_DIR, env: dict | None = None) ->
     server = cfg.robot.setdefault("ai_server", {})
     server.setdefault("host", "127.0.0.1")
     server.setdefault("port", 7898)
+    mode = str(env.get("AI_MODE") or server.get("mode") or "remote").lower()
+    if mode not in AI_MODES:
+        raise ValueError(f"ai_server.mode must be one of {', '.join(AI_MODES)}, got {mode!r}")
+    server["mode"] = mode
+    if mode == "local":                  # the AI runs on this computer (tools/local_ai_server.py): talk to it, and don't ask it for faces
+        local = server.get("local") or {}
+        server["host"], server["port"] = local.get("host", "127.0.0.1"), int(local.get("port", 7898))
+        perception = cfg.robot.setdefault("perception", {})
+        if perception.get("detector", "server") == "server":
+            perception["detector"] = "local"
     if env.get("AI_HOST"):
         server["host"] = env["AI_HOST"]
     if env.get("AI_PORT"):
