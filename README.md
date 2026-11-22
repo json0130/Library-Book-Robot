@@ -48,8 +48,10 @@ robot/             the robot program: python -m robot check | sim | run
 display/           face display: server.py (SSE, /screen, /input, /operator, /covers) + ui/index.html (face) + ui/views.js (content views), ui/operator.html, start_display.sh (kiosk)
 vendor/ai_server/  the AI server team's clients (face, emotion, stt, tts) and the protocol + LLM server script
 tools/             test tools: chat_test, camera_test, face_enroll, identity_test, get_face_models, server_check, book_scan_test, make_test_barcodes;
+                   local_ai_server (the AI server's protocol backed by models on the Jetson, docs/local_ai.md);
                    book data tools: catalog_check, import_books, similarity_report, graph_view;
                    the base: fake_base (a stand-in for the Dell, API v1), teach_poses (record shelf, section, landmark and station poses from the live pose)
+scripts/           start_local_ai.sh (start/stop/check the local AI)
 firmware/esp32/    planned ESP32 serial protocol
 tests/             unittest suite
 docs/              architecture notes, robot_link.md (the Jetson-Dell contract and network setup), state_machine.md (generated), testing.md (scenario tests), reference images
@@ -68,7 +70,7 @@ sudo apt install -y python3-yaml python3-opencv pulseaudio-utils libzbar0 sox
 pip install pyzbar                  # barcode reading (needs libzbar0); --user --break-system-packages on Ubuntu 24.04
 ```
 
-PyYAML is the only required package. OpenCV (the camera tools and driver) comes from apt on the Jetson. pyzbar and OpenCV are only imported when a barcode is actually decoded, so the simulator and most tests run without them. pyserial will be needed once the ESP32 driver exists (`pip install -e .[serial]`). Set the AI server address in `config/robot.yaml`, or per shell with `export AI_HOST=<server-ip>` (and `AI_PORT`, default 7898).
+PyYAML is the only required package. OpenCV (the camera tools and driver) comes from apt on the Jetson. pyzbar and OpenCV are only imported when a barcode is actually decoded, so the simulator and most tests run without them. pyserial will be needed once the ESP32 driver exists (`pip install -e .[serial]`). Set the AI server address in `config/robot.yaml`, or per shell with `export AI_HOST=<server-ip>` (and `AI_PORT`, default 7898). To run the AI on the Jetson itself instead, set `ai_server.mode: local` (or `export AI_MODE=local`): see [Local AI](#local-ai-no-ai-server) and [docs/local_ai.md](docs/local_ai.md).
 
 ## Running the robot
 
@@ -308,6 +310,19 @@ python tools/chat_test.py --chat --wav question.wav                   # one voic
 Voice modes: press Enter, speak, press Enter again. Recording and playback use PulseAudio (`parecord`/`paplay`). `--mic Webcam` and `--speaker USB` (or `MIC` / `SPEAKER`) pick devices by part of the name in `pactl list short sources` / `sinks`. Recordings quieter than `--min-rms` (default 500) are skipped, because STT invents text like "Thank you." from silence.
 
 The system prompt casts the model as Stuart, the Library Book Robot (the name is in `robot/persona.py`): upbeat and energetic, free to chat about everyday things, told not to greet or introduce itself twice. Each prompt carries the conversation as it really went, the last 10 exchanges, including the robot's fixed lines (hello, "You have <title>...") and what the visitor said, so the model knows what was already said; another book starts a new conversation, but the chat before the first book of a visit carries on. The server takes one prompt string, so the system prompt and history are flattened into it as `System:` / `User:` / `Assistant:` lines. If the face display is running, the mouth moves with each reply (with the speech audio in `--tts`, `--talk` and `--chat`; tune `--lip-delay` if it is out of sync).
+
+### Local AI (no AI server)
+
+The LLM, speech-to-text and text-to-speech can run on the Jetson itself: `tools/local_ai_server.py` speaks the AI server's protocol, backed by llama.cpp (Qwen3-1.7B), whisper.cpp and Piper (a male voice). The robot code is unchanged; only the address it connects to switches.
+
+```bash
+scripts/start_local_ai.sh              # start llama-server + the local server and check them (stop | status | check | restart)
+export AI_MODE=local                   # or ai_server.mode: local in config/robot.yaml (default: remote)
+python -m robot check
+python -m robot sim --live --local-faces
+```
+
+Faces stay on the robot (`perception.detector: local`, set by local mode). Needs the builds and models in `~/local-ai/` and about 2.7 to 3.3 GB of free memory, so on this 8 GB board the robot has to boot without the desktop and without development tools. **Known problem:** the small local models invent facts the catalogue does not have (about a third of the "how many pages?" checks in the scenario harness, none on the real server). [docs/local_ai.md](docs/local_ai.md) has the numbers, the memory budget, how to run it and a recommended production boot.
 
 ### Camera and faces
 

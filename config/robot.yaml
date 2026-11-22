@@ -1,8 +1,11 @@
-# Robot settings. Environment variables AI_HOST / AI_PORT override the AI server address.
+# Robot settings. Environment variables AI_HOST / AI_PORT override the AI server address, AI_MODE the mode below.
 
 ai_server:
+  mode: remote            # remote = the AI server below. local = the models on this Jetson (tools/local_ai_server.py, scripts/start_local_ai.sh, docs/local_ai.md):
+                          # host and port come from `local:`, and faces are detected on the robot (perception.detector: local) because that server has no face model
   host: 172.24.30.251
   port: 7898
+  local: {host: 127.0.0.1, port: 7898}
   timeout_s: 300          # LLM/TTS requests can be slow on a busy server
   keepalive_s: 240        # while idle, a tiny request this often keeps the model loaded (the first answer is not slow); 0 = off
   llm_timeout_s: 20       # book explanations/recommendations: if the LLM is slower, use the catalogue text
