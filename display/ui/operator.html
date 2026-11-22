@@ -26,6 +26,12 @@
   .r1, .r2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .8fr); gap: 12px; align-items: start; min-width: 0; }
   .r3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; min-width: 0; }
   .stack { display: grid; gap: 12px; min-width: 0; align-items: start; }
+  /* the webcam and the face, and the floor plan and the sound map, are the same height side by side (and their boxes too) */
+  .r1 > section, .r2 > section { align-self: stretch; }
+  #camera, #preview { aspect-ratio: auto; height: clamp(220px, 26vw, 440px); }
+  #plan, #snd { aspect-ratio: auto !important; height: clamp(300px, 30vw, 520px); }
+  #planbox.big #plan, #sndbox.big #snd { height: calc(100vh - 300px); }
+  .r3[hidden] { display: none; }        /* row 3 (log, base, settings) is hidden for now: remove `hidden` from <div class="r3"> to show it */
   @media (max-width: 1100px) { .r1, .r2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .r1 > :last-child, .r2 > :last-child { grid-column: 1 / -1; } }
   @media (max-width: 700px) { .r1, .r2 { grid-template-columns: 1fr; } }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
@@ -290,7 +296,7 @@
       <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
     </section>
   </div>
-  <div class="r3">
+  <div class="r3" hidden>
     <section><h2>Recent changes</h2><div id="log"></div></section>
     <section id="basebox" hidden>
       <h2>Base (the TurtleBot) <span id="baseurl"></span></h2>
