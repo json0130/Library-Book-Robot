@@ -77,7 +77,7 @@ class BookDropped:
 
 @dataclass
 class BookIdentified:
-    """A BookReader (the camera scanner today, RFID later) identified the book on the pad. found_in_catalog is False when only
+    """A BookReader (the camera scanner or the RFID reader) identified the book on the pad. found_in_catalog is False when only
     the online fallback knew it (then summary, shelf, slot and everything about where it lives are None).
     section, floor, zone and the map pose come from data/shelves.csv through the book graph; any of them
     may be None (a shelf without a pose, say)."""

@@ -20,11 +20,14 @@
   #conn.ok { color: var(--accent); }
   /* landscape: on the left the map and the sound map side by side, under them the camera and the face side by side, then the books and the log;
      on the right the state machines and the other controls */
-  main { display: grid; grid-template-columns: minmax(0, 2.3fr) minmax(300px, 1fr); gap: 12px; padding: 12px 16px; align-items: start; }
-  .left { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; min-width: 0; }
-  .col { display: grid; gap: 12px; min-width: 0; }
-  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
-  @media (max-width: 700px) { .left { grid-template-columns: 1fr; } }
+  /* three columns: the navigation (floor plan, sound map, base) | what the robot sees and shows (camera, face, books, log) | the visit
+     (state, what the visitor picks, says or types, and the settings). Narrower: the navigation goes across the top. */
+  main { display: grid; grid-template-columns: minmax(340px, 1.15fr) minmax(0, 1.25fr) minmax(300px, .9fr); gap: 12px; padding: 12px 16px;
+         align-items: start; }
+  .left, .mid, .col { display: grid; gap: 12px; min-width: 0; align-items: start; }
+  @media (max-width: 1300px) { main { grid-template-columns: minmax(0, 1.3fr) minmax(300px, 1fr); }
+                               .left { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 800px) { main, .left { grid-template-columns: 1fr; } }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
   h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
   h2.sub { margin-top: 12px; }
@@ -32,6 +35,15 @@
   button { font: inherit; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg);
            color: var(--ink); cursor: pointer; min-height: 38px; }
   button:hover { border-color: var(--accent); }
+  .hint { color: var(--muted); font-size: .85rem; }
+  .talkrow { margin-top: 8px; }
+  .typed { margin-top: 10px; font-size: .85rem; color: var(--muted); }
+  .typed form { margin-top: 6px; }
+  #choices button { font-weight: 600; }
+  .micline { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .micline.live { color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  ol#books .where { flex: 1; } ol#books button.unload { min-height: 28px; padding: 2px 10px; }
   button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.danger { color: var(--warn); }
   input, select { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line);
@@ -237,29 +249,6 @@
       <div id="sn-cursor">Move the pointer over the map to read the sound level there. Mouse wheel zooms, drag pans.</div>
       <div id="sn-note"></div>
     </section>
-    <section>
-      <h2>Robot camera</h2>
-      <img id="camera" class="view" alt="robot camera">
-      <div id="camnote">Waiting for the camera (run the simulator with --camera).</div>
-    </section>
-    <section>
-      <h2>Face and screen (view only)</h2>
-      <iframe id="preview" class="view" src="/?preview=1" title="face and screen preview" loading="lazy"></iframe>
-      <div id="screen">–</div>
-    </section>
-
-    <section>
-      <h2>Books on board <span id="count"></span></h2>
-      <ol id="books"></ol>
-    </section>
-    <section><h2>Recent changes</h2><div id="log"></div></section>
-  </div>
-  <div class="col">
-    <section id="guide" hidden>
-      <h2>Test step <span id="guideno"></span></h2>
-      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
-      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
-    </section>
     <section id="basebox" hidden>
       <h2>Base (the TurtleBot) <span id="baseurl"></span></h2>
       <dl id="base"></dl>
@@ -272,6 +261,47 @@
       <div class="row"><button id="mapgo" disabled>Go there</button><button id="mapstop">STOP</button><button id="mapclear">Clear</button></div>
       <div id="mapnote"></div>
     </section>
+  </div>
+  <div class="mid">
+    <section>
+      <h2>Robot camera</h2>
+      <img id="camera" class="view" alt="robot camera">
+      <div id="camnote">Waiting for the camera (run the simulator with --camera).</div>
+    </section>
+    <section>
+      <h2>Face and screen (view only)</h2>
+      <iframe id="preview" class="view" src="/?preview=1" title="face and screen preview" loading="lazy"></iframe>
+      <div id="screen">–</div>
+    </section>
+    <section>
+      <h2>Books on board <span id="count"></span></h2>
+      <ol id="books"></ol>
+      <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
+    </section>
+    <section><h2>Recent changes</h2><div id="log"></div></section>
+  </div>
+  <div class="col">
+    <section id="guide" hidden>
+      <h2>Test step <span id="guideno"></span></h2>
+      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
+      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
+    </section>
+    <section>
+      <h2>State</h2>
+      <div id="map"></div>
+      <h2 class="sub">What can happen next</h2>
+      <ul id="next"></ul>
+    </section>
+    <section>
+      <h2>The visitor picks</h2>
+      <div class="row" id="choices"><span class="hint">(no buttons on the screen right now)</span></div>
+      <div class="row talkrow"><button type="button" id="talk" title="Talk into the robot's microphone: one sentence, it stops when you pause">🎤 Talk</button></div>
+      <div id="mic" class="micline" hidden></div>
+      <details class="typed" open><summary>Type instead</summary>
+        <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
+          <button>Say</button></form>
+      </details>
+    </section>
     <section>
       <h2>Screen the visitor sees</h2>
       <div class="row"><button data-look="1">Original</button><button data-look="2">New look</button></div>
@@ -281,12 +311,6 @@
     <section>
       <h2>Zone (a style setting, not a state)</h2>
       <div class="row"><button id="zone-quiet" data-zone="quiet">Quiet</button><button id="zone-common" data-zone="common">Common</button></div>
-    </section>
-    <section>
-      <h2>State</h2>
-      <div id="map"></div>
-      <h2 class="sub">What can happen next</h2>
-      <ul id="next"></ul>
     </section>
     <section>
       <h2>Screen view <span id="curview"></span></h2>
@@ -303,12 +327,7 @@
       <div class="row" style="margin-top:8px"><button id="reset" class="danger">Reset to IDLE</button>
         <button id="resetall" class="danger">Reset and empty storage</button></div>
     </section>
-    <section>
-      <h2>The visitor says</h2>
-      <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
-        <button>Say</button></form>
-    </section>
-  </div>
+      </div>
 </main>
 <script>
 "use strict";
@@ -327,6 +346,7 @@ function note(text) {
   const log = $("log");
   log.textContent = `${new Date().toLocaleTimeString()}  ${text}\n` + log.textContent.split("\n").slice(0, 60).join("\n");
 }
+$("unloadall").onclick = () => { if (confirm("Unload every book from the ring? The ring turns to each slot and lights it.")) send("unload", "all"); };
 function showBooks(s) {
   const slots = s.slots || 0, held = new Map((s.books || []).map(b => [b.slot, b]));
   $("count").textContent = `(${s.stored || 0} of ${slots})`;
@@ -340,11 +360,15 @@ function showBooks(s) {
       const title = document.createElement("span"); title.className = "title"; title.textContent = b.title || "(unknown title)";
       const where = document.createElement("span"); where.className = "where";
       where.textContent = [b.shelf && `shelf ${b.shelf}`, b.section].filter(Boolean).join(" · ");
-      li.append(title, where);
+      const out = document.createElement("button"); out.textContent = "Unload"; out.className = "unload";
+      out.title = "turn the ring to this slot and light it so the book can be taken out";
+      out.onclick = () => { if (confirm(`Unload ${b.title || "this book"} from slot ${i}? The ring turns to it and lights the slot.`)) send("unload", String(i)); };
+      li.append(title, where, out);
     } else { li.append("empty"); }
     items.push(li);
   }
   $("books").replaceChildren(...items);
+  $("unloadall").hidden = !(s.stored > 0);
 }
 function showMap(s) {
   const nextTo = new Set((s.next || []).map(a => a.to));
@@ -1084,12 +1108,25 @@ function showState(s) {
   showMap(s);
   showBase(s);
   showMap2(s);
+  showMic(s);
   const g = s.guide;                                    // a guided scenario test (python -m robot scenarios live)
   $("guide").hidden = !g;
   if (g) { $("guideno").textContent = `${g.n} of ${g.total} (${g.scenario})`; $("guidetext").textContent = g.text; }
   if (s.state && s.state !== lastPath) { note(`${lastPath || "(start)"} → ${s.state}`); lastPath = s.state; }
 }
+function showChoices(u) {          // the buttons the robot's own screen shows: tapping one is the visitor tapping it
+  const p = u.payload || {};
+  const opts = (u.view === "options" && p.options && p.options.length ? p.options : u.options) || [];
+  const buttons = opts.filter(o => o && o.id).map(o => {
+    const b = document.createElement("button"); b.textContent = o.label || o.id;
+    b.title = "pick " + o.id; b.onclick = () => send("pick", o.id);
+    return b;
+  });
+  if (!buttons.length) { const h = document.createElement("span"); h.className = "hint"; h.textContent = "(no buttons on the screen right now)"; buttons.push(h); }
+  $("choices").replaceChildren(...buttons);
+}
 function showScreen(u) {
+  showChoices(u);
   const buttons = (u.options || []).map(o => `[${o.label}]`).join(" ");
   $("curview").textContent = `(now: ${u.view || "face"})`;
   $("screen").textContent = `${u.view || "face"} · ${u.layout} · ${u.title || "(no title)"} — ${u.text || "(no text)"} ${buttons}`;
@@ -1107,6 +1144,18 @@ $("guideabort").onclick = () => send("abort");
 $("reset").onclick = () => send("reset");
 $("resetall").onclick = () => send("reset", "all");
 $("viewform").onsubmit = e => { e.preventDefault(); send("screen", `${$("views").value} ${$("viewarg").value.trim()}`.trim()); };
+$("talk").onclick = () => send("listen");
+const MIC = { listening: "Listening… talk now (press Talk again to finish)", hearing: "Hearing you…", transcribing: "Transcribing…" };
+function showMic(s) {
+  const mic = s.mic || "none", box = $("mic"), btn = $("talk");
+  btn.disabled = mic === "none";
+  btn.title = mic === "none" ? "No microphone: run the robot with --live or --speak" : btn.title;
+  btn.classList.toggle("on", mic === "listening" || mic === "hearing");
+  btn.textContent = mic === "listening" || mic === "hearing" ? "⏹ Done" : "🎤 Talk";
+  box.hidden = mic === "none" || (mic === "idle" && !s.heard);
+  box.textContent = MIC[mic] || (s.heard ? "Heard: " + s.heard : "");
+  box.className = "micline" + (MIC[mic] ? " live" : "");
+}
 $("sayform").onsubmit = e => { e.preventDefault(); const t = $("say").value.trim(); if (t) { send("say", t); $("say").value = ""; } };
 
 // the robot's camera: a multipart stream; if it is not there yet, look again every few seconds

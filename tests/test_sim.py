@@ -53,7 +53,9 @@ def sim_with_real_camera():
     drivers = fake_drivers()
     drivers.camera = RealWebcamLikeCamera()
     sim, out = make_sim(drivers)
-    sim.app.scanner.decode = lambda frame: frame.isbn        # no pyzbar needed to test the routing
+    for reader in getattr(sim.app.scanner, "readers", [sim.app.scanner]):          # `books.reader: both`: the camera reader is one of two
+        if hasattr(reader, "decode"):
+            reader.decode = lambda frame: frame.isbn                              # no pyzbar needed to test the routing
     return sim, out
 
 

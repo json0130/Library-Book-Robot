@@ -56,8 +56,15 @@ devices:
   camera_index: 0
   camera_width: 640       # this webcam gives 30 fps at 640x480 but only ~8 fps at 1280x720; 640x480 read
   camera_height: 480      # barcodes fine when tested. Use 1280/720 for smaller or more distant barcodes.
-  mic: null               # part of a PulseAudio source name, null = system default
+  mic: MV_USB_MIC         # part of a PulseAudio source name (pactl list short sources); null = system default (may be the webcam's mic)
   speaker: USB            # part of a PulseAudio sink name, null = system default
+
+listen:                   # push-to-talk (the Talk button on /operator, or `listen`): robot/perception/listener.py
+  wait_s: 6               # give up if nobody starts talking within this many seconds
+  max_s: 15               # longest sentence
+  silence_s: 1.0          # this long a pause ends the sentence
+  min_rms: 300            # the quietest sound that counts as speech. Run `python -m tools.listen_test` to measure your microphone: it prints the
+                          # room's level and your voice's and recommends a number. In a noisy room the level also rises to 3x the noise measured when listening starts
 
 books:
   catalog_path: data/catalog.csv   # SAMPLE data until the library's real catalogue replaces it
@@ -70,7 +77,12 @@ books:
   scanner_camera_index: 0          # camera pointed at the scan pad
   floorplan_path: data/floorplan.yaml   # floors, sections (rectangles in map metres) and landmarks, for the directions view
   covers_dir: data/covers          # covers from `python tools/import_books.py --covers-only` (gitignored); missing ones get a placeholder
-  reader: camera                   # how the book on the pad is read: camera (barcode); rfid is a stub that says "not implemented"
+  reader: both                     # how the book on the pad is read: camera (ISBN barcode), rfid (tag reader on a serial port) or both; the same flow either way
+  rfid:                            # the tag reader (docs/rfid.md)
+    port: /dev/ttyACM0             # the Arduino with the MFRC522 (rfid/rfid_uid.ino); if it is not plugged in the robot says so once and keeps trying
+    baud: 9600
+    tags_path: data/rfid_tags.csv  # tag number -> ISBN; fill it with: python tools/rfid_register.py
+    gap_s: 2.5                     # a tag read again within this many seconds is the same book still on the reader
   use_llm: true                    # explain/recommend through the LLM (falls back to catalogue text); false = catalogue only
   similarity:                      # how recommendations are scored (services/book_graph.py); each component is 0..1
     topics: 0.30                   # shared topics, weighted by rarity (IDF): "astronomy" counts for more than "fiction"

@@ -4,7 +4,7 @@
     python tools/video/sim_take.py quiet --zone quiet --sources face,audio
 
 It starts `film.py record --take <take>` (the face page and Stuart's speaker), waits until it records, then runs
-`python -m robot sim --base fake --zone <zone> --film <take> --speak --llm` with video/takes/<script>.txt as its input (lines starting
+`python -m robot sim --base fake --hold-zone <zone> --film <take> --speak --llm` with video/takes/<script>.txt as its input (lines starting
 with # are left out; `wait N` lets the robot talk), and stops the recording when the visit is over. Use --take to name the take
 differently from the script (e.g. a retake: --take common2).
 
@@ -39,7 +39,7 @@ FACE_ONLY = ["--config-set", "styles.common_alone.screen_content=false", "--conf
 
 def sim_command(take: str, zone: str, port: int, speak: bool, llm: bool, face_only: bool = True, replay: str = "") -> list:
     """face_only: in the common area the screen shows only the face (the paper's design, `screen_content` in config/styles.yaml)."""
-    return [sys.executable, "-m", "robot", "sim", "--base", "fake", "--zone", zone, "--film", take, "--no-persist", "--no-log",
+    return [sys.executable, "-m", "robot", "sim", "--base", "fake", "--hold-zone", zone, "--film", take, "--no-persist", "--no-log",
             "--settle", "0", "--config-set", f"display.port={port}", *(FACE_ONLY if face_only else []),
             *(["--base-replay", replay] if replay else []), *(["--speak"] if speak else []), *(["--llm"] if llm else [])]
 

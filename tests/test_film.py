@@ -223,7 +223,7 @@ class FilmFlagsTest(unittest.TestCase):
         old = keyboard.run_sim
         keyboard.run_sim = fake_run_sim
         try:
-            self.assertEqual(cli.main(["sim", "--zone", "quiet", "--film", "q1", "--no-log"]), 0)
+            self.assertEqual(cli.main(["sim", "--hold-zone", "quiet", "--film", "q1", "--no-log"]), 0)
         finally:
             keyboard.run_sim = old
         self.assertEqual((captured["force_zone"], captured["film_take"], captured["record_path"]), ("quiet", "q1", None))

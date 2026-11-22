@@ -46,6 +46,8 @@ def main(argv=None) -> int:
     sim.add_argument("--settle", type=float, default=120.0, metavar="SECONDS",
                      help="with piped input: after the last line, wait up to this long for the robot to finish its "
                           "goodbye and the trip putting books back (0 = quit at once)")
+    sim.add_argument("--zone", choices=("quiet", "common"), help="start in this zone (default: zones.yaml default_zone, common); "
+                     "`zone quiet` / `zone common` or the operator page changes it later")
     sim.add_argument("--live", action="store_true", help="--camera --faces --auto-scan --speak --llm together")
     sim.add_argument("--base", choices=("sim", "turtlebot", "fake"), default=None,
                      help="what drives the robot: sim (timers; the default, or navigation.backend), turtlebot (the Dell over the\n"
@@ -55,7 +57,7 @@ def main(argv=None) -> int:
     sim.add_argument("--config-set", action="append", default=[], metavar="SECTION.KEY=VALUE",
                      help="override a setting of config/robot.yaml for this run (YAML value), e.g. returning.auto_start=true")
     film = sim.add_argument_group("film mode (the competition video: robot/film.py, docs/video_shot_list.md)")
-    film.add_argument("--zone", choices=("quiet", "common"), default=None,
+    film.add_argument("--hold-zone", choices=("quiet", "common"), default=None,
                       help="hold this zone for the whole take, over the sound map, the noise and the operator")
     film.add_argument("--film", metavar="TAKE", default=None,
                       help="log timestamped events (greeting, replies, book read, goals, sound level...) to recordings/TAKE/events.jsonl")
@@ -112,8 +114,8 @@ def main(argv=None) -> int:
                                      use_faces=args.faces or args.live, preview=args.preview and not args.no_preview,
                                      auto_scan=args.auto_scan or args.live, settle_s=args.settle,
                                      persist_storage=not args.no_persist,
-                                     local_faces=args.local_faces, base=args.base, base_url=args.base_url,
-                                     base_speed=args.base_speed, force_zone=args.zone, film_take=args.film,
+                                     local_faces=args.local_faces, initial_zone=args.zone, base=args.base, base_url=args.base_url,
+                                     base_speed=args.base_speed, force_zone=args.hold_zone, film_take=args.film,
                                      record_path=args.record, base_replay=args.base_replay))
         except KeyboardInterrupt:
             # run_sim's cleanup has run. Exit without Python's shutdown, which can abort or hang while

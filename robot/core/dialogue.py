@@ -2421,6 +2421,21 @@ class Dialogue:
         await self.fsm.force(leaf, source)
         return self.state
 
+    async def unload_slot(self, slot: int, light_s: float = 10.0):
+        """The operator unloads the book in `slot` (the operator page's Unload button): it leaves the ring and is not going back to a shelf by this
+        robot, the ring turns to the slot and lights it so the book can be taken out, and the light goes off again after `light_s` seconds.
+        Returns the book, or None if the slot was empty."""
+        if not 0 <= slot < self.storage.size or self.storage.books[slot] is None:
+            return None
+        book = self.storage.release(slot)
+        self.stops = [stop for stop in self.stops if stop.slots != [slot]]
+        self.out.ring.rotate_to(slot)
+        self.out.ring.light_slot(slot, True)
+        log.info("[unload] %s taken out of slot %d by the operator", book.title if book else "a book", slot)
+        loop = asyncio.get_running_loop()
+        loop.call_later(light_s, lambda: self.out.ring.light_slot(slot, False))
+        return book
+
     async def reset(self, everything: bool = False) -> None:
         """Back to IDLE with a clean slate: the session, any paused trip and the guide target are forgotten. The stored
         books are kept unless `everything`."""

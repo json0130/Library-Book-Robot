@@ -131,6 +131,8 @@ class App:
     zones: Optional[ZoneResolver] = None          # pose + noise + frozen -> zone (core/zones.py); only with a link
     zone_source: str = "map"                      # what decided the zone now: map | noise | frozen | forced
     forced_zone: Optional[str] = None             # film mode (`sim --zone`): this zone for the whole take, whatever the map, noise or operator say
+    listener: object = None                       # perception.listener.Listener (push-to-talk microphone), or None
+    heard: dict = field(default_factory=lambda: {"mic": "idle", "text": ""})   # what the operator page shows about the microphone
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
@@ -162,11 +164,11 @@ class App:
             self.zones = ZoneResolver(self.cfg, self.plan, section_zones(getattr(self.finder, "graph", None)),
                                       lambda: self.dialogue.fsm.is_in("ENGAGED"),
                                       level=None if turtlebot.get("floor") is None else int(turtlebot["floor"]))
-        if self.scanner_camera is not None and self.finder is not None:
+        if self.finder is not None:
             books = self.cfg.books
             # subscribed after the dialogue, so the dialogue is already "scanning" when the scan starts
             self.scanner = build_reader(books.get("reader", "camera"), self.bus, self.scanner_camera, self.finder,
-                                        timeout_s=float(books["scan_timeout_s"]))
+                                        timeout_s=float(books["scan_timeout_s"]), rfid=books.get("rfid"), path=self.cfg.path)
 
     # ---- handlers ----
     def _log(self, event) -> None:
@@ -197,7 +199,13 @@ class App:
                 "states": list(d.fsm.spec.leaves()), "tree": d.state_tree(), "leaf": d.leaf,
                 "next": d.next_actions(), "view": self.screen.current.view if self.screen and self.screen.current else "face",
                 "views": list(VIEWS), "guide": getattr(self, "guide_card", None), "link": self.link_info(),
-                "operator_note": getattr(self, "operator_note", None)}
+                "operator_note": getattr(self, "operator_note", None),
+                "mic": self.heard["mic"] if self.listener is not None else "none", "heard": self.heard["text"]}
+
+    def mic_status(self, kind: str, text: str = "") -> None:
+        """The listener says what it is doing (listening, hearing, transcribing, idle): show it on the operator page."""
+        self.heard = {"mic": kind, "text": text or (self.heard["text"] if kind in ("hearing", "transcribing") else "")}
+        self.show_state()
 
     def link_info(self) -> dict:
         """The base link for the operator page: the link, the pose, the drive, the noise, the zone and what was skipped."""

@@ -12,6 +12,7 @@ the robot picks up through robot/display_link.py), so there is one implementatio
     pick <choice>         press a screen button for the visitor: return ask recommend more guide done
     book [isbn|none]      place a book on the pad (scanned by the camera or, in the sim, a fake one)
     say <text>            the visitor says this
+    listen                listen on the microphone for one sentence (a second `listen` ends it early) and treat it as said
     reset [all]           back to IDLE with nothing in progress; `all` also empties the storage
     screen <view> [isbn | section]   force a screen view with sample data (face book_card book_list directions
                           options status); `screen face` goes back to the face
@@ -29,6 +30,7 @@ Events made here carry source="operator", which the session log shows with every
 
 from __future__ import annotations
 
+import asyncio
 import math
 import random
 from typing import Callable, Optional
@@ -38,8 +40,8 @@ from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged
                           UserChoice, UserUtterance)
 from robot.services.isbn import to_isbn13
 
-COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "pick", "book", "say", "reset", "screen", "drive", "stop",
-            "resume")
+COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "unload", "pick", "book", "say", "listen", "reset", "screen",
+            "drive", "stop", "resume")
 PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 ZONES = ("quiet", "common")
 GROUP_SIZES = {"alone": 1, "group": 3}
@@ -200,6 +202,24 @@ class Operator:
             await bus.publish(PersonLeft(source="operator"))
         elif command == "dropped":
             await bus.publish(BookDropped(source="operator"))
+        elif command == "unload":
+            if arg.lower() == "all":
+                slots = [i for i, b in enumerate(self.app.dialogue.storage.books) if b is not None]
+            elif arg.isdigit():
+                slots = [int(arg)]
+            else:
+                self.say("  usage: unload <slot number> | unload all")
+                return False
+            names = []
+            for slot in slots:
+                book = await self.app.dialogue.unload_slot(slot)
+                if book is not None:
+                    names.append(f"{book.title or 'a book'} (slot {slot})")
+            if not names:
+                self.say("  nothing to unload there: the slot is empty")
+                return False
+            self.say("  unloaded: " + ", ".join(names))
+            self.app.show_state()                                  # tell the operator page now: it lists the slots from this state, which only changes on events
         elif command == "pick":
             content = arg.split(":", 1)[0].lower() in ("book", "where", "guide", "similar", "section", "floor", "topic")
             if arg.lower() not in PICKS and not (content and ":" in arg):
@@ -214,6 +234,15 @@ class Operator:
                 self.say("  usage: say <text>")
                 return False
             await bus.publish(UserUtterance(arg, source="operator"))
+        elif command == "listen":
+            listener = getattr(self.app, "listener", None)
+            if listener is None:
+                self.say("  no microphone: run the simulator with --live or --speak (it uses devices.mic in config/robot.yaml)")
+                return False
+            if listener.active:
+                listener.finish()                               # a second press: stop recording and transcribe what was said
+            else:
+                self.listen_task = asyncio.ensure_future(listener.listen())     # not awaited: the page's buttons keep working
         elif command == "screen":
             view, _, rest = arg.partition(" ")
             if not view or self.app.screen is None:

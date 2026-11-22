@@ -20,7 +20,7 @@ from itertools import islice
 from typing import Callable, Iterator, Optional
 
 from robot.events import BookPlaced, BookScanned, ScanFailed
-from robot.perception.book_reader import BookReader
+from robot.perception.book_reader import BookReader, identified_event
 from robot.services.isbn import to_isbn13
 
 log = logging.getLogger("robot.scanner")
@@ -106,6 +106,8 @@ class BookScanner(BookReader):
 
     async def on_book_placed(self, event: BookPlaced) -> None:
         """Start a scan in the background so the publisher (the weight sensor) is not held up."""
+        if getattr(event, "source", "") == "rfid":
+            return                                  # the RFID reader already knows the book: nothing for the camera to read
         if self.scanning:
             log.debug("book placed during a scan; ignored")
             return
@@ -146,15 +148,7 @@ class BookScanner(BookReader):
         return result
 
     def _scanned(self, isbn: str, book) -> BookScanned:
-        if book is None:                           # a valid ISBN nobody knows: still a successful read
-            return BookScanned(isbn=isbn)
-        place = self.finder.locate(book.isbn13) if book.found_in_catalog else None    # section, floor, pose...
-        return BookScanned(isbn=isbn, title=book.title, author=book.author or None, summary=book.summary,
-                           shelf=(place.shelf if place else None) or book.shelf, slot=book.slot,
-                           found_in_catalog=book.found_in_catalog, call_number=book.call_number or None,
-                           section=place.section if place else None, floor=place.floor if place else None,
-                           zone=place.zone if place else None, map_x=place.map_x if place else None,
-                           map_y=place.map_y if place else None, map_yaw=place.map_yaw if place else None)
+        return identified_event(self.finder, isbn, book)
 
 
 CameraBookReader = BookScanner

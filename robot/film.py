@@ -82,7 +82,7 @@ class FilmLog:
             self._file.close()
 
     def check_zone(self) -> None:
-        """Log the zone whenever the one in force changes (whatever changed it: the map, the noise, the operator, --zone)."""
+        """Log the zone whenever the one in force changes (whatever changed it: the map, the noise, the operator, --hold-zone)."""
         zone = self.get_zone()
         if zone and zone != self._zone:
             self._zone = zone

@@ -290,7 +290,7 @@ class StateAndOperatorEndpointsTest(DisplayServerTest):
         with urllib.request.urlopen(self.url("/operator"), timeout=5) as r:
             page = r.read().decode()
             self.assertIn("text/html", r.headers["Content-Type"])
-        for needle in ("Robot operator", "/operator", "EventSource", "goto", "zone-quiet", "reset"):
+        for needle in ("Robot operator", "/operator", "EventSource", "sayform", "unloadall"):
             self.assertIn(needle, page)
         with urllib.request.urlopen(self.url("/"), timeout=5) as r:
             index = r.read().decode()

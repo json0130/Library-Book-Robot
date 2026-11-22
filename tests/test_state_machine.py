@@ -1083,6 +1083,25 @@ class OperatorGotoTest(unittest.TestCase):
         self.assertEqual(app.dialogue.state, "IDLE")
         self.assertTrue(app.dialogue.storage.empty)
 
+    def test_unload_takes_a_book_out_of_the_ring_and_lights_its_slot(self):
+        app = stored_app()                                                               # (builds its own event loop: not inside go_)
+        said = []
+        op = Operator(app, say=said.append)
+
+        async def go_():
+            before = [b.title for b in app.dialogue.storage.stored()]
+            first = next(i for i, b in enumerate(app.dialogue.storage.books) if b is not None)
+            self.assertTrue(await op.run("unload", str(first)))
+            self.assertIsNone(app.dialogue.storage.books[first])
+            self.assertEqual(len(app.dialogue.storage), len(before) - 1)
+            self.assertFalse(await op.run("unload", str(first)))                           # now empty
+            self.assertFalse(await op.run("unload", "x"))
+            self.assertTrue(await op.run("unload", "all"))
+            self.assertTrue(app.dialogue.storage.empty)
+        asyncio.run(go_())
+        self.assertTrue(any("unloaded:" in t for t in said))
+        self.assertTrue(any("empty" in t for t in said))
+
     def test_leave_makes_the_person_go_and_busy_signals_a_nearby_person(self):
         app = stored_app()
         op = Operator(app)
