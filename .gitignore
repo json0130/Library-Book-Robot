@@ -26,3 +26,6 @@ video/out/
 video/voiceover.wav
 video/voiceover/
 video/voiceover_tts/
+
+# runtime data from the robot (noise log, mic config): kept locally, not in git
+run_data/
