@@ -28,6 +28,14 @@ SIMILARITY_DEFAULTS = {             # see services/book_graph.py for what each c
     "general_topics": 0.4,          # a general topic (one with a narrower child in topics.yaml) counts for this fraction
 }
 
+RFID_DEFAULTS = {
+    "port": "/dev/ttyACM0",                  # the Arduino with the MFRC522 (rfid/rfid_uid.ino); a missing reader is retried quietly
+    "baud": 9600,
+    "tags_path": "data/rfid_tags.csv",       # tag number -> ISBN (tools/rfid_register.py)
+    "gap_s": 2.5,                            # a tag read again within this many seconds is the same book still on the reader
+    "retry_s": 10.0,                         # how often to look for an unplugged reader again
+}
+
 BOOKS_DEFAULTS = {
     "catalog_path": "data/catalog.csv",
     "topics_path": "data/topics.yaml",
@@ -38,7 +46,7 @@ BOOKS_DEFAULTS = {
     "scan_timeout_s": 5.0,
     "scanner_camera_index": 0,
     "use_llm": True,
-    "reader": "camera",                      # how the book on the pad is read: camera (barcode) or rfid (not implemented yet)
+    "reader": "both",                        # how the book on the pad is read: camera (barcode), rfid (tag reader on a serial port) or both
     "floorplan_path": "data/floorplan.yaml",  # floors, sections and landmarks for the directions view
     "covers_dir": "data/covers",              # downloaded covers (tools/import_books.py --covers), gitignored
 }
@@ -126,6 +134,7 @@ class Config:
         """The `books:` section with defaults filled in."""
         merged = dict(BOOKS_DEFAULTS)
         merged.update(self.robot.get("books") or {})
+        merged["rfid"] = {**RFID_DEFAULTS, **((self.robot.get("books") or {}).get("rfid") or {})}
         merged["similarity"] = {**SIMILARITY_DEFAULTS, **((self.robot.get("books") or {}).get("similarity") or {})}
         return merged
 

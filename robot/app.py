@@ -122,6 +122,8 @@ class App:
     storage: Optional[Storage] = None             # which book is in which slot of the storage ring
     plan: object = None                           # services.floorplan.FloorPlan for directions, or None
     screen: Optional[ScreenComposer] = None       # decides what the screen shows (core/screen.py)
+    listener: object = None                       # perception.listener.Listener (push-to-talk microphone), or None
+    heard: dict = field(default_factory=lambda: {"mic": "idle", "text": ""})   # what the operator page shows about the microphone
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
@@ -145,11 +147,11 @@ class App:
         self.bus.subscribe(ScreenUpdate, self._on_screen)
         self.dialogue.attach(self.bus)
         self.screen.attach(self.bus)
-        if self.scanner_camera is not None and self.finder is not None:
+        if self.finder is not None:
             books = self.cfg.books
             # subscribed after the dialogue, so the dialogue is already "scanning" when the scan starts
             self.scanner = build_reader(books.get("reader", "camera"), self.bus, self.scanner_camera, self.finder,
-                                        timeout_s=float(books["scan_timeout_s"]))
+                                        timeout_s=float(books["scan_timeout_s"]), rfid=books.get("rfid"), path=self.cfg.path)
 
     # ---- handlers ----
     def _log(self, event) -> None:
@@ -174,7 +176,13 @@ class App:
                           for b in d.storage.stored()], "style": self.style.summary(),
                 "states": list(d.fsm.spec.leaves()), "tree": d.state_tree(), "leaf": d.leaf,
                 "next": d.next_actions(), "view": self.screen.current.view if self.screen and self.screen.current else "face",
-                "views": list(VIEWS), "guide": getattr(self, "guide_card", None)}
+                "views": list(VIEWS), "guide": getattr(self, "guide_card", None),
+                "mic": self.heard["mic"] if self.listener is not None else "none", "heard": self.heard["text"]}
+
+    def mic_status(self, kind: str, text: str = "") -> None:
+        """The listener says what it is doing (listening, hearing, transcribing, idle): show it on the operator page."""
+        self.heard = {"mic": kind, "text": text or (self.heard["text"] if kind in ("hearing", "transcribing") else "")}
+        self.show_state()
 
     def show_state(self) -> bool:
         return self.actuators.face.show_state(self.state_info())

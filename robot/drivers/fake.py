@@ -32,6 +32,11 @@ class FakeAudio:
         log.info("[audio] record %.1fs (fake: silence)", seconds)
         return b""
 
+    def stream(self, chunk_s: float = 0.1):
+        """The pretend microphone: whatever was put in `heard` (a list of PCM pieces), then it stops."""
+        log.info("[audio] listen (fake)")
+        yield from list(getattr(self, "heard", []))
+
 
 class FakeFrame:
     """A pretend camera frame that carries the ISBN of the pretend book on the pad (or None)."""

@@ -46,6 +46,8 @@ def main(argv=None) -> int:
     sim.add_argument("--settle", type=float, default=120.0, metavar="SECONDS",
                      help="with piped input: after the last line, wait up to this long for the robot to finish its "
                           "goodbye and the trip putting books back (0 = quit at once)")
+    sim.add_argument("--zone", choices=("quiet", "common"), help="start in this zone (default: zones.yaml default_zone, common); "
+                     "`zone quiet` / `zone common` or the operator page changes it later")
     sim.add_argument("--live", action="store_true", help="--camera --faces --auto-scan --speak --llm together")
     states = sub.add_parser("states", help="print the state machine from its transition table")
     states.add_argument("--mermaid", action="store_true", help="print the Mermaid diagram")
@@ -91,7 +93,7 @@ def main(argv=None) -> int:
                                      use_faces=args.faces or args.live, preview=args.preview and not args.no_preview,
                                      auto_scan=args.auto_scan or args.live, settle_s=args.settle,
                                      persist_storage=not args.no_persist,
-                                     local_faces=args.local_faces))
+                                     local_faces=args.local_faces, initial_zone=args.zone))
         except KeyboardInterrupt:
             # run_sim's cleanup has run. Exit without Python's shutdown, which can abort or hang while
             # the keyboard reader thread is still blocked in stdin.readline().

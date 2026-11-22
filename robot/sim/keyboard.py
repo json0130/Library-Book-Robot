@@ -8,6 +8,8 @@
     book <isbn>                  fake camera only: place the book with this ISBN (catalogue book or any valid ISBN)
     book none                    fake camera only: place a book whose barcode can't be read (scan fails)
     scan <image path>            fake camera only: the real barcode decoder reads a photo of a book
+    tag <line>                   a tagged book held to the RFID reader, as the reader would send it: `tag UID 04 65 B2 42 CD 21 90`
+                                 (the number is looked up in data/rfid_tags.csv), `tag ISBN 9780132350884` or `tag Dune`
     return | explain | recommend say that to the robot once it has offered
     guide                        ask the robot to guide you to the shelf it last mentioned (after return,
                                  recommend or where); the fake base just logs the NavigationRequested pose
@@ -28,6 +30,8 @@
     pick book:<isbn> | similar:<isbn> | guide:<isbn> | section:<name> | topic:<name>   tap a book, a card button or a choice
     screen <view> [isbn | section]  show a screen view with sample data: face book_card book_list directions
                                  options status (`screen face` goes back to the face)
+    listen                       talk into the microphone (needs --speak or --live): one sentence is recorded, stops when you
+                                 pause, is transcribed on the AI server and handled like typed text. `listen` again ends it early
     reset | reset all            back to IDLE (`all` also empties the storage)
     wait <seconds> | wait idle   let the timers run (for scripted runs)
     help, quit
@@ -69,7 +73,7 @@ from robot.operator import COMMANDS as OPERATOR_COMMANDS, GROUP_SIZES, Operator
 from robot.services.books import CatalogError
 
 CHOICES = ("return", "explain", "recommend")
-COMMANDS = {"quit", "exit", "help", "?", "noise", "scan", "feel", "fixed", "guide", "where", "reload", "wait",
+COMMANDS = {"quit", "exit", "help", "?", "noise", "scan", "tag", "feel", "fixed", "guide", "where", "reload", "wait",
             *OPERATOR_COMMANDS, *CHOICES}
 SETTLE_S = 120.0                                    # at the end of piped input, how long to let a return trip finish
 
@@ -113,6 +117,15 @@ class Sim:
 
     async def place_book(self, args: list) -> bool:
         return await self.op.place_book(args)
+
+    async def tag(self, line: str) -> None:
+        """tag <what the RFID reader would send>: a tagged book held to the reader ("tag UID 04 65 B2 42 CD 21 90", "tag ISBN 9780132350884", "tag Dune")."""
+        reader = getattr(self.app.scanner, "rfid", None) or (self.app.scanner if hasattr(self.app.scanner, "handle") else None)
+        if reader is None:
+            self.say("  no RFID reader: set books.reader to rfid or both in config/robot.yaml")
+            return
+        if await reader.handle(line) is None:
+            self.say("  the reader ignored that (not a tag, the same tag again, or the robot is not expecting a book now)")
 
     async def run_scan(self) -> None:
         await self.op.run_scan()
@@ -198,6 +211,8 @@ class Sim:
         elif cmd == "scan":
             if not (await self.scan_image(rest) if rest else await self.place_book([])):
                 return True
+        elif cmd == "tag" and rest:
+            await self.tag(rest)
         elif cmd in CHOICES and not args:
             await bus.publish(UserUtterance(cmd))
         elif cmd == "guide" and not args:
@@ -294,17 +309,21 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
         speech = Speech.from_config(cfg)
     assistant = build_assistant(cfg) if use_llm else None
     speaker = cfg.robot.get("devices", {}).get("speaker") or "default"
-    counter = window = counter_task = watch_task = ticker = link_task = feed_task = warm_task = None
+    counter = window = counter_task = watch_task = ticker = link_task = feed_task = warm_task = reader_task = None
     try:
         app = build_app(cfg, drivers, speech=speech, log_sessions=log_sessions, assistant=assistant,
                         persist_storage=persist_storage)
         sim = Sim(app, out)
+        if speak and speech is not None:                     # push-to-talk: the Talk button / `listen`; needs the real speaker driver's mic
+            from robot.perception.listener import Listener
+            app.listener = Listener.from_config(cfg, drivers.audio, speech, app.bus, status=app.mic_status, say=lambda t: sim.say(t))
         sim.guide = None                                     # the guided scenario test (robot/scenarios/live.py), if any
         sim.say("Robot simulator. Type help for commands, quit to exit.")
         if initial_zone:
             await sim.op.set_zone(initial_zone)
         sim.say(f"  camera: {'real webcam' if use_camera else 'fake'} | speaker: "
                 f"{'real (' + speaker + '), TTS from ' + cfg.ai_host if speak else 'none, replies are only printed'}"
+                f" | microphone: {(cfg.robot.get('devices', {}).get('mic') or 'system default') + ' (Talk button / listen)' if speak else 'none'}"
                 f" | explain/recommend: {'LLM at ' + cfg.ai_host if use_llm else 'catalogue text'}"
                 f" | faces: {('OpenCV on the robot' if local_faces else 'AI server at ' + cfg.ai_host) if use_faces else 'typed (common alone, ...)'}"
                 f" | scan: {'when a barcode is shown' if auto_scan else 'when you type book'}")
@@ -361,10 +380,15 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             from robot.camera_feed import CameraFeed
             feed_task = asyncio.create_task(CameraFeed(drivers.camera, counter, shown["host"], int(shown["port"]),
                                                        float(shown["camera_fps"]), int(shown["camera_width"])).run())
+        ready = lambda: (app.dialogue.leaf in ("IDLE", "OFFER", "AWAIT_BOOK", "ANSWER", "ANYTHING_ELSE")
+                         and not (app.scanner is not None and app.scanner.scanning))
+        if app.scanner is not None:
+            app.scanner.set_ready(ready)                          # a tag held to the RFID reader is taken only when a book is expected, like a barcode
+            reader_task = asyncio.create_task(app.scanner.run())   # the RFID reader's serial port (the camera reader needs nothing)
+            if getattr(app.scanner, "rfid", None) is not None:
+                sim.say("  watching the RFID reader: hold a tagged book to it (docs/rfid.md)")
         if auto_scan:
             from robot.perception.book_watch import BookWatcher
-            ready = lambda: (app.dialogue.leaf in ("IDLE", "OFFER", "AWAIT_BOOK", "ANSWER", "ANYTHING_ELSE")
-                             and not (app.scanner is not None and app.scanner.scanning))
             watch_task = asyncio.create_task(BookWatcher(app.bus, app.scanner_camera, ready).run())
             sim.say("  watching for books: hold a barcode up to the camera")
         if use_camera and preview:
@@ -396,7 +420,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
             await sim.settle(settle_s)
         return 0
     finally:
-        for task in (counter_task, watch_task, ticker, link_task, feed_task, warm_task, locals().get("guide_task")):
+        for task in (counter_task, watch_task, reader_task, ticker, link_task, feed_task, warm_task, locals().get("guide_task")):
             if task is not None:
                 task.cancel()
         if window is not None:
