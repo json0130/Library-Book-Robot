@@ -20,10 +20,11 @@
   #conn.ok { color: var(--accent); }
   /* landscape: on the left the map and the sound map side by side, under them the camera and the face side by side, then the books and the log;
      on the right the state machines and the other controls */
-  /* three rows. 1: the webcam | the robot's face | the state and the visitor (talk, pick, type). 2: the floor plan (navigation) | the sound
-     map | the books on board. 3: everything else (the log, the base, the settings), as many across as fit. */
+  /* three rows. 1: the webcam | the robot's face | the books on board, the visitor (pick, talk, type) and the state. 2: the floor plan
+     (navigation) | the sound map. 3: everything else (the log, the base, the settings), as many across as fit (hidden for now). */
   main { display: grid; gap: 12px; padding: 12px 16px; align-items: start; }
-  .r1, .r2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .8fr); gap: 12px; align-items: start; min-width: 0; }
+  .r1 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .8fr); gap: 12px; align-items: start; min-width: 0; }
+  .r2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
   .r3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; min-width: 0; }
   .stack { display: grid; gap: 12px; min-width: 0; align-items: start; }
   /* the webcam and the face, and the floor plan and the sound map, are the same height side by side (and their boxes too) */
@@ -32,7 +33,7 @@
   #plan, #snd { aspect-ratio: auto !important; height: clamp(300px, 30vw, 520px); }
   #planbox.big #plan, #sndbox.big #snd { height: calc(100vh - 300px); }
   .r3[hidden] { display: none; }        /* row 3 (log, base, settings) is hidden for now: remove `hidden` from <div class="r3"> to show it */
-  @media (max-width: 1100px) { .r1, .r2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .r1 > :last-child, .r2 > :last-child { grid-column: 1 / -1; } }
+  @media (max-width: 1100px) { .r1 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .r1 > :last-child { grid-column: 1 / -1; } }
   @media (max-width: 700px) { .r1, .r2 { grid-template-columns: 1fr; } }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
   h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
@@ -206,16 +207,10 @@
       <div id="screen">–</div>
     </section>
     <div class="stack">
-    <section id="guide" hidden>
-      <h2>Test step <span id="guideno"></span></h2>
-      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
-      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
-    </section>
     <section>
-      <h2>State</h2>
-      <div id="map"></div>
-      <h2 class="sub">What can happen next</h2>
-      <ul id="next"></ul>
+      <h2>Books on board <span id="count"></span></h2>
+      <ol id="books"></ol>
+      <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
     </section>
     <section>
       <h2>The visitor picks</h2>
@@ -226,6 +221,17 @@
         <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
           <button>Say</button></form>
       </details>
+    </section>
+    <section>
+      <h2>State</h2>
+      <div id="map"></div>
+      <h2 class="sub">What can happen next</h2>
+      <ul id="next"></ul>
+    </section>
+    <section id="guide" hidden>
+      <h2>Test step <span id="guideno"></span></h2>
+      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
+      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
     </section>
     </div>
   </div>
@@ -295,11 +301,6 @@
         <span><i style="border:2px dashed #1b1f23;background:none"></i>section</span><span><i style="background:#e0463c"></i>robot</span></div>
       <div id="sn-cursor">Move the pointer over the map to read the sound level there. Mouse wheel zooms, drag pans.</div>
       <div id="sn-note"></div>
-    </section>
-    <section>
-      <h2>Books on board <span id="count"></span></h2>
-      <ol id="books"></ol>
-      <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
     </section>
   </div>
   <div class="r3" hidden>
