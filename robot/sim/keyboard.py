@@ -339,9 +339,12 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                   local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None,
                   base: Optional[str] = None, base_url: Optional[str] = None, base_speed: float = 1.0,
                   force_zone: Optional[str] = None, film_take: Optional[str] = None, record_path: Optional[str] = None,
-                  base_replay: Optional[str] = None) -> int:
+                  base_replay: Optional[str] = None, start_stopped: bool = False, camera_optional: bool = False) -> int:
     """force_zone, film_take and record_path are film mode (robot/film.py, docs/video_shot_list.md): hold one zone for the take,
-    log timestamped events to recordings/<take>/events.jsonl, and write the boxed camera frames to an mp4. All off by default."""
+    log timestamped events to recordings/<take>/events.jsonl, and write the boxed camera frames to an mp4. All off by default.
+    start_stopped: the robot starts stopped (the operator page's Start button, or `system start`): the camera shows but nobody is
+    greeted and no book is taken. camera_optional: use_camera was the default, not asked for, so a missing webcam falls back to the
+    fake camera (without faces) instead of failing."""
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
     for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan"), (record_path, "--record")):
         if wanted and not use_camera:
@@ -351,8 +354,16 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
     try:
         drivers = sim_drivers(cfg, use_camera=use_camera, speak=speak)
     except (OSError, RuntimeError, ValueError) as exc:
-        print(f"Cannot start the simulator: {exc}", file=sys.stderr)
-        return 1
+        if not (use_camera and camera_optional):
+            print(f"Cannot start the simulator: {exc}", file=sys.stderr)
+            return 1
+        print(f"  no webcam ({exc}): using the fake camera, faces off (--no-camera hides this)", file=out)
+        use_camera = use_faces = auto_scan = False
+        try:
+            drivers = sim_drivers(cfg, use_camera=False, speak=speak)
+        except (OSError, RuntimeError, ValueError) as exc2:
+            print(f"Cannot start the simulator: {exc2}", file=sys.stderr)
+            return 1
     speech = None
     if speak:
         from robot.services.speech import Speech
@@ -465,15 +476,19 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                                     map_zone=sim.zone, interval_s=float(seen.get("face_interval_s", 1.0)),
                                     arrive_frames=int(seen.get("arrive_frames", 2)),
                                     leave_after_s=float(seen.get("leave_after_s", 8.0)),
-                                    on_change=sim.people_changed)
+                                    on_change=sim.people_changed, paused=lambda: not app.active)
+            app.counter = counter
             counter_task = asyncio.create_task(counter.run())
             sim.say("  watching for faces: step in front of the camera and the robot says hello")
+        if start_stopped:
+            app.active = False
+            sim.say("  STOPPED: press Start on the operator page (or type `system start`) and the robot greets whoever is there")
         if use_camera:
             from robot.camera_feed import CameraFeed
             feed_task = asyncio.create_task(CameraFeed(drivers.camera, counter, shown["host"], int(shown["port"]),
                                                        float(shown["camera_fps"]), int(shown["camera_width"]),
                                                        recorder=recorder).run())
-        ready = lambda: (app.dialogue.leaf in ("IDLE", "OFFER", "AWAIT_BOOK", "ANSWER", "ANYTHING_ELSE")
+        ready = lambda: (app.active and app.dialogue.leaf in ("IDLE", "OFFER", "AWAIT_BOOK", "ANSWER", "ANYTHING_ELSE")
                          and not (app.scanner is not None and app.scanner.scanning))
         if app.scanner is not None:
             app.scanner.set_ready(ready)                          # a tag held to the RFID reader is taken only when a book is expected, like a barcode

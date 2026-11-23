@@ -40,7 +40,7 @@ from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged
                           UserChoice, UserUtterance)
 from robot.services.isbn import to_isbn13
 
-COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "unload", "pick", "book", "say", "listen", "reset", "screen",
+COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "unload", "pick", "book", "say", "listen", "reset", "screen", "system",
             "drive", "stop", "resume")
 PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 ZONES = ("quiet", "common")
@@ -159,6 +159,25 @@ class Operator:
         return True
 
     # ---- the commands ----
+    async def set_active(self, on: bool) -> bool:
+        """Start or stop the robot (the operator page's button). Stopping ends a visit quietly: back to IDLE, nobody in view. Books
+        already stored stay, and a trip under way is stopped."""
+        app = self.app
+        if app.active == on:
+            self.say(f"  already {'running' if on else 'stopped'}")
+            return True
+        app.active = on
+        if not on:
+            await app.dialogue.reset()
+            self.group_size, self.person_ids = 0, ()
+            await self.context_changed()
+            counter = getattr(app, "counter", None)
+            if counter is not None:
+                counter.forget()
+        self.say("  running: faces are greeted, books are taken" if on else "  stopped: nobody is greeted until Start")
+        app.show_state()
+        return True
+
     def describe(self) -> str:
         d = self.app.dialogue
         stored = ", ".join(f"{b.title} (slot {b.slot})" for b in d.storage.stored()) or "empty"
@@ -260,6 +279,11 @@ class Operator:
             return self.stop()
         elif command == "resume":
             self.tell("  " + await d.resume_held())
+        elif command == "system":
+            if arg.lower() not in ("start", "stop"):
+                self.say("  usage: system start|stop  (stopped: the camera shows, but nobody is greeted and no book is taken)")
+                return False
+            return await self.set_active(arg.lower() == "start")
         elif command == "reset":
             await d.reset(everything=arg.lower() == "all")
             self.say("  reset: IDLE" + (", storage emptied" if arg.lower() == "all" else ""))

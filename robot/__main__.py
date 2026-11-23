@@ -31,7 +31,11 @@ def main(argv=None) -> int:
                      help="don't read or save the storage ring (data/state/storage.json): start empty, forget at the end")
     sim.add_argument("--llm", action="store_true",
                      help="explain/recommend through the AI server's LLM (default: catalogue text, no server needed)")
-    sim.add_argument("--camera", action="store_true", help="scan with the real webcam instead of the fake camera")
+    sim.add_argument("--camera", action="store_true", help="the real webcam, and fail if there is none (from a terminal it is on by default)")
+    sim.add_argument("--no-camera", action="store_true", help="the fake camera, no faces (the default when the input is piped)")
+    sim.add_argument("--start", action="store_true",
+                     help="start running: with faces on, the robot otherwise starts stopped, so it does not say hello as soon as it\n"
+                          "starts; press Start on the operator page (or type `system start`)")
     sim.add_argument("--faces", action="store_true",
                      help="count the people the webcam sees with the AI server's face detection: a face makes the "
                           "robot say hello (needs --camera)")
@@ -109,9 +113,15 @@ def main(argv=None) -> int:
             print(f"--config-set: {exc}", file=sys.stderr)
             return 2
         try:
+            # from a terminal the webcam and the faces are on by default (the robot starts stopped: Start on the operator page);
+            # piped input (scripts, takes, tests) keeps the fake camera unless asked
+            default_cam = sys.stdin.isatty() and not args.no_camera
+            camera = (args.camera or args.live or default_cam) and not args.no_camera
+            faces = (args.faces or args.live or default_cam) and camera
             return asyncio.run(run_sim(cfg, log_sessions=not args.no_log, use_llm=args.llm or args.live,
-                                     use_camera=args.camera or args.live, speak=args.speak or args.live,
-                                     use_faces=args.faces or args.live, preview=args.preview and not args.no_preview,
+                                     use_camera=camera, speak=args.speak or args.live,
+                                     use_faces=faces, preview=args.preview and not args.no_preview,
+                                     start_stopped=faces and not args.start, camera_optional=camera and not (args.camera or args.live),
                                      auto_scan=args.auto_scan or args.live, settle_s=args.settle,
                                      persist_storage=not args.no_persist,
                                      local_faces=args.local_faces, initial_zone=args.zone, base=args.base, base_url=args.base_url,

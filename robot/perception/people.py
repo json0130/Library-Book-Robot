@@ -63,6 +63,11 @@ class EngagementDetector:
         self._last_seen: Optional[float] = None
         self._last_update: Optional[float] = None   # when update() last ran
 
+    def reset(self) -> None:
+        """Nobody seen (the robot was stopped): the next face starts a new arrival."""
+        self.state = "absent"
+        self._near_since = self._far_since = self._last_seen = self._last_update = None
+
     @classmethod
     def from_config(cls, settings: dict, clock=time.monotonic) -> "EngagementDetector":
         """From config/robot.yaml `engagement:` (keys the detector does not use, like leave_grace_s, are skipped)."""
@@ -112,7 +117,8 @@ class PeopleCounter:
     def __init__(self, bus, camera, vision, map_zone: str = "common", interval_s: float = 1.0,
                  arrive_frames: int = 2, leave_after_s: float = 8.0,
                  on_change: Optional[Callable[[int, tuple], Awaitable]] = None, clock=time.monotonic,
-                 identify: Optional[Callable] = None, engagement: Optional[EngagementDetector] = None):
+                 identify: Optional[Callable] = None, engagement: Optional[EngagementDetector] = None,
+                 paused: Callable[[], bool] = lambda: False):
         self.bus, self.camera, self.vision = bus, camera, vision
         self.map_zone = map_zone
         self.interval_s = interval_s
@@ -132,6 +138,16 @@ class PeopleCounter:
         self._streak: dict[int, int] = {}           # per person: samples in a row seen, until confirmed
         self._missing_since: dict[int, float] = {}  # per confirmed person: when they dropped out of view
         self._last_error: Optional[str] = None
+        self.paused = paused                # True while the robot is stopped (operator page): no samples, nobody counted
+
+    def forget(self) -> None:
+        """Nobody in view, without telling anyone: the robot was stopped. After Start, whoever stands there is new (and is greeted)."""
+        self.count, self.person_ids, self.detections, self.detected_at = 0, (), [], None
+        self._more = self._more_min = 0
+        self._fewer_since = None
+        self._streak, self._missing_since = {}, {}
+        if self.engagement is not None and hasattr(self.engagement, "reset"):
+            self.engagement.reset()
 
     async def _publish(self, count: int, person_ids: tuple = ()) -> None:
         await self.bus.publish(ContextChanged(self.map_zone, count, person_ids=person_ids))
@@ -229,6 +245,11 @@ class PeopleCounter:
     async def run(self) -> None:
         """Sample forever. A camera or server failure is logged once and retried, not fatal."""
         while True:
+            if self.paused():
+                if self.count or self.detections:
+                    self.forget()
+                await asyncio.sleep(self.interval_s)
+                continue
             try:
                 await self.step()
                 self._last_error = None

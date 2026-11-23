@@ -42,6 +42,10 @@
            color: var(--ink); cursor: pointer; min-height: 38px; }
   button:hover { border-color: var(--accent); }
   .hint { color: var(--muted); font-size: .85rem; }
+  .sysbtn { font-weight: 700; min-width: 7.5rem; background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sysbtn.running { background: var(--bg); color: var(--warn); border-color: var(--warn); }
+  .sysnote { font-size: .85rem; color: var(--muted); }
+  .sysnote.stopped { color: var(--warn); font-weight: 600; }
   .talkrow { margin-top: 8px; }
   .typed { margin-top: 10px; font-size: .85rem; color: var(--muted); }
   .typed form { margin-top: 6px; }
@@ -184,6 +188,8 @@
 <body>
 <header>
   <h1>Robot operator <span id="conn">connecting…</span></h1>
+  <button type="button" id="sysbtn" class="sysbtn" title="Start: faces are greeted and books are taken. Stop: back to IDLE quietly; the camera keeps showing.">▶ Start</button>
+  <span id="sysnote" class="sysnote"></span>
   <div id="path">–</div>
   <div id="meta"></div>
 </header>
@@ -1117,10 +1123,19 @@ function showState(s) {
   showBase(s);
   showMap2(s);
   showMic(s);
+  showSystem(s);
   const g = s.guide;                                    // a guided scenario test (python -m robot scenarios live)
   $("guide").hidden = !g;
   if (g) { $("guideno").textContent = `${g.n} of ${g.total} (${g.scenario})`; $("guidetext").textContent = g.text; }
   if (s.state && s.state !== lastPath) { note(`${lastPath || "(start)"} → ${s.state}`); lastPath = s.state; }
+}
+$("sysbtn").onclick = () => send("system", $("sysbtn").classList.contains("running") ? "stop" : "start");
+function showSystem(s) {            // running or stopped (Start / Stop): stopped, the camera shows but nobody is greeted
+  const on = s.active !== false;
+  $("sysbtn").classList.toggle("running", on);
+  $("sysbtn").textContent = on ? "■ Stop" : "▶ Start";
+  $("sysnote").textContent = on ? "running" : "stopped: nobody is greeted until Start";
+  $("sysnote").className = "sysnote" + (on ? "" : " stopped");
 }
 function showChoices(u) {          // the buttons the robot's own screen shows: tapping one is the visitor tapping it
   const p = u.payload || {};

@@ -53,7 +53,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", 
 
 INPUT_CHOICES = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
 CONTENT_CHOICE = re.compile(r"^(?:(?:book|where|guide|similar):\d{10,13}|(?:section|topic):[A-Za-z0-9 &',.-]{1,60}|floor:\d{1,2})$")
-OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "unload", "pick", "book", "say", "listen", "reset",
+OPERATOR_COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "unload", "pick", "book", "say", "listen", "reset", "system",
                      "screen", "next", "abort", "drive", "stop", "resume", "theme", "look")
 MAX_MAP_BODY = 4 * 1024 * 1024      # the base's map as JSON with a PNG inside (posted by the robot, only from this computer)
 INBOX_KEEP = 200

@@ -78,6 +78,9 @@ PyYAML is the only required package. OpenCV (the camera tools and driver) comes 
 python -m robot check     # is the AI server reachable?
 python -m robot sim       # try the logic from the keyboard: fake hardware, no AI server needed
 python -m robot sim --live   # webcam + camera window, face detection, auto-scan, speaker and LLM: step up (hello), show a book, ask, hear the answer
+python -m robot sim          # from a terminal the webcam and face detection are on, and the robot starts STOPPED: press Start on
+                             #   the operator page (or type `system start`) and it greets whoever is there; Stop ends the visit
+                             #   quietly. --start runs at once, --no-camera uses the fake camera (as piped input always does)
 python -m robot states --mermaid   # the state machine as a Mermaid diagram, from its transition table
 python -m robot run       # on the hardware; for now exits naming the drivers that are missing (esp32)
 ```

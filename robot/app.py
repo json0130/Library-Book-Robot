@@ -133,6 +133,9 @@ class App:
     forced_zone: Optional[str] = None             # film mode (`sim --zone`): this zone for the whole take, whatever the map, noise or operator say
     listener: object = None                       # perception.listener.Listener (push-to-talk microphone), or None
     heard: dict = field(default_factory=lambda: {"mic": "idle", "text": ""})   # what the operator page shows about the microphone
+    counter: object = None                        # perception.people.PeopleCounter when faces are watched, else None
+    active: bool = True                           # False = stopped (the operator page's Start/Stop): the camera shows, but no face makes
+                                                  # it say hello and no book is taken until Start
 
     def __post_init__(self) -> None:
         default_zone = self.cfg.zones.get("default_zone", "common")
@@ -192,7 +195,7 @@ class App:
     def state_info(self) -> dict:
         """What the operator page shows: where the machine is, the zone, the mode and the storage."""
         d = self.dialogue
-        return {"state": d.state, "zone": self.context.zone, "social": self.context.social, "fixed": self.fixed,
+        return {"state": d.state, "active": self.active, "zone": self.context.zone, "social": self.context.social, "fixed": self.fixed,
                 "stored": len(d.storage), "slots": d.storage.size,
                 "books": [{"slot": b.slot, "title": b.title, "shelf": b.shelf, "section": b.section}
                           for b in d.storage.stored()], "style": self.style.summary(),
