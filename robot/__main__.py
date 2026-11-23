@@ -122,7 +122,7 @@ def main(argv=None) -> int:
                                      use_camera=camera, speak=args.speak or args.live,
                                      use_faces=faces, preview=args.preview and not args.no_preview,
                                      start_stopped=faces and not args.start, camera_optional=camera and not (args.camera or args.live),
-                                     auto_scan=args.auto_scan or args.live, settle_s=args.settle,
+                                     auto_scan=(args.auto_scan or args.live) and camera, settle_s=args.settle,
                                      persist_storage=not args.no_persist,
                                      local_faces=args.local_faces, initial_zone=args.zone, base=args.base, base_url=args.base_url,
                                      base_speed=args.base_speed, force_zone=args.hold_zone, film_take=args.film,

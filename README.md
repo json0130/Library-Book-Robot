@@ -76,6 +76,9 @@ PyYAML is the only required package. OpenCV (the camera tools and driver) comes 
 
 ```bash
 python -m robot check     # is the AI server reachable?
+scripts/start_demo.sh     # THE DEMO, one command: local AI + display server + robot (webcam, faces, mic, speaker, LLM);
+                          #   starts STOPPED (Start on http://127.0.0.1:8765/operator). --remote: the AI server; --base fake|turtlebot;
+                          #   --face: the face page full screen; scripts/start_demo.sh --help
 python -m robot sim       # try the logic from the keyboard: fake hardware, no AI server needed
 python -m robot sim --live   # webcam + camera window, face detection, auto-scan, speaker and LLM: step up (hello), show a book, ask, hear the answer
 python -m robot sim          # from a terminal the webcam and face detection are on, and the robot starts STOPPED: press Start on
