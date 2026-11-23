@@ -1,9 +1,9 @@
 # Robot settings. Environment variables AI_HOST / AI_PORT override the AI server address, AI_MODE the mode below.
 
 ai_server:
-  mode: remote            # remote = the AI server below. local = the models on this Jetson (tools/local_ai_server.py, scripts/start_local_ai.sh, docs/local_ai.md):
+  mode: local             # remote = the AI server below. local = the models on this Jetson (tools/local_ai_server.py, scripts/start_local_ai.sh, docs/local_ai.md):
                           # host and port come from `local:`, and faces are detected on the robot (perception.detector: local) because that server has no face model
-  host: 172.24.30.251
+  host: 100.110.91.42     # the AI server (a6000-lambda-vector) on Tailscale; used with mode: remote or AI_MODE=remote
   port: 7898
   local: {host: 127.0.0.1, port: 7898}
   timeout_s: 300          # LLM/TTS requests can be slow on a busy server

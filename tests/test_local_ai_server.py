@@ -241,8 +241,8 @@ class ProtocolTests(unittest.TestCase):
 
 
 class ModeSwitchTests(unittest.TestCase):
-    def test_remote_is_the_default_and_changes_nothing(self):
-        cfg = load_config(env={})
+    def test_remote_uses_the_ai_server_and_its_faces(self):
+        cfg = load_config(env={"AI_MODE": "remote"})        # config/robot.yaml runs local by default (the user's choice, 2026-11-23)
         self.assertEqual(cfg.ai_mode, "remote")
         self.assertEqual(cfg.robot["perception"]["detector"], "server")
         self.assertNotEqual(cfg.ai_host, "127.0.0.1")
