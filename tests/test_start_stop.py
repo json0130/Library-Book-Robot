@@ -111,3 +111,41 @@ class DefaultCameraTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FaceDetectorChoiceTest(unittest.TestCase):
+    def test_a_server_that_does_not_answer_falls_back_to_opencv(self):
+        from robot.config import load_config
+        from robot.sim.keyboard import face_detector
+        cfg = load_config()
+        cfg.robot["ai_server"].update(host="127.0.0.1", port=9, mode="remote")     # nothing listens on port 9
+        said = []
+
+        class S:
+            def say(self, text):
+                said.append(text)
+        try:
+            from robot.services.local_faces import LocalFaceDetector
+            LocalFaceDetector()
+        except Exception:
+            self.skipTest("OpenCV faces not available here")
+        detector, by = face_detector(cfg, S())
+        self.assertEqual(type(detector).__name__, "LocalFaceDetector")
+        self.assertIn("OpenCV", by)
+        self.assertIn("does not answer", said[-1])
+
+    def test_the_page_is_told_when_detection_fails(self):
+        counter, _, clock = make_counter(OSError("server down"), 1)
+        told = []
+        counter.on_status = lambda: told.append(counter._last_error)
+        counter.interval_s = 0
+
+        async def two_ticks():
+            task = asyncio.ensure_future(counter.run())
+            await asyncio.sleep(0.02)
+            task.cancel()
+        try:
+            asyncio.run(two_ticks())
+        except IndexError:
+            pass
+        self.assertEqual(told[0], "server down")

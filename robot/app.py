@@ -134,6 +134,7 @@ class App:
     listener: object = None                       # perception.listener.Listener (push-to-talk microphone), or None
     heard: dict = field(default_factory=lambda: {"mic": "idle", "text": ""})   # what the operator page shows about the microphone
     counter: object = None                        # perception.people.PeopleCounter when faces are watched, else None
+    faces_by: str = ""                            # what detects the faces (the AI server, OpenCV on the robot), for the operator page
     active: bool = True                           # False = stopped (the operator page's Start/Stop): the camera shows, but no face makes
                                                   # it say hello and no book is taken until Start
 
@@ -195,7 +196,9 @@ class App:
     def state_info(self) -> dict:
         """What the operator page shows: where the machine is, the zone, the mode and the storage."""
         d = self.dialogue
-        return {"state": d.state, "active": self.active, "zone": self.context.zone, "social": self.context.social, "fixed": self.fixed,
+        faces = None if self.counter is None else {"by": self.faces_by, "error": getattr(self.counter, "_last_error", None),
+                                                    "count": self.counter.count}
+        return {"state": d.state, "active": self.active, "faces": faces, "zone": self.context.zone, "social": self.context.social, "fixed": self.fixed,
                 "stored": len(d.storage), "slots": d.storage.size,
                 "books": [{"slot": b.slot, "title": b.title, "shelf": b.shelf, "section": b.section}
                           for b in d.storage.stored()], "style": self.style.summary(),

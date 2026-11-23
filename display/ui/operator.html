@@ -1134,8 +1134,10 @@ function showSystem(s) {            // running or stopped (Start / Stop): stoppe
   const on = s.active !== false;
   $("sysbtn").classList.toggle("running", on);
   $("sysbtn").textContent = on ? "■ Stop" : "▶ Start";
-  $("sysnote").textContent = on ? "running" : "stopped: nobody is greeted until Start";
-  $("sysnote").className = "sysnote" + (on ? "" : " stopped");
+  const f = s.faces;                  // what detects the faces, and whether it works
+  const faces = !f ? "faces: off (typed)" : f.error ? `faces: NOT WORKING (${f.error})` : `faces: ${f.by}` + (on ? ` · ${f.count} in view` : "");
+  $("sysnote").textContent = (on ? "running" : "stopped: nobody is greeted until Start") + " · " + faces;
+  $("sysnote").className = "sysnote" + (on && !(f && f.error) ? "" : " stopped");
 }
 function showChoices(u) {          // the buttons the robot's own screen shows: tapping one is the visitor tapping it
   const p = u.payload || {};

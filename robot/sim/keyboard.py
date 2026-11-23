@@ -332,6 +332,25 @@ async def read_line(loop: asyncio.AbstractEventLoop, stdin: TextIO) -> str:
     return await future
 
 
+def face_detector(cfg: Config, sim) -> tuple:
+    """(detector, what it is) for the faces: the AI server's model when the server answers, else OpenCV on the robot (said once),
+    so a server that is down does not leave the robot blind with nobody greeted. The choice is made at start-up."""
+    import socket
+    from robot.services.vision import Vision
+    try:
+        socket.create_connection((cfg.ai_host, int(cfg.ai_port)), timeout=2).close()
+        return Vision(cfg.ai_host, cfg.ai_port, timeout=10), f"AI server at {cfg.ai_host}:{cfg.ai_port}"
+    except OSError as exc:
+        from robot.services.local_faces import LocalFaceDetector, LocalFacesUnavailable
+        try:
+            detector = LocalFaceDetector()
+        except LocalFacesUnavailable:
+            sim.say(f"  the AI server at {cfg.ai_host}:{cfg.ai_port} does not answer ({exc}) and OpenCV is not available: no faces until it does")
+            return Vision(cfg.ai_host, cfg.ai_port, timeout=10), f"AI server at {cfg.ai_host}:{cfg.ai_port} (not answering)"
+        sim.say(f"  the AI server at {cfg.ai_host}:{cfg.ai_port} does not answer ({exc}): detecting faces on the robot (OpenCV) instead")
+        return detector, "OpenCV on the robot (AI server not answering)"
+
+
 async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdout,
                   log_sessions: bool = True, use_llm: bool = False, use_camera: bool = False,
                   speak: bool = False, use_faces: bool = False, preview: bool = False,
@@ -469,8 +488,9 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                     print(f"Cannot detect faces locally: {exc}", file=sys.stderr)
                     return 1
                 sim.say("  detecting faces on the robot (OpenCV), not on the AI server")
+                app.faces_by = "OpenCV on the robot"
             else:
-                detector = Vision(cfg.ai_host, cfg.ai_port, timeout=10)
+                detector, app.faces_by = face_detector(cfg, sim)
             counter = PeopleCounter(app.bus, drivers.camera, detector,
                                     identify=identify, engagement=EngagementDetector.from_config(cfg.engagement),
                                     map_zone=sim.zone, interval_s=float(seen.get("face_interval_s", 1.0)),
@@ -478,6 +498,7 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                                     leave_after_s=float(seen.get("leave_after_s", 8.0)),
                                     on_change=sim.people_changed, paused=lambda: not app.active)
             app.counter = counter
+            counter.on_status = app.show_state
             counter_task = asyncio.create_task(counter.run())
             sim.say("  watching for faces: step in front of the camera and the robot says hello")
         if start_stopped:

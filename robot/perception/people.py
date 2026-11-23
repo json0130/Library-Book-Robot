@@ -139,6 +139,7 @@ class PeopleCounter:
         self._missing_since: dict[int, float] = {}  # per confirmed person: when they dropped out of view
         self._last_error: Optional[str] = None
         self.paused = paused                # True while the robot is stopped (operator page): no samples, nobody counted
+        self.on_status: Callable[[], object] = lambda: None     # face detection started or stopped failing
 
     def forget(self) -> None:
         """Nobody in view, without telling anyone: the robot was stopped. After Start, whoever stands there is new (and is greeted)."""
@@ -252,10 +253,13 @@ class PeopleCounter:
                 continue
             try:
                 await self.step()
-                self._last_error = None
+                if self._last_error is not None:
+                    self._last_error = None
+                    self.on_status()                # working again: tell the operator page
             except (OSError, EOFError, ValueError) as exc:
                 if str(exc) != self._last_error:
                     log.warning("[camera] face detection failed (%s); will keep trying", exc)
                     self._last_error = str(exc)
+                    self.on_status()                # the operator page says faces are not working
                 self.detections = []
             await asyncio.sleep(self.interval_s)
