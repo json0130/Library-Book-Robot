@@ -25,3 +25,8 @@ include = ["robot*", "display*", "vendor*", "tools*"]
 
 [tool.setuptools.package-data]
 display = ["ui/*.html"]
+
+[tool.pytest.ini_options]
+# ROS 2's launch_testing plugin (installed with ROS) turns off propagation on new loggers, which hides the robot's log lines
+# from the simulator's output; launch_ros hooks into it, so both go.
+addopts = "-p no:launch_testing -p no:launch_ros"

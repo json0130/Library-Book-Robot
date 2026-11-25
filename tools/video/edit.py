@@ -1148,8 +1148,10 @@ def finish_audio(video: Path, voiceover: Optional[Path], out: Path, duck_db: flo
     else:
         ratio = max(2.0, 10 ** (duck_db / 20))
         graph = ("[1:a]aresample=48000,aformat=channel_layouts=stereo,asplit=2[vo][key];"
-                 f"[0:a][key]sidechaincompress=threshold=0.02:ratio={ratio:.1f}:attack=30:release=400[duck];"
-                 "[duck][vo]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]")
+                 "[0:a]aresample=48000,aformat=channel_layouts=stereo[clip];"     # ffmpeg 4.4 cannot pick a layout otherwise
+                 f"[clip][key]sidechaincompress=threshold=0.02:ratio={ratio:.1f}:attack=30:release=400[duck];"
+                 "[duck][vo]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=11,"
+                 "aresample=48000,aformat=channel_layouts=stereo[a]")
         inputs = ["-i", str(video), "-i", str(voiceover)]
     run_ffmpeg([*inputs, "-filter_complex", graph, "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                 "-movflags", "+faststart", str(out)], "the sound")
