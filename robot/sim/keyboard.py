@@ -8,6 +8,8 @@
     book <isbn>                  fake camera only: place the book with this ISBN (catalogue book or any valid ISBN)
     book none                    fake camera only: place a book whose barcode can't be read (scan fails)
     scan <image path>            fake camera only: the real barcode decoder reads a photo of a book
+    tag <line>                   a tagged book held to the RFID reader, as the reader would send it: `tag UID 04 65 B2 42 CD 21 90`
+                                 (the number is looked up in data/rfid_tags.csv), `tag ISBN 9780132350884` or `tag Dune`
     return | explain | recommend say that to the robot once it has offered
     guide                        ask the robot to guide you to the shelf it last mentioned (after return,
                                  recommend or where); the fake base just logs the NavigationRequested pose
@@ -15,10 +17,26 @@
     reload                       read data/catalog.csv, topics.yaml, shelves.csv and curated_links.csv again
     <anything else you type>     the visitor says it ("can you explain it?"); `say <text>` also works
     feel <emotion> [confidence]  the camera sees this emotion on the visitor (confidence 0..1)
-    leave                        everyone walks away
+    leave                        everyone walks away (also PersonLeft)
     fixed on | fixed off         baseline condition: one style everywhere
+    Operator controls (the same as the /operator page of the display server; robot/operator.py):
+    state                        where the state machine is, the zone and what is in storage
+    goto <state>                 force a state (OFFER, SCAN, STORE, NAVIGATING...), filling in a sample book or two
+                                 stored books where it needs them
+    zone quiet | zone common     change the zone
+    engage | busy                a person engages / is near but busy (PersonEngaged / PersonNearbyBusy)
+    dropped                      the pad dropped the book into its slot (BookDropped)
+    pick return|ask|recommend|more|guide|done|surprise   press that screen button
+    pick book:<isbn> | similar:<isbn> | guide:<isbn> | section:<name> | topic:<name>   tap a book, a card button or a choice
+    screen <view> [isbn | section]  show a screen view with sample data: face book_card book_list directions
+                                 options status (`screen face` goes back to the face)
+    listen                       talk into the microphone (needs --speak or --live): one sentence is recorded, stops when you
+                                 pause, is transcribed on the AI server and handled like typed text. `listen` again ends it early
+    reset | reset all            back to IDLE (`all` also empties the storage)
+    wait <seconds> | wait idle   let the timers run (for scripted runs)
     help, quit
 
+    base                         the link to the base (with --base turtlebot | fake): link status, pose, the drive, the noise, the zone
 Options: --llm      the AI server's LLM words explain and recommend (else the catalogue text)
          --camera   scan with the real webcam, and show a live camera window
          --faces    count the people the webcam sees (AI server face detection): the first face makes the
@@ -27,7 +45,10 @@ Options: --llm      the AI server's LLM words explain and recommend (else the ca
                     `book` (the camera stands in for the pad's weight sensor). Needs --camera
          --speak    speak replies through the speaker (TTS from the AI server); the face display's mouth moves
          --live     all of them: webcam, faces, auto-scan, speaker, LLM
-         --no-preview  no camera window (over SSH, say)
+         --preview  also open a camera window on the robot (the operator page already shows the camera)
+         --base turtlebot|fake   drive with the Dell on the TurtleBot (ROBOT_LINK_TOKEN, --base-url) or with tools/fake_base.py
+                    started here (--base-speed N: N times quicker); the default is the simulated drive (timers)
+         --config-set returning.auto_start=true   change a robot.yaml setting for this run (repeatable)
 The `--live` flow: step in front of the camera (hello), hold a book's barcode up to it (or type `book`), then type
 "can you explain it?" or "can you recommend something?". Replies are spoken only in styles with the speech
 channel (a common area, the default); quiet zones print or use other channels instead. With --faces the
@@ -48,16 +69,17 @@ import threading
 from typing import Optional, TextIO
 
 from robot.app import App, build_app, build_assistant, sim_drivers
+from robot.services.warmup import Warmup
 from robot.config import Config
 from robot.core.expression import EMOTIONS, normalize
-from robot.events import BookPlaced, ContextChanged, EmotionDetected, UserUtterance
+from robot.events import EmotionDetected, UserUtterance
+from robot.operator import COMMANDS as OPERATOR_COMMANDS, GROUP_SIZES, Operator
 from robot.services.books import CatalogError
-from robot.services.isbn import to_isbn13
 
-GROUP_SIZES = {"alone": 1, "group": 3}
 CHOICES = ("return", "explain", "recommend")
-COMMANDS = {"quit", "exit", "help", "?", "noise", "leave", "book", "scan", "say", "feel", "fixed", "guide",
-            "where", "reload", *CHOICES}
+COMMANDS = {"quit", "exit", "help", "?", "noise", "scan", "tag", "feel", "fixed", "guide", "where", "reload", "wait", "base",
+            *OPERATOR_COMMANDS, *CHOICES}
+SETTLE_S = 120.0                                    # at the end of piped input, how long to let a return trip finish
 
 
 class Sim:
@@ -65,10 +87,13 @@ class Sim:
         self.app = app
         self.out = out
         self.rng = rng or random.Random()
-        self.zone = app.cfg.zones.get("default_zone", "common")
-        self.group_size = 1
-        self.person_ids: tuple = ()                 # who the camera tells apart (person 1...), () when typed
-        self.noise_db: Optional[float] = None
+        self.op = Operator(app, self.say, self.rng)
+
+    # the context lives in the Operator, which the /operator page shares
+    zone = property(lambda self: self.op.zone, lambda self, v: setattr(self.op, "zone", v))
+    group_size = property(lambda self: self.op.group_size, lambda self, v: setattr(self.op, "group_size", v))
+    person_ids = property(lambda self: self.op.person_ids, lambda self, v: setattr(self.op, "person_ids", v))
+    noise_db = property(lambda self: self.op.noise_db, lambda self, v: setattr(self.op, "noise_db", v))
 
     def say(self, text: str) -> None:
         print(text, file=self.out, flush=True)
@@ -79,40 +104,64 @@ class Sim:
         self.say(f"  context: {c.zone} {c.social} (map {self.zone}, {c.group_size} {'person' if c.group_size == 1 else 'people'}{noise})"
                  + ("  [fixed mode]" if self.app.fixed else ""))
         self.say(f"  style:   {self.app.style.summary()}")
-        self.say(f"  dialogue: {self.app.dialogue.state}")
+        if self.app.link is not None:
+            self.say("  " + self.base_line())
+        stored = len(self.app.dialogue.storage)
+        self.say(f"  dialogue: {self.app.dialogue.state}" + (f"   (storage: {stored} book{'s' * (stored != 1)})" if stored else ""))
+
+    def base_line(self) -> str:
+        """One line about the base: the link, where it is, the drive, the zone and what decided it."""
+        info = self.app.link_info()
+        pose, nav = info.get("pose") or {}, info.get("nav") or {}
+        where = f"({pose['x']:.2f}, {pose['y']:.2f})" if "x" in pose else "(no pose yet)"
+        drive = f"{nav.get('status', 'idle')}" + (f" {nav['goal_id']} {nav['distance_left']} m left" if nav.get("status") == "active" else "")
+        zone = info.get("zone") or {}
+        noise = (zone.get("noise") or {}).get("median")
+        return (f"base:    link {info.get('status')}, at {where}{'' if info.get('localised') is not False else ' NOT localised'}, "
+                f"drive {drive}, zone {zone.get('zone', '-')} by {zone.get('source', '-')}"
+                + (f" (area {zone['area']})" if zone.get("area") else "") + (f", noise median {noise} dB" if noise is not None else ""))
 
     async def context_changed(self) -> None:
-        await self.app.bus.publish(ContextChanged(self.zone, self.group_size, self.noise_db, self.person_ids))
+        await self.op.context_changed()
 
     async def people_changed(self, count: int, person_ids: tuple = ()) -> None:
         """The camera's confirmed people changed (PeopleCounter): same as typing the head count."""
+        changed = (count, person_ids) != (self.group_size, self.person_ids)
         self.group_size, self.person_ids = count, person_ids
         await self.context_changed()
-        self.status()
+        if changed and count != getattr(self, "_shown_count", None):      # print the style only when the count changes
+            self._shown_count = count
+            self.status()
 
     async def place_book(self, args: list) -> bool:
-        """book [isbn|none]: scan the book on the pad. With the real webcam, scan whatever it sees; with
-        the fake camera, show it a book first. False if the input was bad."""
-        camera = self.app.scanner_camera
-        if not hasattr(camera, "show"):                     # the real webcam
-            if args:
-                self.say("  `book <isbn>` and `book none` need the fake camera (run without --camera)")
-                return False
-            self.say("  scanning... hold the book's barcode to the camera")
-            await self.run_scan()
-            return True
-        if args and args[0].lower() == "none":
-            camera.clear()
-        elif args:
-            isbn = to_isbn13("".join(args))
-            if isbn is None:
-                self.say(f"  {' '.join(args)!r} is not a valid ISBN-10 or ISBN-13")
-                return False
-            camera.show(isbn=isbn)
-        else:
-            camera.show(isbn=self.rng.choice(self.app.finder.catalog.books).isbn13)
-        await self.run_scan()
-        return True
+        return await self.op.place_book(args)
+
+    async def tag(self, line: str) -> None:
+        """tag <what the RFID reader would send>: a tagged book held to the reader ("tag UID 04 65 B2 42 CD 21 90", "tag ISBN 9780132350884", "tag Dune")."""
+        reader = getattr(self.app.scanner, "rfid", None) or (self.app.scanner if hasattr(self.app.scanner, "handle") else None)
+        if reader is None:
+            self.say("  no RFID reader: set books.reader to rfid or both in config/robot.yaml")
+            return
+        if await reader.handle(line) is None:
+            self.say("  the reader ignored that (not a tag, the same tag again, or the robot is not expecting a book now)")
+
+    async def run_scan(self) -> None:
+        await self.op.run_scan()
+
+    async def wait(self, arg: str) -> None:
+        """wait <seconds> or wait idle: let the state machine's timers run."""
+        loop = asyncio.get_running_loop()
+        until = loop.time() + (SETTLE_S if arg == "idle" else float(arg))
+        while loop.time() < until and not (arg == "idle" and self.app.dialogue.leaf == "IDLE"):
+            await asyncio.sleep(0.1)
+
+    async def settle(self, limit_s: float = SETTLE_S) -> None:
+        """At the end of piped input: let a goodbye and a trip putting books back finish (they run on timers)."""
+        loop = asyncio.get_running_loop()
+        until = loop.time() + limit_s
+        d = self.app.dialogue
+        while loop.time() < until and (d.leaf == "FAREWELL" or d.fsm.is_in("RETURNING")):
+            await asyncio.sleep(0.1)
 
     async def scan_image(self, path: str) -> bool:
         """scan <path>: the real decoder reads a photo through the fake camera."""
@@ -147,12 +196,23 @@ class Sim:
         bus = self.app.bus
         if cmd in ("quit", "exit"):
             return False
+        if cmd in ("next", "abort") and getattr(self, "guide", None) is not None:
+            await self.guide.command(cmd)                    # the guided scenario test: only the tester presses these
+            return True
         if cmd in ("help", "?"):
             self.say("\n\n".join(__doc__.split("\n\n")[1:3]))
             return True
         if len(words) == 2 and words[1].lower() in GROUP_SIZES:
-            self.zone, self.group_size, self.noise_db, self.person_ids = cmd, GROUP_SIZES[words[1].lower()], None, ()
-            await self.context_changed()
+            await self.op.set_zone(cmd, words[1].lower())
+        elif cmd == "wait" and len(args) == 1:
+            try:
+                await self.wait(args[0].lower())
+            except ValueError:
+                self.say("  usage: wait <seconds> | wait idle")
+                return True
+        elif cmd in OPERATOR_COMMANDS and cmd not in ("book", "say"):
+            if not await self.op.run(cmd, rest):
+                return True
         elif cmd == "noise" and args:
             if args[0].lower() == "off":
                 self.noise_db = None
@@ -163,19 +223,21 @@ class Sim:
                     self.say("  usage: noise <dB> | noise off")
                     return True
             await self.context_changed()
-        elif cmd == "leave":
-            self.group_size, self.person_ids = 0, ()
-            await self.context_changed()
         elif cmd == "book":
             if not await self.place_book(args):
                 return True
         elif cmd == "scan":
             if not (await self.scan_image(rest) if rest else await self.place_book([])):
                 return True
+        elif cmd == "tag" and rest:
+            await self.tag(rest)
         elif cmd in CHOICES and not args:
             await bus.publish(UserUtterance(cmd))
         elif cmd == "guide" and not args:
             await bus.publish(UserUtterance("guide me"))
+        elif cmd == "base" and not args:
+            self.say("  " + (self.base_line() if self.app.link is not None else "base:    none (the simulated drive)"))
+            return True
         elif cmd == "reload" and not args:
             try:
                 self.app.finder.reload()
@@ -185,6 +247,8 @@ class Sim:
                 graph = self.app.finder.graph
                 self.say(f"  reloaded: {len(graph.catalog)} books, {len(graph.shelves)} shelves, {len(graph.links)} links")
             return True
+        elif cmd == "where" and rest and rest.split()[0].lower() in ("is", "are", "was", "can", "do", "does", "would"):
+            await bus.publish(UserUtterance(line.strip()))     # a sentence ("where is it?"), not `where <title>`
         elif cmd == "where" and rest:
             book = self.app.finder.catalog.find_title(rest)
             if book is None:
@@ -192,7 +256,7 @@ class Sim:
                 return True
             await bus.publish(UserUtterance(f"where is {book.title}"))
         elif cmd == "say" and rest:
-            await bus.publish(UserUtterance(rest))
+            await bus.publish(UserUtterance(rest, source="operator"))
         elif cmd == "feel" and args and normalize(args[0]) in EMOTIONS:
             try:
                 conf = float(args[1]) if len(args) > 1 else 0.9
@@ -225,6 +289,29 @@ def build_identify(cfg: Config, sim: "Sim"):
     return PersonTracker(embedder, float(seen.get("identity_threshold", 0.40)))
 
 
+def apply_overrides(cfg: Config, settings: list) -> None:
+    """--config-set section.key=value: set a robot.yaml value (zones.key=value: config/zones.yaml, styles.entry.key=value:
+    config/styles.yaml) (the value is read as YAML: true, 5, 0.5, text) for this run.
+    Raises ValueError saying what is wrong."""
+    import yaml
+    for item in settings:
+        key, sep, value = item.partition("=")
+        parts = key.strip().split(".")
+        if not sep or not all(parts):
+            raise ValueError(f"{item!r}: use section.key=value")
+        # zones.* is config/zones.yaml (zones.noise.window_s=10), styles.* config/styles.yaml (styles.common_alone.screen_content=false)
+        node = {"zones": cfg.zones, "styles": cfg.styles}.get(parts[0], cfg.robot)
+        if parts[0] in ("zones", "styles"):
+            parts = parts[1:]
+            if not parts:
+                raise ValueError(f"{item!r}: use {key.split('.')[0]}.key=value")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"{item!r}: {part} is not a section")
+        node[parts[-1]] = yaml.safe_load(value)
+
+
 async def read_line(loop: asyncio.AbstractEventLoop, stdin: TextIO) -> str:
     """stdin.readline() without the loop's default executor: that one is joined when asyncio.run() shuts
     down, so a read blocked on the keyboard made Ctrl+C hang until Enter was pressed."""
@@ -245,56 +332,192 @@ async def read_line(loop: asyncio.AbstractEventLoop, stdin: TextIO) -> str:
     return await future
 
 
+def face_detector(cfg: Config, sim) -> tuple:
+    """(detector, what it is) for the faces: the AI server's model when the server answers, else OpenCV on the robot (said once),
+    so a server that is down does not leave the robot blind with nobody greeted. The choice is made at start-up."""
+    import socket
+    from robot.services.vision import Vision
+    try:
+        socket.create_connection((cfg.ai_host, int(cfg.ai_port)), timeout=2).close()
+        return Vision(cfg.ai_host, cfg.ai_port, timeout=10), f"AI server at {cfg.ai_host}:{cfg.ai_port}"
+    except OSError as exc:
+        from robot.services.local_faces import LocalFaceDetector, LocalFacesUnavailable
+        try:
+            detector = LocalFaceDetector()
+        except LocalFacesUnavailable:
+            sim.say(f"  the AI server at {cfg.ai_host}:{cfg.ai_port} does not answer ({exc}) and OpenCV is not available: no faces until it does")
+            return Vision(cfg.ai_host, cfg.ai_port, timeout=10), f"AI server at {cfg.ai_host}:{cfg.ai_port} (not answering)"
+        sim.say(f"  the AI server at {cfg.ai_host}:{cfg.ai_port} does not answer ({exc}): detecting faces on the robot (OpenCV) instead")
+        return detector, "OpenCV on the robot (AI server not answering)"
+
+
 async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdout,
                   log_sessions: bool = True, use_llm: bool = False, use_camera: bool = False,
-                  speak: bool = False, use_faces: bool = False, preview: bool = True,
-                  auto_scan: bool = False) -> int:
+                  speak: bool = False, use_faces: bool = False, preview: bool = False,
+                  auto_scan: bool = False, settle_s: float = SETTLE_S, persist_storage: bool = True,
+                  local_faces: bool = False, scenario_guide=None, initial_zone: Optional[str] = None,
+                  base: Optional[str] = None, base_url: Optional[str] = None, base_speed: float = 1.0,
+                  force_zone: Optional[str] = None, film_take: Optional[str] = None, record_path: Optional[str] = None,
+                  base_replay: Optional[str] = None, start_stopped: bool = False, camera_optional: bool = False) -> int:
+    """force_zone, film_take and record_path are film mode (robot/film.py, docs/video_shot_list.md): hold one zone for the take,
+    log timestamped events to recordings/<take>/events.jsonl, and write the boxed camera frames to an mp4. All off by default.
+    start_stopped: the robot starts stopped (the operator page's Start button, or `system start`): the camera shows but nobody is
+    greeted and no book is taken. camera_optional: use_camera was the default, not asked for, so a missing webcam falls back to the
+    fake camera (without faces) instead of failing."""
     logging.basicConfig(level=logging.INFO, format="  %(message)s", stream=out, force=True)
-    for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan")):
+    for wanted, flag in ((use_faces, "--faces"), (auto_scan, "--auto-scan"), (record_path, "--record")):
         if wanted and not use_camera:
             print(f"{flag} needs the real webcam: add --camera (or use --live)", file=sys.stderr)
             return 1
+    film = recorder = None
     try:
         drivers = sim_drivers(cfg, use_camera=use_camera, speak=speak)
     except (OSError, RuntimeError, ValueError) as exc:
-        print(f"Cannot start the simulator: {exc}", file=sys.stderr)
-        return 1
+        if not (use_camera and camera_optional):
+            print(f"Cannot start the simulator: {exc}", file=sys.stderr)
+            return 1
+        print(f"  no webcam ({exc}): using the fake camera, faces off (--no-camera hides this)", file=out)
+        use_camera = use_faces = auto_scan = False
+        try:
+            drivers = sim_drivers(cfg, use_camera=False, speak=speak)
+        except (OSError, RuntimeError, ValueError) as exc2:
+            print(f"Cannot start the simulator: {exc2}", file=sys.stderr)
+            return 1
     speech = None
     if speak:
         from robot.services.speech import Speech
         speech = Speech.from_config(cfg)
     assistant = build_assistant(cfg) if use_llm else None
     speaker = cfg.robot.get("devices", {}).get("speaker") or "default"
-    counter = window = counter_task = watch_task = None
+    counter = window = counter_task = watch_task = ticker = link_task = feed_task = map_task = state_task = warm_task = reader_task = fake_base = app = None
     try:
-        app = build_app(cfg, drivers, speech=speech, log_sessions=log_sessions, assistant=assistant)
+        link = None
+        if base == "sim":
+            cfg.robot.setdefault("navigation", {})["backend"] = "sim"
+        elif base in ("turtlebot", "fake"):
+            cfg.robot.setdefault("navigation", {})["backend"] = "turtlebot"
+            try:
+                if base == "fake":
+                    from robot.sim.base import start_fake_base
+                    from robot.sim.base import load_replay
+                    fake_base = start_fake_base(cfg, speed=1.0, time_scale=base_speed,
+                                                **({"replay": load_replay(base_replay)} if base_replay else {}))
+                    link = fake_base.make_link(cfg)
+                else:
+                    from robot.app import build_link
+                    link = build_link(cfg, base_url=base_url)
+            except ValueError as exc:                        # LinkConfigError: no ROBOT_LINK_TOKEN
+                print(f"Cannot start the link to the base: {exc}", file=sys.stderr)
+                return 1
+        app = build_app(cfg, drivers, speech=speech, log_sessions=log_sessions, assistant=assistant,
+                        persist_storage=persist_storage, link=link)
         sim = Sim(app, out)
+        if speak and speech is not None:                     # push-to-talk: the Talk button / `listen`; needs the real speaker driver's mic
+            from robot.perception.listener import Listener
+            app.listener = Listener.from_config(cfg, drivers.audio, speech, app.bus, status=app.mic_status, say=lambda t: sim.say(t))
+        sim.guide = None                                     # the guided scenario test (robot/scenarios/live.py), if any
         sim.say("Robot simulator. Type help for commands, quit to exit.")
+        if initial_zone:
+            await sim.op.set_zone(initial_zone)
+        if force_zone:                                       # film mode: one zone for the whole take
+            await app.force_zone(force_zone)
+            sim.say(f"  film: zone held at {force_zone} (the sound map, the noise and the operator cannot change it)")
+        if film_take:
+            from robot.film import FilmLog, take_dir
+            film = FilmLog(take_dir(film_take) / "events.jsonl", get_zone=lambda: app.context.zone,
+                           get_channels=lambda: tuple(app.style.channels), get_zone_source=lambda: app.zone_source)
+            film.attach(app.bus)
+            app.actuators.voice.on_sentence = film.on_speak
+            film.start(take=film_take, forced_zone=force_zone, base=base or "sim")
+            sim.say(f"  film: logging events to {film.path}")
+        if record_path:
+            from robot.film import FrameRecorder
+            recorder = FrameRecorder(record_path, fps=float(cfg.display["camera_fps"]))
+            sim.say(f"  film: recording the camera (faces boxed) to {record_path}")
         sim.say(f"  camera: {'real webcam' if use_camera else 'fake'} | speaker: "
                 f"{'real (' + speaker + '), TTS from ' + cfg.ai_host if speak else 'none, replies are only printed'}"
+                f" | microphone: {(cfg.robot.get('devices', {}).get('mic') or 'system default') + ' (Talk button / listen)' if speak else 'none'}"
                 f" | explain/recommend: {'LLM at ' + cfg.ai_host if use_llm else 'catalogue text'}"
-                f" | faces: {'AI server at ' + cfg.ai_host if use_faces else 'typed (common alone, ...)'}"
+                f" | faces: {('OpenCV on the robot' if local_faces else 'AI server at ' + cfg.ai_host) if use_faces else 'typed (common alone, ...)'}"
                 f" | scan: {'when a barcode is shown' if auto_scan else 'when you type book'}")
         if app.session_log:
             sim.say(f"Logging this session to {app.session_log.path}")
         sim.status()
+        if app.dialogue.storage.stored():
+            sim.say(f"  {len(app.dialogue.storage)} book(s) are still in storage from last time "
+                    "(`reset all` empties it)")
+        ticker = asyncio.create_task(app.run_ticker())
+        if app.link is not None:
+            await app.start_link()
+            sim.say(f"  base: {app.link.settings.base_url}{' (fake_base.py, in this process)' if fake_base else ''}, "
+                    f"link {app.link.status}")
+        if use_llm:                                         # one silent request now, and keep-alives while idle (services/warmup.py)
+            warm_task = asyncio.create_task(Warmup.from_app(app).run())
+        if speak and speech is not None:
+            problem = await asyncio.get_running_loop().run_in_executor(None, speech.check)
+            if problem:
+                sim.say(f"  WARNING: {problem}")
+        if speak:                                           # make the fixed lines' speech now, so the hello is instant
+            from robot.core import dialogue as lines
+            threading.Thread(target=app.actuators.voice.prepare, name="tts-prepare", daemon=True, args=([
+                lines.HELLO, lines.OFFER_NO_BOOK, lines.GOODBYE_SPOKEN, lines.THANKS_SPOKEN, lines.RETURNING_OPENING,
+                app.dialogue.thinking_text, "One moment, please.", "Sorry, I didn't catch that.",
+                "Is there anything else I can help with?", "Place the book on my pad and I'll take it back.",
+                "Which book? Tell me its title, or place it on my pad.",
+                "Happy to! What kind of books do you like? Tell me a topic, a title or an author, "
+                "or place a book you like on my pad."],)).start()
+        from robot.display_link import DisplayLink
+        shown = cfg.display
+        link_task = asyncio.create_task(DisplayLink(app.bus, sim.op, shown["host"], int(shown["port"]),
+                                                    float(shown["poll_s"])).run())
+        if app.link is not None:                            # the base's map for the operator page, with Go / Stop
+            from robot.map_feed import MapFeed, StatePush
+            map_task = asyncio.create_task(MapFeed(app.link, shown["host"], int(shown["port"]),
+                                                   float(cfg.turtlebot["map_every_s"])).run())
+            state_task = asyncio.create_task(StatePush(app, float(cfg.turtlebot["state_every_s"])).run())
         if use_faces:
-            from robot.perception.people import PeopleCounter
+            from robot.perception.people import EngagementDetector, PeopleCounter
             from robot.services.vision import Vision
             seen = cfg.robot.get("perception") or {}
             identify = build_identify(cfg, sim)
-            counter = PeopleCounter(app.bus, drivers.camera, Vision(cfg.ai_host, cfg.ai_port, timeout=10),
-                                    identify=identify,
+            if local_faces or seen.get("detector") == "local":
+                from robot.services.local_faces import LocalFaceDetector, LocalFacesUnavailable
+                try:
+                    detector = LocalFaceDetector()
+                except LocalFacesUnavailable as exc:
+                    print(f"Cannot detect faces locally: {exc}", file=sys.stderr)
+                    return 1
+                sim.say("  detecting faces on the robot (OpenCV), not on the AI server")
+                app.faces_by = "OpenCV on the robot"
+            else:
+                detector, app.faces_by = face_detector(cfg, sim)
+            counter = PeopleCounter(app.bus, drivers.camera, detector,
+                                    identify=identify, engagement=EngagementDetector.from_config(cfg.engagement),
                                     map_zone=sim.zone, interval_s=float(seen.get("face_interval_s", 1.0)),
                                     arrive_frames=int(seen.get("arrive_frames", 2)),
                                     leave_after_s=float(seen.get("leave_after_s", 8.0)),
-                                    on_change=sim.people_changed)
+                                    on_change=sim.people_changed, paused=lambda: not app.active)
+            app.counter = counter
+            counter.on_status = app.show_state
             counter_task = asyncio.create_task(counter.run())
             sim.say("  watching for faces: step in front of the camera and the robot says hello")
+        if start_stopped:
+            app.active = False
+            sim.say("  STOPPED: press Start on the operator page (or type `system start`) and the robot greets whoever is there")
+        if use_camera:
+            from robot.camera_feed import CameraFeed
+            feed_task = asyncio.create_task(CameraFeed(drivers.camera, counter, shown["host"], int(shown["port"]),
+                                                       float(shown["camera_fps"]), int(shown["camera_width"]),
+                                                       recorder=recorder).run())
+        ready = lambda: (app.active and app.dialogue.leaf in ("IDLE", "OFFER", "AWAIT_BOOK", "ANSWER", "ANYTHING_ELSE")
+                         and not (app.scanner is not None and app.scanner.scanning))
+        if app.scanner is not None:
+            app.scanner.set_ready(ready)                          # a tag held to the RFID reader is taken only when a book is expected, like a barcode
+            reader_task = asyncio.create_task(app.scanner.run())   # the RFID reader's serial port (the camera reader needs nothing)
+            if getattr(app.scanner, "rfid", None) is not None:
+                sim.say("  watching the RFID reader: hold a tagged book to it (docs/rfid.md)")
         if auto_scan:
             from robot.perception.book_watch import BookWatcher
-            ready = lambda: (app.dialogue.state in ("idle", "invited", "offering", "closing")
-                             and not (app.scanner is not None and app.scanner.scanning))
             watch_task = asyncio.create_task(BookWatcher(app.bus, app.scanner_camera, ready).run())
             sim.say("  watching for books: hold a barcode up to the camera")
         if use_camera and preview:
@@ -305,6 +528,10 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                 window.start()
             else:
                 sim.say("  no display found: not showing the camera window")
+        guide_task = None
+        if scenario_guide is not None:
+            sim.guide = scenario_guide(app, sim, drivers)
+            guide_task = asyncio.create_task(sim.guide.run())
         loop = asyncio.get_running_loop()
         while True:
             if stdin.isatty():
@@ -316,11 +543,23 @@ async def run_sim(cfg: Config, stdin: TextIO = sys.stdin, out: TextIO = sys.stdo
                 sim.say(f"> {line.rstrip()}")
             if not await sim.handle(line):
                 break
+        if guide_task is not None and not stdin.isatty():
+            await asyncio.wait_for(sim.guide.done.wait(), 5)
+        if not stdin.isatty() and settle_s > 0:
+            await sim.settle(settle_s)
         return 0
     finally:
-        for task in (counter_task, watch_task):
+        for task in (counter_task, watch_task, reader_task, ticker, link_task, feed_task, map_task, state_task, warm_task, locals().get("guide_task")):
             if task is not None:
                 task.cancel()
+        if app is not None:
+            await app.stop_link()
+        if recorder is not None:
+            recorder.close()
+        if film is not None:
+            film.close()
+        if fake_base is not None:
+            fake_base.stop()
         if window is not None:
             window.stop()
         for camera in (drivers.camera, drivers.scanner_camera):

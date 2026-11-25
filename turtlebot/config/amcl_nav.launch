@@ -1,0 +1,177 @@
+<!--
+  Navigation on a saved LiDAR map: the Hokuyo LiDAR, the map (map_server), AMCL (works out where the robot is on the map
+  from the LiDAR and the wheels) and move_base (DWA, the settings in hokuyo_costmap.yaml and robot_shape.yaml). The
+  Astra depth camera is started depth only as an extra OBSTACLE sensor (depth_obstacles.launch, depth_costmap.yaml): the
+  robot is about 1.2 m tall and the LiDAR sees one slice at 30 cm, so without it the planner can drive under a desk.
+  It never localises: AMCL uses the LiDAR only. depth_obstacles:=false leaves the camera off.
+
+  Usually started by run_robot_link.sh (its amcl option), which also starts minimal.launch, scan_filter.py (AMCL and move_base read
+  its /hokuyo_scan_filtered), map_cleaner.py (the planner reads its /map_clean, with the keep-out zones painted in) and then
+  sends the station pose to /initialpose. The map comes from run_lidar_mapping.sh.
+
+  Run:  roslaunch config/amcl_nav.launch map_file:=/home/robot/lbr-dell/turtlebot/maps/lidar_map.yaml
+  Options:
+    depth_obstacles:=false   LiDAR only (the robot can then drive under a desk: only with keep-out zones round every desk)
+    robot_height:=1.15       metres: depth points up to this + 0.05 are obstacles
+    camera_x:=0.05 camera_z:=0.95 camera_pitch:=0.35 ...   where the camera really is (depth_obstacles.launch)
+    port:=/dev/ttyACM1  laser_x:=0.0  laser_z:=0.3  laser_yaw:=3.14159   (LiDAR settings, as in vslam.launch)
+
+  move_base is the node of turtlebot_navigation's move_base.launch.xml with the same parameter files, written out here so
+  the obstacle heights can be set from robot_height. Its two companions are included as there: the velocity smoother and the
+  Kobuki safety controller (bumpers, cliff and wheel-drop sensors: it backs the robot off on cmd_vel_mux's safety input,
+  priority 10, above navigation's 5).
+
+  Compared with extras/lidar_slam/noise_navigation.launch (the earlier try, where AMCL often lost track): the map is made
+  from the same filtered scan AMCL reads, the start pose is sent from the station instead of assuming (0, 0, 0), the
+  map cleaner runs (the costmap waits for /map_clean), and AMCL is set for the URG-04LX (about 5.5 m, not 12 m) and for a
+  room with chairs and people the map does not have. The AMCL values below are a starting point: tune them in the
+  comparison runs (step 4).
+-->
+<launch>
+  <arg name="map_file"       default="$(dirname)/../maps/lidar_map.yaml"/>
+  <arg name="costmap_params" default="$(dirname)/hokuyo_costmap.yaml"/>
+  <arg name="shape_params"   default="$(dirname)/robot_shape.yaml"/>
+  <arg name="depth_params"   default="$(dirname)/depth_costmap.yaml"/>
+  <arg name="scan_topic"     default="/hokuyo_scan_filtered"/>
+
+  <arg name="port"      default="/dev/ttyACM0"/>
+  <arg name="laser_x"   default="0.0"/>
+  <arg name="laser_y"   default="0.0"/>
+  <arg name="laser_z"   default="0.3"/>
+  <arg name="laser_yaw" default="0.0"/>
+
+  <!-- the depth camera as an obstacle sensor -->
+  <arg name="depth_obstacles" default="true"/>
+  <arg name="robot_height"    default="1.2"/>
+  <arg name="max_obstacle_height" value="$(eval arg('robot_height') + 0.05)"/>
+  <!-- where the depth camera is: measured on the robot 2026-11-05 (lenses 0.33 m up, 0.08 m behind the middle, centred, level) -->
+  <arg name="camera_x"     default="-0.08"/>
+  <arg name="camera_y"     default="0.0"/>
+  <arg name="camera_z"     default="0.33"/>
+  <arg name="camera_pitch" default="0.0"/>
+  <arg name="camera_yaw"   default="0.0"/>
+
+  <!-- ===== LiDAR ===== -->
+  <node pkg="urg_node" type="urg_node" name="hokuyo" output="screen">
+    <param name="serial_port" value="$(arg port)"/>
+    <param name="frame_id"    value="laser"/>
+    <remap from="scan" to="hokuyo_scan"/>
+  </node>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="laser_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
+
+  <!-- ===== Depth camera, obstacles only ===== -->
+  <include if="$(arg depth_obstacles)" file="$(dirname)/depth_obstacles.launch">
+    <arg name="camera_x"     value="$(arg camera_x)"/>
+    <arg name="camera_y"     value="$(arg camera_y)"/>
+    <arg name="camera_z"     value="$(arg camera_z)"/>
+    <arg name="camera_pitch" value="$(arg camera_pitch)"/>
+    <arg name="camera_yaw"   value="$(arg camera_yaw)"/>
+  </include>
+
+  <!-- ===== The saved map (latched on /map; map_cleaner.py turns it into /map_clean) ===== -->
+  <node pkg="map_server" type="map_server" name="map_server" args="$(arg map_file)"/>
+
+  <!-- ===== AMCL =====
+       The lab is cluttered: chairs move, people walk past, bags sit on the floor. None of that is on the map, so many beams
+       hit something the map does not have. The settings below make AMCL trust the beams that agree with the map and shrug
+       off the others, instead of dragging the pose towards a chair. -->
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <remap from="scan" to="$(arg scan_topic)"/>
+    <param name="use_map_topic"   value="false"/>
+    <param name="odom_frame_id"   value="odom"/>
+    <param name="base_frame_id"   value="base_footprint"/>
+    <param name="global_frame_id" value="map"/>
+    <!-- this 4-core Celeron is often busy: allow late transforms, as the TurtleBot settings do -->
+    <param name="transform_tolerance" value="1.0"/>
+
+    <!-- particles: fewer than the TurtleBot default (500 - 2000), the start pose is known -->
+    <param name="min_particles" value="300"/>
+    <param name="max_particles" value="1500"/>
+    <param name="kld_err"       value="0.05"/>
+    <param name="kld_z"         value="0.99"/>
+    <param name="resample_interval" value="1"/>
+    <!-- no random particles: with a known start they only make the pose jump -->
+    <param name="recovery_alpha_slow" value="0.0"/>
+    <param name="recovery_alpha_fast" value="0.0"/>
+
+    <!-- update after 10 cm or about 9 degrees (default 25 cm / 11 degrees), so /amcl_pose comes about once a second while driving -->
+    <param name="update_min_d" value="0.10"/>
+    <param name="update_min_a" value="0.15"/>
+
+    <!-- the Hokuyo URG-04LX: reliable to about 5.5 m; scan_filter.py already drops returns closer than 0.25 m -->
+    <param name="laser_min_range" value="0.25"/>
+    <param name="laser_max_range" value="5.5"/>
+    <!-- 90 of its 683 beams (one every 2.7 degrees over its 240; the default is 30): enough that a few beams on chairs are
+         outvoted by the walls. The cost grows with particles x beams and AMCL only updates every 10 cm / 9 degrees;
+         step 4's `top` shows whether it is too much -->
+    <param name="laser_max_beams" value="90"/>
+    <!-- likelihood_field_prob: the likelihood field model (each beam's end is scored by how close it is to a wall on the map,
+         smooth and quick) plus beam skipping: beams that most particles agree hit something NOT on the map (a person, a
+         chair pulled out) are left out of that update altogether, instead of counting against every particle -->
+    <param name="laser_model_type" value="likelihood_field_prob"/>
+    <param name="do_beamskip"               value="true"/>
+    <param name="beam_skip_distance"        value="0.5"/>   <!-- a beam ending more than 0.5 m from any wall is "unexpected" -->
+    <param name="beam_skip_threshold"       value="0.3"/>   <!-- skipped when at least 30 % of the particles find it unexpected -->
+    <param name="beam_skip_error_threshold" value="0.9"/>   <!-- but if over 90 % of the beams would go, use them all: AMCL is lost, not the room -->
+    <!-- z_hit / z_rand: how much a beam's score is "it hit the mapped wall" against "it hit something random". The default
+         (0.95 / 0.05) punishes every beam on a chair hard; 0.5 / 0.5 makes such a beam cost a particle little -->
+    <param name="laser_z_hit"  value="0.5"/>
+    <param name="laser_z_rand" value="0.5"/>
+    <!-- 0.2 m: how far a beam may end from the wall on the map and still count as hitting it (map and LiDAR noise) -->
+    <param name="laser_sigma_hit" value="0.2"/>
+    <param name="laser_likelihood_max_dist" value="2.0"/>
+
+    <!-- wheel odometry (the Kobuki's gyro makes turns good): the TurtleBot values -->
+    <param name="odom_model_type" value="diff"/>
+    <param name="odom_alpha1" value="0.2"/>
+    <param name="odom_alpha2" value="0.2"/>
+    <param name="odom_alpha3" value="0.2"/>
+    <param name="odom_alpha4" value="0.2"/>
+
+    <!-- only used if nothing is sent to /initialpose: run_robot_link.sh sends the station pose -->
+    <param name="initial_pose_x" value="0.0"/>
+    <param name="initial_pose_y" value="0.0"/>
+    <param name="initial_pose_a" value="0.0"/>
+  </node>
+
+  <!-- ===== Path planning + obstacle avoidance with the LiDAR (and the depth camera) ===== -->
+  <include file="$(find turtlebot_navigation)/launch/includes/velocity_smoother.launch.xml"/>
+  <include file="$(find turtlebot_navigation)/launch/includes/safety_controller.launch.xml"/>
+
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <rosparam file="$(find turtlebot_navigation)/param/costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find turtlebot_navigation)/param/costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find turtlebot_navigation)/param/local_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find turtlebot_navigation)/param/global_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find turtlebot_navigation)/param/dwa_local_planner_params.yaml" command="load"/>
+    <rosparam file="$(find turtlebot_navigation)/param/move_base_params.yaml" command="load"/>
+    <rosparam file="$(find turtlebot_navigation)/param/global_planner_params.yaml" command="load"/>
+    <rosparam file="$(find turtlebot_navigation)/param/navfn_global_planner_params.yaml" command="load"/>
+    <!-- ours, in this order: the LiDAR settings, the robot's outline, then the depth camera -->
+    <rosparam file="$(arg costmap_params)" command="load"/>
+    <rosparam file="$(arg shape_params)" command="load"/>
+    <rosparam if="$(arg depth_obstacles)" file="$(arg depth_params)" command="load"/>
+
+    <!-- the obstacle heights from robot_height (depth_costmap.yaml explains them) -->
+    <param if="$(arg depth_obstacles)" name="local_costmap/obstacle_layer/max_obstacle_height"   value="$(arg max_obstacle_height)"/>
+    <param if="$(arg depth_obstacles)" name="local_costmap/obstacle_layer/z_resolution"          value="$(eval (arg('robot_height') + 0.05) / 16.0)"/>
+    <param if="$(arg depth_obstacles)" name="local_costmap/obstacle_layer/depth_mark/max_obstacle_height"  value="$(arg max_obstacle_height)"/>
+    <param if="$(arg depth_obstacles)" name="local_costmap/obstacle_layer/depth_clear/max_obstacle_height" value="$(arg max_obstacle_height)"/>
+    <param if="$(arg depth_obstacles)" name="global_costmap/obstacle_layer/max_obstacle_height"  value="$(arg max_obstacle_height)"/>
+    <param if="$(arg depth_obstacles)" name="global_costmap/obstacle_layer/z_resolution"         value="$(eval (arg('robot_height') + 0.05) / 16.0)"/>
+    <param if="$(arg depth_obstacles)" name="global_costmap/obstacle_layer/depth_mark/max_obstacle_height"  value="$(arg max_obstacle_height)"/>
+    <param if="$(arg depth_obstacles)" name="global_costmap/obstacle_layer/depth_clear/max_obstacle_height" value="$(arg max_obstacle_height)"/>
+
+    <!-- frames, as move_base.launch.xml sets them -->
+    <param name="global_costmap/global_frame"     value="map"/>
+    <param name="global_costmap/robot_base_frame" value="base_footprint"/>
+    <param name="local_costmap/global_frame"      value="odom"/>
+    <param name="local_costmap/robot_base_frame"  value="base_footprint"/>
+    <param name="DWAPlannerROS/global_frame_id"   value="odom"/>
+
+    <remap from="cmd_vel" to="navigation_velocity_smoother/raw_cmd_vel"/>
+    <remap from="odom"    to="odom"/>
+    <remap from="scan"    to="$(arg scan_topic)"/>
+  </node>
+</launch>

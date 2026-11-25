@@ -5,6 +5,8 @@
 #   print     a printed slip
 # recommendations: how many books a recommendation names. One in a quiet place (the top pick only), up to three
 # in a common area.
+# touch_buttons: whether the screen shows option buttons (return / ask / recommend / done) for the visitor to tap. Quiet
+# zones show them, since nothing is said; common areas speak instead.
 # Fields missing from an entry are taken from `default`.
 
 default:                 # safe fallback for any combination not listed: quiet and unobtrusive
@@ -19,9 +21,11 @@ default:                 # safe fallback for any combination not listed: quiet a
   proactive: false
   speed_limit: 0.3       # m/s
   recommendations: 1
+  touch_buttons: true
 
 quiet_alone:
   recommendations: 1
+  touch_buttons: true
   voice: whisper
   volume: 0.35
   channels: [gaze, spotlight, print]
@@ -35,6 +39,7 @@ quiet_alone:
 
 quiet_group:
   recommendations: 1
+  touch_buttons: true
   voice: whisper
   volume: 0.35
   channels: [screen, spotlight]
@@ -48,6 +53,7 @@ quiet_group:
 
 common_alone:
   recommendations: 3
+  touch_buttons: false
   voice: normal
   volume: 0.8
   channels: [speech, screen]
@@ -61,6 +67,7 @@ common_alone:
 
 common_group:
   recommendations: 3
+  touch_buttons: false
   voice: normal
   volume: 1.0                # louder, to reach everyone
   channels: [speech, screen]
@@ -75,6 +82,7 @@ common_group:
 # Baseline condition for the study: one behaviour everywhere, context ignored.
 fixed:
   recommendations: 3
+  touch_buttons: false
   voice: normal
   volume: 0.8
   channels: [speech, screen]

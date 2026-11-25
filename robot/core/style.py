@@ -32,6 +32,8 @@ class StyleVector:
     proactive: bool = False
     speed_limit: float = 0.3
     recommendations: int = 1            # how many books a recommendation names: one in a quiet place, up to three out loud
+    touch_buttons: bool = True          # offer and "anything else" show option buttons on the screen (quiet zones)
+    screen_content: bool = True         # book cards, lists, maps and buttons on the screen; False: only the face (speech carries it)
     name: str = field(default="default", compare=False)   # which table entry produced it
 
     def as_dict(self) -> dict:
@@ -44,7 +46,8 @@ class StyleVector:
                 f"light={self.light_color}@{self.brightness:g} eyes={self.eye_expression} "
                 f"neck={self.neck_pose} screen={self.screen_layout} "
                 f"proactive={'yes' if self.proactive else 'no'} speed<={self.speed_limit:g}m/s "
-                f"recs={self.recommendations}")
+                f"recs={self.recommendations} buttons={'yes' if self.touch_buttons else 'no'}"
+                + ("" if self.screen_content else " screen=face-only"))
 
 
 SAFE_DEFAULT = StyleVector()
@@ -59,6 +62,8 @@ def _build(name: str, entry: dict, base: StyleVector) -> StyleVector:
     style = StyleVector(**values)
     if style.voice not in VOICES or style.neck_pose not in NECK_POSES or style.screen_layout not in LAYOUTS:
         raise ValueError(f"styles.yaml entry {name!r} has an invalid voice, neck_pose or screen_layout")
+    if not isinstance(style.touch_buttons, bool):
+        raise ValueError(f"styles.yaml entry {name!r}: touch_buttons must be true or false")
     if not isinstance(style.recommendations, int) or not 1 <= style.recommendations <= 5:
         raise ValueError(f"styles.yaml entry {name!r}: recommendations must be a whole number from 1 to 5")
     return style

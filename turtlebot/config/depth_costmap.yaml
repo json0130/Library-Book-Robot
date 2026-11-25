@@ -1,0 +1,51 @@
+# The depth camera as an obstacle sensor for move_base, beside the LiDAR. Loaded by amcl_nav.launch when depth_obstacles is
+# on (run_robot_link.sh --amcl, unless --no-depth). The camera does NOT localise: AMCL uses the LiDAR only.
+#
+# Why: the LiDAR sees one slice at 30 cm. The robot is about 1.2 m tall, so a desk (top at about 75 cm, open underneath)
+# is only two legs to the LiDAR and the planner would drive under it. The camera's points between 5 cm and the robot's
+# height (+5 cm) are obstacles too. amcl_nav.launch sets the heights from its robot_height argument (default 1.2 m):
+#   obstacle_layer/max_obstacle_height and depth_mark/max_obstacle_height = robot_height + 0.05
+#   obstacle_layer/z_resolution = (robot_height + 0.05) / 16, so the 16 voxels of each column reach exactly that high
+#
+# Limits (README "Two ways to localise"): the camera sees only ahead (about 58 degrees wide) and nothing closer than about
+# 0.5 - 0.6 m. Something it has seen stays in the costmap until a ray of the camera or the LiDAR passes through that place
+# again and finds it empty (raytracing), so a tabletop the robot has driven up to is not forgotten when it leaves the view.
+# But the link clears the costmaps before every new goal: a desk is only protected for good by a keep-out zone
+# (config/keepout.yaml).
+#
+# Two sources on the same cloud: one MARKS obstacles (points 5 cm above the floor and up), the other only CLEARS, and keeps
+# the floor points: a ray to the floor 2 m ahead proves the air in between is empty, which is how a chair that was moved
+# away is forgotten (the LiDAR cannot do that above its own 30 cm).
+# expected_update_rate: if no cloud arrives for 1 s (the camera died, the laptop stalled), move_base stops the robot
+# ("Sensor data is out of date") instead of driving on with the LiDAR alone.
+
+local_costmap:
+  obstacle_layer: &depth_layer
+    observation_sources: scan bump depth_mark depth_clear
+    origin_z: 0.0
+    z_voxels: 16                 # the most a VoxelLayer can have
+    mark_threshold: 0            # one marked voxel in a column (a tabletop) makes that cell an obstacle
+    unknown_threshold: 15
+    depth_mark:
+      data_type: PointCloud2
+      topic: /camera/depth/points_obstacles
+      marking: true
+      clearing: false
+      min_obstacle_height: 0.05  # above the floor (the floor itself is not an obstacle)
+      obstacle_range: 2.5        # beyond about 3 m the Astra's depth is too noisy to mark with
+      expected_update_rate: 1.0
+      observation_persistence: 0.0
+      inf_is_valid: false
+    depth_clear:
+      data_type: PointCloud2
+      topic: /camera/depth/points_obstacles
+      marking: false
+      clearing: true
+      min_obstacle_height: -0.10 # keeps the floor points (a little noise below 0 too): each one clears the air before it
+      raytrace_range: 3.5
+      expected_update_rate: 1.0
+      observation_persistence: 0.0
+      inf_is_valid: false
+
+global_costmap:
+  obstacle_layer: *depth_layer

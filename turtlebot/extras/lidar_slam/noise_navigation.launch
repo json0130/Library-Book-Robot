@@ -1,0 +1,53 @@
+<!--
+  Navigation on a saved map, for click-to-go noise mapping.
+  Starts: the Hokuyo LiDAR, the saved map, AMCL (works out where the robot
+  is on the map) and move_base (plans a path and drives the robot there).
+
+  Run:  roslaunch ~/noise_navigation.launch
+  Options (add to the end of the command):
+    map_file:=/home/robot/lab_map2.yaml   use a different saved map
+    port:=/dev/ttyACM1                    if the LiDAR is on a different port
+    laser_yaw:=3.14159                    if the LiDAR faces backwards
+
+  ALSO run scan_filter.py (removes LiDAR hits on the robot itself) -
+  navigation uses its /hokuyo_scan_filtered topic. run_noise_nav.sh starts it.
+
+  Start the robot at the SAME spot and facing the SAME way as when you
+  started making the map - that spot is (0, 0) on the map. If you can't,
+  use "Set robot position" on the web page.
+-->
+<launch>
+  <arg name="map_file"  default="$(env HOME)/lab_map.yaml"/>
+  <arg name="port"      default="/dev/ttyACM0"/>
+  <arg name="laser_x"   default="0.0"/>
+  <arg name="laser_y"   default="0.0"/>
+  <!-- 0.3 m so move_base's obstacle layer (0.25 - 0.35 m band) accepts the scans -->
+  <arg name="laser_z"   default="0.3"/>
+  <arg name="laser_yaw" default="0.0"/>
+
+  <!-- Hokuyo LiDAR on /hokuyo_scan -->
+  <node pkg="urg_node" type="urg_node" name="hokuyo" output="screen">
+    <param name="serial_port" value="$(arg port)"/>
+    <param name="frame_id"    value="laser"/>
+    <remap from="scan" to="hokuyo_scan"/>
+  </node>
+  <node pkg="tf2_ros" type="static_transform_publisher" name="laser_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
+
+  <!-- The saved map -->
+  <node pkg="map_server" type="map_server" name="map_server" args="$(arg map_file)"/>
+
+  <!-- AMCL: finds the robot on the map using the LiDAR -->
+  <include file="$(find turtlebot_navigation)/launch/includes/amcl/amcl.launch.xml">
+    <arg name="scan_topic"     value="hokuyo_scan_filtered"/>
+    <arg name="initial_pose_x" value="0.0"/>
+    <arg name="initial_pose_y" value="0.0"/>
+    <arg name="initial_pose_a" value="0.0"/>
+  </include>
+
+  <!-- move_base: plans a path to the clicked point and drives there -->
+  <include file="$(find turtlebot_navigation)/launch/includes/move_base.launch.xml">
+    <arg name="laser_topic"       value="hokuyo_scan_filtered"/>
+    <arg name="custom_param_file" value="$(env HOME)/hokuyo_costmap.yaml"/>
+  </include>
+</launch>

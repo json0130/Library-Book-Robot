@@ -1,0 +1,56 @@
+<!--
+  LiDAR mapping for TurtleBot 2 + Hokuyo URG-04LX-UG01
+  Starts: the Hokuyo driver, the LiDAR position (TF), and gmapping (SLAM).
+
+  Run:  roslaunch ~/lidar_mapping.launch
+  Options (add to the end of the command):
+    port:=/dev/ttyACM1      if the LiDAR is on a different port
+    laser_x:=0.1            LiDAR distance in front of robot centre (m)
+    laser_z:=0.25           LiDAR height above the floor (m)
+    laser_yaw:=3.14159      if the LiDAR is mounted facing backwards
+-->
+<launch>
+  <arg name="port"      default="/dev/ttyACM0"/>
+  <arg name="laser_x"   default="0.0"/>
+  <arg name="laser_y"   default="0.0"/>
+  <arg name="laser_z"   default="0.2"/>
+  <arg name="laser_yaw" default="0.0"/>
+
+  <!-- Hokuyo driver. Publishes on /hokuyo_scan (not /scan, so it doesn't
+       clash with the fake scan that 3dsensor.launch makes from the camera) -->
+  <node pkg="urg_node" type="urg_node" name="hokuyo" output="screen">
+    <param name="serial_port" value="$(arg port)"/>
+    <param name="frame_id"    value="laser"/>
+    <remap from="scan" to="hokuyo_scan"/>
+  </node>
+
+  <!-- Where the LiDAR sits on the robot -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="laser_tf"
+        args="$(arg laser_x) $(arg laser_y) $(arg laser_z) $(arg laser_yaw) 0 0 base_footprint laser"/>
+
+  <!-- gmapping: builds the map from the LiDAR + wheel odometry -->
+  <node pkg="gmapping" type="slam_gmapping" name="slam_gmapping" output="screen">
+    <remap from="scan" to="hokuyo_scan"/>
+    <param name="base_frame" value="base_footprint"/>
+    <param name="odom_frame" value="odom"/>
+    <param name="map_frame"  value="map"/>
+
+    <!-- URG-04LX range is about 4 m (5.6 m max) -->
+    <param name="maxRange"  value="5.5"/>
+    <param name="maxUrange" value="4.0"/>
+
+    <!-- Map size and detail: 30 x 30 m, 5 cm squares -->
+    <param name="xmin" value="-15.0"/>
+    <param name="ymin" value="-15.0"/>
+    <param name="xmax" value="15.0"/>
+    <param name="ymax" value="15.0"/>
+    <param name="delta" value="0.05"/>
+
+    <!-- How often to update -->
+    <param name="map_update_interval" value="2.0"/>
+    <param name="linearUpdate"  value="0.2"/>
+    <param name="angularUpdate" value="0.25"/>
+    <param name="temporalUpdate" value="2.0"/>
+    <param name="particles" value="30"/>
+  </node>
+</launch>

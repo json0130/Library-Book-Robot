@@ -1,0 +1,292 @@
+"""Operator controls: what a person running a live test can do besides what the sensors do.
+
+The same commands are typed in the simulator's terminal and sent from the /operator page of the display server (which
+the robot picks up through robot/display_link.py), so there is one implementation:
+
+    state                 where the machine is, the zone, what is in storage
+    goto <state>          force the machine into a state (OFFER, ENGAGED.SCAN, NAVIGATING...), filling in what it needs:
+                          a sample book for SCAN, STORE, ANSWER and RECOMMEND, two stored books for RETURNING
+    zone quiet|common     change the zone (a style setting, not a state)
+    engage | busy | leave a person engages / is near but busy / walks away (PersonEngaged / PersonNearbyBusy / PersonLeft)
+    dropped               the pad dropped the book into its slot (BookDropped)
+    pick <choice>         press a screen button for the visitor: return ask recommend more guide done
+    book [isbn|none]      place a book on the pad (scanned by the camera or, in the sim, a fake one)
+    say <text>            the visitor says this
+    listen                listen on the microphone for one sentence (a second `listen` ends it early) and treat it as said
+    reset [all]           back to IDLE with nothing in progress; `all` also empties the storage
+    screen <view> [isbn | section]   force a screen view with sample data (face book_card book_list directions
+                          options status); `screen face` goes back to the face
+    drive <x> <y> [yaw]   (with a real base) send the base to this point of its map, in metres (yaw in radians; by default
+                          it faces the way it travelled). The operator page's map does this when you click and press Go.
+                          Refused while the dialogue is on a trip of its own, when the base is not localised, or when
+                          the point is outside the map or in a wall.
+    stop                  (with a real base) cancel the goal: the base stops. Always allowed.
+    resume                carry on with a returning trip that stopped because the base bumped into something (its bumper, a
+                          cliff or wheel-drop sensor: nav reason `bumper`). Such a trip is never resent by itself: check the
+                          robot and what it hit first.
+
+Events made here carry source="operator", which the session log shows with every state transition.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import random
+from typing import Callable, Optional
+
+from robot.core.fsm import SpecError
+from robot.events import (BookDropped, BookPlaced, ContextChanged, PersonEngaged, PersonLeft, PersonNearbyBusy,
+                          UserChoice, UserUtterance)
+from robot.services.isbn import to_isbn13
+
+COMMANDS = ("state", "goto", "zone", "engage", "busy", "leave", "dropped", "unload", "pick", "book", "say", "listen", "reset", "screen", "system",
+            "drive", "stop", "resume")
+PICKS = ("return", "ask", "recommend", "more", "guide", "done", "another", "surprise")
+ZONES = ("quiet", "common")
+GROUP_SIZES = {"alone": 1, "group": 3}
+
+
+class Operator:
+    def __init__(self, app, say: Callable[[str], None] = lambda text: None, rng: Optional[random.Random] = None):
+        self.app = app
+        self.say = say
+        self.rng = rng or random.Random()
+        self.zone = app.cfg.zones.get("default_zone", "common")
+        self.group_size = 1
+        self.person_ids: tuple = ()                 # who the camera tells apart (person 1...), () when typed
+        self.noise_db: Optional[float] = None
+        self.note_id = 0
+
+    # ---- the context the sim and the operator page set ----
+    async def context_changed(self) -> None:
+        await self.app.bus.publish(ContextChanged(self.zone, self.group_size, self.noise_db, self.person_ids))
+
+    async def set_zone(self, zone: str, group: Optional[str] = None) -> None:
+        self.zone = zone
+        if group is not None:
+            self.group_size, self.noise_db, self.person_ids = GROUP_SIZES[group], None, ()
+        await self.context_changed()
+
+    # ---- books ----
+    async def place_book(self, args: list) -> bool:
+        """book [isbn|none]: scan the book on the pad. With the real webcam, scan whatever it sees; with
+        the fake camera, show it a book first. False if the input was bad."""
+        camera = self.app.scanner_camera
+        if not hasattr(camera, "show"):                     # the real webcam
+            if args:
+                self.say("  `book <isbn>` and `book none` need the fake camera (run without --camera)")
+                return False
+            self.say("  scanning... hold the book's barcode to the camera")
+            await self.run_scan()
+            return True
+        if args and args[0].lower() == "none":
+            camera.clear()
+        elif args:
+            isbn = to_isbn13("".join(args))
+            if isbn is None:
+                self.say(f"  {' '.join(args)!r} is not a valid ISBN-10 or ISBN-13")
+                return False
+            camera.show(isbn=isbn)
+        else:
+            camera.show(isbn=self.rng.choice(self.app.finder.catalog.books).isbn13)
+        await self.run_scan()
+        return True
+
+    async def run_scan(self) -> None:
+        await self.app.bus.publish(BookPlaced(source="operator"))
+        if self.app.scanner is not None:
+            await self.app.scanner.wait()
+
+    # ---- the base ----
+    def tell(self, text: str) -> None:
+        """Say it in the terminal and also show it on the operator page (state.operator_note), so a refusal is not lost."""
+        self.say(text)
+        self.note_id += 1
+        self.app.operator_note = {"id": self.note_id, "text": text.strip()}
+        self.app.show_state()
+
+    def drive(self, arg: str) -> bool:
+        """drive <x> <y> [yaw]: see the module docstring. False (with the reason said) when nothing was sent."""
+        link, nav = self.app.link, self.app.actuators.nav
+        if link is None:
+            self.tell("  there is no base: start with --base turtlebot (the Dell on the TurtleBot)")
+            return False
+        if not (self.app.cfg.turtlebot or {}).get("operator_drive", True):
+            self.tell("  driving from the operator page is switched off (turtlebot.operator_drive: false)")
+            return False
+        try:
+            numbers = [float(a) for a in arg.replace(",", " ").split()]
+            if not 2 <= len(numbers) <= 3 or not all(math.isfinite(n) for n in numbers):
+                raise ValueError
+        except ValueError:
+            self.tell("  usage: drive <x> <y> [yaw]   (metres in the base's map, yaw in radians)")
+            return False
+        x, y = numbers[0], numbers[1]
+        if self.app.dialogue.nav_goal_id is not None:
+            self.tell(f"  the robot is on a trip of its own ({self.app.dialogue.state}); `stop` it first")
+            return False
+        if not link.available():
+            self.tell(f"  the base is not reachable (link {link.status}); not sending")
+            return False
+        if link.localised is False:
+            self.tell("  the base does not know where it is (not localised); not sending")
+            return False
+        pose = link.pose or {}
+        if len(numbers) == 3:
+            yaw = numbers[2]
+        elif "x" in pose and math.hypot(x - pose["x"], y - pose["y"]) > 0.05:
+            yaw = math.atan2(y - pose["y"], x - pose["x"])              # face the way it travels
+        else:
+            yaw = float(pose.get("yaw", 0.0))
+        try:
+            nav.check_goal(x, y, yaw, in_plan=False)                     # a point of the base's own map, not of the floor plan
+        except Exception as exc:                                         # GoalRejected: not a pose / too far
+            self.tell(f"  not sent: {exc}")
+            return False
+        goal_id = nav.go_to_pose(x, y, yaw, in_plan=False)
+        self.tell(f"  driving to ({x:.2f}, {y:.2f}), facing {yaw:.2f} rad - goal {goal_id}. `stop` cancels.")
+        return True
+
+    def stop(self) -> bool:
+        link, nav = self.app.link, self.app.actuators.nav
+        if link is None:
+            self.tell("  there is no base to stop")
+            return False
+        nav.stop()
+        link.cancel()
+        self.tell("  stop sent: the base cancels its goal and halts")
+        return True
+
+    # ---- the commands ----
+    async def set_active(self, on: bool) -> bool:
+        """Start or stop the robot (the operator page's button). Stopping ends a visit quietly: back to IDLE, nobody in view. Books
+        already stored stay, and a trip under way is stopped."""
+        app = self.app
+        if app.active == on:
+            self.say(f"  already {'running' if on else 'stopped'}")
+            return True
+        app.active = on
+        if not on:
+            await app.dialogue.reset()
+            self.group_size, self.person_ids = 0, ()
+            await self.context_changed()
+            counter = getattr(app, "counter", None)
+            if counter is not None:
+                counter.forget()
+        self.say("  running: faces are greeted, books are taken" if on else "  stopped: nobody is greeted until Start")
+        app.show_state()
+        return True
+
+    def describe(self) -> str:
+        d = self.app.dialogue
+        stored = ", ".join(f"{b.title} (slot {b.slot})" for b in d.storage.stored()) or "empty"
+        return f"state {d.state} | zone {self.app.context.zone}{' (fixed mode)' if self.app.fixed else ''} | storage: {stored}"
+
+    async def run(self, command: str, arg: str = "") -> bool:
+        """Run one operator command; returns False if it was not one or the argument was bad (the reason is said)."""
+        command, arg = command.lower(), arg.strip()
+        extra = getattr(self.app, "operator_extra", None)        # commands added by the guided scenario test (next, abort)
+        if extra and command in extra:
+            await extra[command](arg)
+            return True
+        bus, d = self.app.bus, self.app.dialogue
+        if command == "state":
+            self.say("  " + self.describe())
+        elif command == "goto":
+            if not arg:
+                self.say("  usage: goto <state>; states: " + ", ".join(d.fsm.spec.leaves()))
+                return False
+            try:
+                path = await d.goto(arg)
+            except SpecError as exc:
+                self.say(f"  {exc}")
+                return False
+            self.say(f"  now in {path}")
+        elif command == "zone":
+            if arg.lower() not in ZONES:
+                self.say("  usage: zone quiet|common")
+                return False
+            await self.set_zone(arg.lower())
+        elif command == "engage":
+            if self.group_size == 0:
+                self.group_size = 1
+                await self.context_changed()
+            await bus.publish(PersonEngaged(self.person_ids, source="operator"))
+        elif command == "busy":
+            await bus.publish(PersonNearbyBusy(self.person_ids, source="operator"))
+        elif command == "leave":
+            self.group_size, self.person_ids = 0, ()
+            await self.context_changed()
+            await bus.publish(PersonLeft(source="operator"))
+        elif command == "dropped":
+            await bus.publish(BookDropped(source="operator"))
+        elif command == "unload":
+            if arg.lower() == "all":
+                slots = [i for i, b in enumerate(self.app.dialogue.storage.books) if b is not None]
+            elif arg.isdigit():
+                slots = [int(arg)]
+            else:
+                self.say("  usage: unload <slot number> | unload all")
+                return False
+            names = []
+            for slot in slots:
+                book = await self.app.dialogue.unload_slot(slot)
+                if book is not None:
+                    names.append(f"{book.title or 'a book'} (slot {slot})")
+            if not names:
+                self.say("  nothing to unload there: the slot is empty")
+                return False
+            self.say("  unloaded: " + ", ".join(names))
+            self.app.show_state()                                  # tell the operator page now: it lists the slots from this state, which only changes on events
+        elif command == "pick":
+            content = arg.split(":", 1)[0].lower() in ("book", "where", "guide", "similar", "section", "floor", "topic")
+            if arg.lower() not in PICKS and not (content and ":" in arg):
+                self.say("  usage: pick " + "|".join(PICKS) + " | book:<isbn> | where:<isbn> | similar:<isbn> | "
+                         "guide:<isbn> | section:<name> | floor:<n> | topic:<name>")
+                return False
+            await bus.publish(UserChoice(arg if content else arg.lower(), source="operator"))
+        elif command == "book":
+            return await self.place_book(arg.split())
+        elif command == "say":
+            if not arg:
+                self.say("  usage: say <text>")
+                return False
+            await bus.publish(UserUtterance(arg, source="operator"))
+        elif command == "listen":
+            listener = getattr(self.app, "listener", None)
+            if listener is None:
+                self.say("  no microphone: run the simulator with --live or --speak (it uses devices.mic in config/robot.yaml)")
+                return False
+            if listener.active:
+                listener.finish()                               # a second press: stop recording and transcribe what was said
+            else:
+                self.listen_task = asyncio.ensure_future(listener.listen())     # not awaited: the page's buttons keep working
+        elif command == "screen":
+            view, _, rest = arg.partition(" ")
+            if not view or self.app.screen is None:
+                self.say("  usage: screen face|book_card|book_list|directions|options|status [isbn | section]")
+                return False
+            try:
+                update = await self.app.screen.force(view, rest)
+            except ValueError as exc:
+                self.say(f"  {exc}")
+                return False
+            self.say(f"  screen: {update.view}")
+        elif command == "drive":
+            return self.drive(arg)
+        elif command == "stop":
+            return self.stop()
+        elif command == "resume":
+            self.tell("  " + await d.resume_held())
+        elif command == "system":
+            if arg.lower() not in ("start", "stop"):
+                self.say("  usage: system start|stop  (stopped: the camera shows, but nobody is greeted and no book is taken)")
+                return False
+            return await self.set_active(arg.lower() == "start")
+        elif command == "reset":
+            await d.reset(everything=arg.lower() == "all")
+            self.say("  reset: IDLE" + (", storage emptied" if arg.lower() == "all" else ""))
+        else:
+            return False
+        return True

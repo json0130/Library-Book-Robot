@@ -18,6 +18,7 @@ class Actuators:
     ring: object
     printer: object
     nav: object
+    pad: object = None
 
     def apply_style(self, style) -> None:
         self.lights.set(style.light_color, style.brightness)

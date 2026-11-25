@@ -20,7 +20,9 @@ MARTIAN = "9780553418026"
 def make_sim(drivers=None):
     cfg = load_config()
     cfg.robot.setdefault("books", {})["online_fallback"] = False
-    app = build_app(cfg, drivers or fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False)
+    cfg.robot.setdefault("screen", {})["greeting_hold_s"] = 0
+    app = build_app(cfg, drivers or fake_drivers(), face=FaceDisplay(enabled=False), log_sessions=False,
+                    persist_storage=False)
     out = io.StringIO()
     sim = Sim(app, out)
     sim.said = []
@@ -51,7 +53,9 @@ def sim_with_real_camera():
     drivers = fake_drivers()
     drivers.camera = RealWebcamLikeCamera()
     sim, out = make_sim(drivers)
-    sim.app.scanner.decode = lambda frame: frame.isbn        # no pyzbar needed to test the routing
+    for reader in getattr(sim.app.scanner, "readers", [sim.app.scanner]):          # `books.reader: both`: the camera reader is one of two
+        if hasattr(reader, "decode"):
+            reader.decode = lambda frame: frame.isbn                              # no pyzbar needed to test the routing
     return sim, out
 
 
@@ -63,13 +67,13 @@ class SimTypingTest(unittest.TestCase):
     def test_plain_sentences_are_the_visitor_speaking(self):
         sim, _ = make_sim()
         run(sim, "book " + MARTIAN, "can you explain it?")
-        self.assertEqual(sim.app.dialogue.state, "closing")
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
         self.assertIn("astronaut", " ".join(sim.said))                  # the catalogue summary was said
         run(sim, "hello there")                                          # not a command: said to the robot
-        self.assertEqual(sim.app.dialogue.state, "closing")              # still about the book (no LLM to answer)
-        self.assertIn("place it on my pad", sim.said[-1])
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.ANYTHING_ELSE")   # still about the book (no LLM to answer)
+        self.assertIn("place it on my pad", sim.said[-2])
         run(sim, "can I scan another book?")
-        self.assertEqual(sim.app.dialogue.state, "invited")
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.AWAIT_BOOK")
 
     def test_recommend_by_sentence(self):
         sim, _ = make_sim()
@@ -91,17 +95,17 @@ class SimTypingTest(unittest.TestCase):
         sim, out = sim_with_real_camera()
         run(sim, "book")
         self.assertIn("hold the book's barcode to the camera", out.getvalue())
-        self.assertEqual(sim.app.dialogue.state, "offering")
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.OFFER")
         run(sim, "can you explain it")
-        self.assertEqual(sim.app.dialogue.state, "closing")
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.ANYTHING_ELSE")
         run(sim, "scan")                                                  # `scan` alone is the same as `book`
-        self.assertEqual(sim.app.dialogue.state, "offering")
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.OFFER")
 
     def test_fake_camera_only_commands_say_so_with_the_real_webcam(self):
         sim, out = sim_with_real_camera()
         run(sim, "book " + MARTIAN, "book none", "scan photo.png")
         self.assertEqual(out.getvalue().count("fake camera (run without --camera)"), 3)
-        self.assertEqual(sim.app.dialogue.state, "idle")
+        self.assertEqual(sim.app.dialogue.state, "IDLE")
 
 
 class WhereAndGuideCommandsTest(unittest.TestCase):
@@ -207,7 +211,68 @@ class VoiceFailureTest(unittest.TestCase):
         sim.app.actuators.voice.synthesize = mock.Mock(side_effect=OSError("down"))
         with self.assertLogs("robot.voice", level="WARNING"):
             run(sim, "book " + MARTIAN, "explain")
-        self.assertEqual(sim.app.dialogue.state, "closing")              # the step ran to its end
+        self.assertEqual(sim.app.dialogue.state, "ENGAGED.ANYTHING_ELSE")   # the step ran to its end
+
+
+class SentenceBySentenceTest(unittest.TestCase):
+    def setUp(self):
+        logging.disable(logging.INFO)
+        self.addCleanup(logging.disable, logging.NOTSET)
+        self.style = StyleVector(voice="normal", volume=0.8)
+
+    def test_a_reply_is_made_and_played_one_sentence_at_a_time(self):
+        made = []
+        audio = FakeAudio()
+        voice = Voice(audio, lambda text: made.append(text) or text.encode(), None)
+        voice.say("Dune is about a desert planet. It is a big epic! Would you like it?", self.style)
+        self.assertEqual(made, ["Dune is about a desert planet.", "It is a big epic!", "Would you like it?"])
+        self.assertEqual(len(audio.played), 3)
+
+    def test_the_fixed_lines_are_made_ahead_and_not_asked_for_again(self):
+        made = []
+        voice = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None)
+        voice.prepare(["Hello! My name is Stuart."])
+        self.assertEqual(made, ["Hello!", "My name is Stuart."])
+        voice.say("Hello! My name is Stuart.", self.style)
+        self.assertEqual(len(made), 2)                                   # spoken from the cache: no new request
+
+    def test_a_long_first_sentence_is_cut_at_its_first_comma_so_the_first_words_come_sooner(self):
+        made = []
+        voice = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None)
+        voice.say("I can take back a book, tell you about one, recommend something, or show you where a topic is. What would you like?",
+                  self.style)
+        self.assertEqual(made[0], "I can take back a book,")
+        self.assertEqual(made[1], "tell you about one, recommend something, or show you where a topic is.")
+        self.assertEqual(made[2], "What would you like?")
+        made.clear()
+        voice.say("Short one, with a comma. And another.", self.style)
+        self.assertEqual(made, ["Short one, with a comma.", "And another."])          # short sentences are left alone
+
+    def test_the_fixed_lines_are_kept_on_disk_and_survive_a_restart(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            made = []
+            first = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None, cache_dir=d, cache_tag="a")
+            first.prepare(["Hello! My name is Stuart."])
+            self.assertEqual(len(made), 2)
+            again = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None, cache_dir=d, cache_tag="a")
+            again.say("Hello! My name is Stuart.", self.style)
+            self.assertEqual(len(made), 2)                                # read from disk, not asked of the server
+            other = Voice(FakeAudio(), lambda text: made.append(text) or b"wav", None, cache_dir=d, cache_tag="b voice")
+            other.say("Hello!", self.style)
+            self.assertEqual(len(made), 3)                                # a different voice does not reuse it
+
+    def test_a_failure_part_way_stops_the_reply_without_raising(self):
+        def synth(text):
+            if "second" in text:
+                raise OSError("server down")
+            return b"wav"
+        audio = FakeAudio()
+        voice = Voice(audio, synth, None)
+        logging.disable(logging.NOTSET)
+        with self.assertLogs("robot.voice", level="WARNING"):
+            voice.say("The first one. The second one. The third one.", self.style)
+        self.assertEqual(len(audio.played), 1)
 
 
 class SimStartupTest(unittest.TestCase):

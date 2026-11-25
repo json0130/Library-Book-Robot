@@ -1,0 +1,1213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot operator</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --ink: #1b1f24; --muted: #66707a; --line: #d8dde3;
+          --accent: #0a7f86; --warn: #b4540a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1317; --card: #181e24; --ink: #e6ebf0; --muted: #8a96a2;
+          --line: #2a323a; --accent: #3cc7cf; --warn: #f0a050; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 24px; padding: 10px 16px;
+           background: var(--card); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 1.05rem; margin: 0; }
+  #path { font: 600 1.4rem ui-monospace, monospace; color: var(--accent); }
+  #meta { color: var(--muted); font-size: .85rem; flex: 1 1 20rem; }
+  #conn { font-size: .8rem; color: var(--warn); }
+  #conn.ok { color: var(--accent); }
+  /* landscape: on the left the map and the sound map side by side, under them the camera and the face side by side, then the books and the log;
+     on the right the state machines and the other controls */
+  /* three rows. 1: the webcam | the robot's face | the books on board, the visitor (pick, talk, type) and the state. 2: the floor plan
+     (navigation) | the sound map. 3: everything else (the log, the base, the settings), as many across as fit (hidden for now). */
+  main { display: grid; gap: 12px; padding: 12px 16px; align-items: start; }
+  .r1 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .8fr); gap: 12px; align-items: start; min-width: 0; }
+  .r2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+  .r3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; min-width: 0; }
+  .stack { display: grid; gap: 12px; min-width: 0; align-items: start; }
+  /* the webcam and the face, and the floor plan and the sound map, are the same height side by side (and their boxes too) */
+  .r1 > section, .r2 > section { align-self: stretch; }
+  #camera, #preview { aspect-ratio: auto; height: clamp(220px, 26vw, 440px); }
+  #plan, #snd { aspect-ratio: auto !important; height: clamp(300px, 30vw, 520px); }
+  #planbox.big #plan, #sndbox.big #snd { height: calc(100vh - 300px); }
+  .r3[hidden] { display: none; }        /* row 3 (log, base, settings) is hidden for now: remove `hidden` from <div class="r3"> to show it */
+  @media (max-width: 1100px) { .r1 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .r1 > :last-child { grid-column: 1 / -1; } }
+  @media (max-width: 700px) { .r1, .r2 { grid-template-columns: 1fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  h2.sub { margin-top: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button { font: inherit; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg);
+           color: var(--ink); cursor: pointer; min-height: 38px; }
+  button:hover { border-color: var(--accent); }
+  .hint { color: var(--muted); font-size: .85rem; }
+  .sysbtn { font-weight: 700; min-width: 7.5rem; background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sysbtn.running { background: var(--bg); color: var(--warn); border-color: var(--warn); }
+  .sysnote { font-size: .85rem; color: var(--muted); }
+  .sysnote.stopped { color: var(--warn); font-weight: 600; }
+  .talkrow { margin-top: 8px; }
+  .typed { margin-top: 10px; font-size: .85rem; color: var(--muted); }
+  .typed form { margin-top: 6px; }
+  #choices button { font-weight: 600; }
+  .micline { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .micline.live { color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  ol#books .where { flex: 1; } ol#books button.unload { min-height: 28px; padding: 2px 10px; }
+  button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { color: var(--warn); }
+  input, select { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--bg); color: var(--ink); min-height: 38px; }
+  input[type=text] { flex: 1; min-width: 10rem; }
+  .view { width: 100%; background: #000; border: 1px solid var(--line); border-radius: 8px; display: block; }
+  #camera { aspect-ratio: 4 / 3; object-fit: contain; }
+  #preview { aspect-ratio: 16 / 10; }
+  #camnote { color: var(--muted); font-size: .8rem; margin-top: 4px; }
+  #screen, #log { color: var(--muted); font-size: .85rem; }
+  #log { font-family: ui-monospace, monospace; max-height: 16rem; overflow: auto; white-space: pre-wrap; }
+  #screen { margin-top: 6px; }
+  /* the base's map: click a place, drag to turn the arrow, press Go */
+  #basemap { width: 100%; display: block; background: #2b3036; border: 1px solid var(--line); border-radius: 8px; touch-action: none;
+             cursor: crosshair; }
+  #maptarget { font: .85rem ui-monospace, monospace; color: var(--muted); margin: 6px 0; min-height: 1.3em; }
+  #mapnote, #looknote { color: var(--muted); font-size: .8rem; margin-top: 4px; }
+  button#mapgo { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button#mapgo:disabled { background: var(--bg); color: var(--muted); border-color: var(--line); cursor: not-allowed; }
+  button#mapstop { background: #c0392b; color: #fff; border-color: #c0392b; font-weight: 700; }
+  #map { display: grid; gap: 8px; }
+  .group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .group > .gname { font: 600 .7rem ui-monospace, monospace; color: var(--muted); min-width: 5.5rem; }
+  .chip { font: .78rem ui-monospace, monospace; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px;
+          background: var(--bg); color: var(--muted); cursor: pointer; min-height: 0; }
+  .chip.next { border-color: var(--accent); color: var(--ink); border-style: dashed; }
+  .chip.next::before { content: "\2192\00a0"; color: var(--accent); }
+  .chip.current { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700;
+                  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  ul#next { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ul#next li { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: center; padding: 6px 8px;
+               border: 1px solid var(--line); border-radius: 8px; }
+  ul#next li.auto { border-style: dashed; color: var(--muted); }
+  ul#next .go { grid-row: span 2; }
+  ul#next .what { font-weight: 600; }
+  ul#next .arrow { color: var(--accent); }
+  ul#next .why { grid-column: 2; color: var(--muted); font-size: .8rem; }
+  ol#books { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ol#books li { display: flex; gap: 10px; align-items: baseline; padding: 6px 8px; border: 1px solid var(--line);
+                border-radius: 8px; }
+  ol#books li.empty { color: var(--muted); border-style: dashed; }
+  ol#books .slot { font: 600 .8rem ui-monospace, monospace; color: var(--accent); min-width: 3.2rem; }
+  ol#books .title { font-weight: 600; }
+  ol#books .where { color: var(--muted); font-size: .8rem; }
+  dl#base { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: .88rem; }
+  dl#base dt { color: var(--muted); }
+  dl#base dd { margin: 0; overflow-wrap: anywhere; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); font: 600 .78rem ui-monospace, monospace; }
+  .pill.good { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  [hidden] { display: none !important; }      /* the floor-plan panel's rows set their own display, which would otherwise win over `hidden` */
+  /* the floor plan: the robot's map with the sections, keep-out zones, shelf poses and the station on it (map metres, y up) */
+  #plan { width: 100%; height: auto; aspect-ratio: 4 / 3; display: block; background: #c9ccd1; border: 1px solid var(--line);
+          border-radius: 8px; touch-action: none; user-select: none; }
+  #plan.tool-draw { cursor: crosshair; } #plan.tool-pan { cursor: grab; } #plan.tool-select { cursor: default; }
+  #plan .base-floor { fill: #eef0f3; } #plan .base-walls { fill: #111; stroke: #111; stroke-width: .03; }
+  #plan .sec { fill: color-mix(in srgb, #3cc7cf 22%, transparent); stroke: #3cc7cf; stroke-width: .04; }
+  #plan .sec-label { fill: #0a5f66; font-weight: 700; pointer-events: none; }
+  #plan .keep { fill: color-mix(in srgb, #7d848c 50%, transparent); stroke: #4f565e; stroke-width: .04; stroke-dasharray: .12 .08; }
+  #plan .keep.thin { stroke: #ff8a00; fill: color-mix(in srgb, #ff8a00 30%, transparent); }
+  #plan .keep.fixed { stroke-dasharray: .05 .05; }
+  #plan .sel { stroke-width: .09; stroke-dasharray: none; }
+  #plan .keep-label { fill: #2f343a; font-weight: 700; pointer-events: none; }
+  #plan .draft { fill: color-mix(in srgb, #1f6feb 25%, transparent); stroke: #1f6feb; stroke-width: .05; stroke-dasharray: .1 .06; }
+  #plan .handle { fill: #fff; stroke: #1f6feb; stroke-width: .03; cursor: nwse-resize; }
+  #plan .shelf { fill: #f0a000; stroke: #6b4700; stroke-width: .02; pointer-events: none; }
+  #plan .shelf-label { fill: #6b4700; font-weight: 700; pointer-events: none; }
+  #plan .lm { fill: #8a96a2; pointer-events: none; } #plan .lm-label { fill: #fff; font-weight: 700; pointer-events: none; }
+  #plan .station { fill: none; stroke: #2e8b57; stroke-width: .06; pointer-events: none; } #plan .station-dot { fill: #2e8b57; pointer-events: none; }
+  #plan .axis { stroke: #6b7480; stroke-width: .02; stroke-dasharray: .1 .1; pointer-events: none; }
+  #plan .trail { fill: none; stroke: #1f6feb; stroke-width: .05; stroke-opacity: .55; stroke-linejoin: round; stroke-linecap: round; }
+  #pl-live { font-size: 13px; margin: 4px 0; } #pl-live.off { opacity: .65; }
+  #plan .robot { fill: #1f6feb; stroke: #fff; stroke-width: .04; } #plan .robot-arrow { stroke: #fff; stroke-width: .07; }
+  #plancursor, #plannote { color: var(--muted); font: .8rem ui-monospace, monospace; margin-top: 6px; min-height: 1.2em; white-space: pre-wrap; }
+  #plannote.bad { color: var(--warn); }
+  .planbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .planbar .grow { flex: 1; }
+  .planbar button { min-height: 32px; padding: 4px 10px; }
+  #pl-tools { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+  #sndbox .sndwrap { display: flex; gap: 10px; align-items: stretch; }
+  #snd { flex: 1; min-width: 0; height: auto; aspect-ratio: 4 / 3; display: block; background: #c9ccd1; border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: grab; }
+  #sndbox.big { position: fixed; inset: 10px; z-index: 100; overflow: auto; box-shadow: 0 0 0 100vmax rgba(0,0,0,.55); }
+  #sndbox.big #snd { aspect-ratio: auto; height: calc(100vh - 240px); min-height: 320px; }
+  #sn-key { width: 74px; display: flex; flex-direction: column; font: .78rem ui-monospace, monospace; color: var(--muted); }
+  #sn-key .title { margin-bottom: 4px; line-height: 1.2; } #sn-key .scale { flex: 1; display: flex; gap: 6px; min-height: 140px; }
+  #sn-key .bar { width: 16px; border-radius: 4px; border: 1px solid var(--line); background: linear-gradient(to top, #000080, #0000ff, #00ffff, #80ff80, #ffff00, #ff8000, #ff0000, #800000); }
+  #sn-key .ticks { display: flex; flex-direction: column; justify-content: space-between; }
+  #sn-cursor, #sn-note { color: var(--muted); font: .8rem ui-monospace, monospace; margin-top: 6px; min-height: 1.2em; white-space: pre-wrap; }
+  #sn-note.bad { color: var(--warn); }
+  #snd .zone { fill: rgba(125,132,140,.7); stroke: #4a5057; stroke-width: .03; }
+  #snd .sec { fill: none; stroke: #1b1f23; stroke-width: .045; stroke-dasharray: .16 .1; }
+  #snd .route { fill: none; stroke: #1f6feb; stroke-width: .04; stroke-dasharray: .12 .08; }
+  .gobtns { display: inline-flex; flex-wrap: wrap; gap: 6px; } #pl-go button { min-height: 32px; padding: 4px 12px; }
+  #pl-go button.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #pl-pick.picking { outline: 2px solid #ff8a00; } #plan.picking { cursor: crosshair; }
+  .gostate { font: .8rem ui-monospace, monospace; color: var(--muted); margin: -2px 0 8px; min-height: 1.2em; white-space: pre-wrap; } .gostate.bad { color: var(--warn); }
+  #plan .target { fill: rgba(255,138,0,.25); stroke: #ff8a00; stroke-width: .05; pointer-events: none; } #plan .target-arrow { stroke: #ff8a00; stroke-width: .06; pointer-events: none; }
+  #pl-go { align-items: center; }
+  #pl-go label { display: inline-flex; gap: 6px; align-items: center; }
+  #pl-go select { min-height: 32px; padding: 3px 6px; }
+  #pl-go button { min-height: 32px; padding: 4px 12px; }
+  button#pl-gostop { background: #c0392b; color: #fff; border-color: #c0392b; font-weight: 700; }
+  button#pl-gobtn:disabled { background: var(--bg); color: var(--muted); border-color: var(--line); cursor: not-allowed; }
+  #pl-gostate { font: .8rem ui-monospace, monospace; color: var(--muted); }
+  #pl-sel { margin-top: 8px; display: grid; gap: 6px; }
+  #pl-sel label { display: inline-flex; gap: 6px; align-items: center; }
+  #pl-sel input[type=number] { width: 5.6rem; min-height: 32px; padding: 3px 6px; }
+  #pl-sel input[type=text] { min-width: 9rem; min-height: 32px; padding: 3px 6px; }
+  #pl-sel input.bad { border-color: var(--warn); }
+  #pl-size { font: .8rem ui-monospace, monospace; color: var(--muted); } #pl-size.warn { color: var(--warn); }
+  #pl-kind { font-size: .8rem; color: var(--muted); }
+  #pl-saverow { margin-top: 8px; } #pl-dirty { color: var(--warn); font-size: .85rem; }
+  #planbox.big { position: fixed; inset: 10px; z-index: 100; overflow: auto; box-shadow: 0 0 0 100vmax rgba(0,0,0,.55); }
+  #planbox.big #plan { aspect-ratio: auto; height: calc(100vh - 330px); min-height: 320px; }
+  .plankey { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .78rem; color: var(--muted); margin-top: 6px; }
+  .plankey i { display: inline-block; width: .9em; height: .9em; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .k-section { background: #3cc7cf; } .k-keepout { background: #7d848c; } .k-thin { background: #ff8a00; } .k-shelf { background: #f0a000; }
+  .k-station { border: 2px solid #2e8b57; } .k-robot { background: #1f6feb; border-radius: 50% !important; }
+  #skipped { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; color: var(--warn); font-size: .85rem; }
+  /* film mode (/operator?film=map): only the floor plan with the robot and the sound map, side by side and large, for the
+     competition video. Nothing can be clicked; nothing changes without the parameter. */
+  body.film-map header, body.film-map main > :not(.r2), body.film-map .r2 > section:not(#planbox):not(#sndbox),
+  body.film-map .planbar, body.film-map #pl-go, body.film-map #pl-gostate, body.film-map #plancursor, body.film-map #pl-sel,
+  body.film-map #pl-saverow, body.film-map #plannote, body.film-map #sn-cursor, body.film-map #sn-note { display: none !important; }
+  body.film-map { pointer-events: none; }
+  body.film-map main { grid-template-columns: 1fr; padding: 10px; }
+  body.film-map .r2 { grid-template-columns: 1fr 1fr; gap: 10px; }
+  body.film-map #plan, body.film-map #snd { aspect-ratio: auto; height: calc(100vh - 118px); }
+  body.film-map h2 { font-size: 1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Robot operator <span id="conn">connecting…</span></h1>
+  <button type="button" id="sysbtn" class="sysbtn" title="Start: faces are greeted and books are taken. Stop: back to IDLE quietly; the camera keeps showing.">▶ Start</button>
+  <span id="sysnote" class="sysnote"></span>
+  <div id="path">–</div>
+  <div id="meta"></div>
+</header>
+<main>
+  <div class="r1">
+    <section>
+      <h2>Robot camera</h2>
+      <img id="camera" class="view" alt="robot camera">
+      <div id="camnote">Waiting for the camera (run the simulator with --camera).</div>
+    </section>
+    <section>
+      <h2>Face and screen (view only)</h2>
+      <iframe id="preview" class="view" src="/?preview=1" title="face and screen preview" loading="lazy"></iframe>
+      <div id="screen">–</div>
+    </section>
+    <div class="stack">
+    <section>
+      <h2>Books on board <span id="count"></span></h2>
+      <ol id="books"></ol>
+      <div class="row"><button id="unloadall" class="danger" hidden>Unload all</button></div>
+    </section>
+    <section>
+      <h2>The visitor picks</h2>
+      <div class="row" id="choices"><span class="hint">(no buttons on the screen right now)</span></div>
+      <div class="row talkrow"><button type="button" id="talk" title="Talk into the robot's microphone: one sentence, it stops when you pause">🎤 Talk</button></div>
+      <div id="mic" class="micline" hidden></div>
+      <details class="typed" open><summary>Type instead</summary>
+        <form class="row" id="sayform"><input type="text" id="say" placeholder="can you recommend something about space?" autocomplete="off">
+          <button>Say</button></form>
+      </details>
+    </section>
+    <section>
+      <h2>State</h2>
+      <div id="map"></div>
+      <h2 class="sub">What can happen next</h2>
+      <ul id="next"></ul>
+    </section>
+    <section id="guide" hidden>
+      <h2>Test step <span id="guideno"></span></h2>
+      <div id="guidetext" style="font-size:1.15rem;margin-bottom:10px"></div>
+      <div class="row"><button id="guidenext" class="on">Next</button><button id="guideabort" class="danger">Abort</button></div>
+    </section>
+    </div>
+  </div>
+  <div class="r2">
+    <section id="planbox">
+      <h2>Floor plan and map <span id="planname"></span></h2>
+      <div class="planbar">
+        <button id="pl-edit">Edit zones and sections</button>
+        <span id="pl-tools" hidden>
+          <button data-tool="select" class="on">Select / move</button>
+          <button data-tool="keepout">+ Keep-out zone</button>
+          <button data-tool="section">+ Section</button>
+          <button data-tool="pan">Pan</button>
+        </span>
+        <span class="grow"></span>
+        <button id="pl-zin" title="zoom in">+</button><button id="pl-zout" title="zoom out">&minus;</button><button id="pl-fit">Fit</button><button id="pl-big">Enlarge</button>
+      </div>
+      <div class="row" id="pl-go">
+        <span id="pl-gobtns" class="gobtns"></span>
+        <button id="pl-pick" title="then click the map where the robot should go (drag to also set which way it faces)">Pick a point on the map</button>
+        <button id="pl-gobtn" class="on" disabled>Go</button>
+        <button id="pl-gostop" class="danger">STOP</button>
+      </div>
+      <div id="pl-gostate" class="gostate">Choose a section, or pick a point on the map.</div>
+      <svg id="plan" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Floor plan on the robot's map" preserveAspectRatio="xMidYMid meet">
+        <g id="pl-base" transform="scale(1 -1)"></g><g id="pl-over"></g><g id="pl-items"></g><g id="pl-target"></g><g id="pl-handles"></g><g id="pl-robot"></g>
+      </svg>
+      <div id="pl-live" class="off">Robot position: waiting for the base ...</div>
+      <div id="plancursor">Move the pointer over the map to read the map coordinates (metres). Mouse wheel zooms, drag pans.</div>
+      <div id="pl-sel" hidden>
+        <div class="row">
+          <label>Name <input type="text" id="pl-name" maxlength="40" autocomplete="off"></label>
+          <span id="pl-kind"></span>
+          <button id="pl-del" class="danger">Delete</button>
+        </div>
+        <div class="row nums">
+          <label>x <input type="number" step="0.05" id="pl-x1"> to <input type="number" step="0.05" id="pl-x2"></label>
+          <label>y <input type="number" step="0.05" id="pl-y1"> to <input type="number" step="0.05" id="pl-y2"></label>
+          <span id="pl-size"></span>
+        </div>
+      </div>
+      <div class="row" id="pl-saverow" hidden>
+        <button id="pl-save" class="on">Save</button><button id="pl-cancel">Cancel</button><span id="pl-dirty"></span>
+      </div>
+      <div class="plankey" id="pl-plankey">
+        <span><i class="k-section"></i>section</span><span><i class="k-keepout"></i>keep-out zone</span>
+        <span><i class="k-thin"></i>thin zone (under 30 cm)</span>
+        <span><i class="k-shelf"></i>shelf pose</span><span><i class="k-station"></i>station</span><span><i class="k-robot"></i>robot</span>
+      </div>
+      <div id="plannote"></div>
+    </section>
+    <section id="sndbox">
+      <h2>Sound map <span id="sndname"></span></h2>
+      <div class="planbar">
+        <label title="The blue dashed line is the planned route between the numbered listening points of tools/sound_survey.py; each dot is one place where the robot stops to listen."><input type="checkbox" id="sn-route"> Survey points and planned route</label>
+        <span class="grow"></span>
+        <button id="sn-zin" title="zoom in">+</button><button id="sn-zout" title="zoom out">&minus;</button><button id="sn-fit">Fit</button><button id="sn-big">Enlarge</button>
+      </div>
+      <div class="sndwrap">
+        <svg id="snd" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sound level on the robot's map" preserveAspectRatio="xMidYMid meet">
+          <defs><clipPath id="sn-clip"><path id="sn-clip-path" transform="scale(1 -1)" d=""></path></clipPath></defs>
+          <g id="sn-floor" transform="scale(1 -1)"></g><g id="sn-heat" clip-path="url(#sn-clip)"></g><g id="sn-walls" transform="scale(1 -1)"></g><g id="sn-zones"></g><g id="sn-sections"></g><g id="sn-routeg"></g><g id="sn-robot"></g>
+        </svg>
+        <div id="sn-key" hidden><div class="title" id="sn-title">Sound level (dB)</div><div class="scale"><div class="bar"></div><div class="ticks" id="sn-ticks"></div></div></div>
+      </div>
+      <div class="plankey"><span><i style="background:#111"></i>wall</span><span><i style="background:rgba(125,132,140,.85)"></i>keep-out zone (desks, chairs, ...)</span>
+        <span><i style="border:2px dashed #1b1f23;background:none"></i>section</span><span><i style="background:#e0463c"></i>robot</span></div>
+      <div id="sn-cursor">Move the pointer over the map to read the sound level there. Mouse wheel zooms, drag pans.</div>
+      <div id="sn-note"></div>
+    </section>
+  </div>
+  <div class="r3" hidden>
+    <section><h2>Recent changes</h2><div id="log"></div></section>
+    <section id="basebox" hidden>
+      <h2>Base (the TurtleBot) <span id="baseurl"></span></h2>
+      <dl id="base"></dl>
+      <ul id="skipped"></ul>
+    </section>
+    <section id="mapbox" hidden>
+      <h2>Base map (from the TurtleBot) - click where it should go</h2>
+      <canvas id="basemap" width="600" height="400"></canvas>
+      <div id="maptarget">Click on the map to pick a place. Drag to turn the arrow (the way the robot should face when it gets there).</div>
+      <div class="row"><button id="mapgo" disabled>Go there</button><button id="mapstop">STOP</button><button id="mapclear">Clear</button></div>
+      <div id="mapnote"></div>
+    </section>
+    <section>
+      <h2>Screen the visitor sees</h2>
+      <div class="row"><button data-look="1">Original</button><button data-look="2">New look</button></div>
+      <div class="row"><button data-theme="dark">Dark</button><button data-theme="light">Light</button></div>
+      <div id="looknote">The theme is for the new look. Every open screen follows at once, and a screen opened later starts with the last choice.</div>
+    </section>
+    <section>
+      <h2>Zone (a style setting, not a state)</h2>
+      <div class="row"><button id="zone-quiet" data-zone="quiet">Quiet</button><button id="zone-common" data-zone="common">Common</button></div>
+    </section>
+    <section>
+      <h2>Screen view <span id="curview"></span></h2>
+      <form class="row" id="viewform">
+        <select id="views"><option>face</option><option>book_card</option><option>book_list</option>
+          <option>directions</option><option>options</option><option>status</option></select>
+        <input type="text" id="viewarg" placeholder="ISBN or section (optional)" autocomplete="off">
+        <button>Show</button>
+      </form>
+    </section>
+    <section>
+      <h2>Go to a state</h2>
+      <div class="row"><select id="states"></select><button id="goto">Go</button></div>
+      <div class="row" style="margin-top:8px"><button id="reset" class="danger">Reset to IDLE</button>
+        <button id="resetall" class="danger">Reset and empty storage</button></div>
+    </section>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+if (new URLSearchParams(location.search).get("film") === "map") document.body.classList.add("film-map");   // film mode: the maps only
+let lastPath = "";
+
+async function send(command, arg = "") {
+  try {
+    const r = await fetch("/operator", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ command, arg }) });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+  } catch (e) { note("could not send " + command + ": " + e.message); }
+}
+function note(text) {
+  const log = $("log");
+  log.textContent = `${new Date().toLocaleTimeString()}  ${text}\n` + log.textContent.split("\n").slice(0, 60).join("\n");
+}
+$("unloadall").onclick = () => { if (confirm("Unload every book from the ring? The ring turns to each slot and lights it.")) send("unload", "all"); };
+function showBooks(s) {
+  const slots = s.slots || 0, held = new Map((s.books || []).map(b => [b.slot, b]));
+  $("count").textContent = `(${s.stored || 0} of ${slots})`;
+  const items = [];
+  for (let i = 0; i < slots; i++) {
+    const li = document.createElement("li"), b = held.get(i);
+    li.className = b ? "" : "empty";
+    const slot = document.createElement("span"); slot.className = "slot"; slot.textContent = `slot ${i}`;
+    li.append(slot);
+    if (b) {
+      const title = document.createElement("span"); title.className = "title"; title.textContent = b.title || "(unknown title)";
+      const where = document.createElement("span"); where.className = "where";
+      where.textContent = [b.shelf && `shelf ${b.shelf}`, b.section].filter(Boolean).join(" · ");
+      const out = document.createElement("button"); out.textContent = "Unload"; out.className = "unload";
+      out.title = "turn the ring to this slot and light it so the book can be taken out";
+      out.onclick = () => { if (confirm(`Unload ${b.title || "this book"} from slot ${i}? The ring turns to it and lights the slot.`)) send("unload", String(i)); };
+      li.append(title, where, out);
+    } else { li.append("empty"); }
+    items.push(li);
+  }
+  $("books").replaceChildren(...items);
+  $("unloadall").hidden = !(s.stored > 0);
+}
+function showMap(s) {
+  const nextTo = new Set((s.next || []).map(a => a.to));
+  const chip = (name, parent) => {
+    const path = parent ? `${parent}.${name}` : name;
+    const b = document.createElement("button");
+    b.className = "chip" + (path === s.state ? " current" : nextTo.has(path) ? " next" : "");
+    b.textContent = name;
+    b.title = `double-click to go to ${path}`;
+    b.ondblclick = () => send("goto", path);
+    return b;
+  };
+  const groups = (s.tree || []).map(([top, kids]) => {
+    const g = document.createElement("div"); g.className = "group";
+    const n = document.createElement("span"); n.className = "gname"; n.textContent = top;
+    g.append(n);
+    if (kids.length) kids.forEach(k => g.append(chip(k, top))); else g.append(chip(top, ""));
+    return g;
+  });
+  $("map").replaceChildren(...groups);
+  const items = (s.next || []).map(a => {
+    const li = document.createElement("li");
+    li.className = a.command ? "" : "auto";
+    if (a.command) {
+      const b = document.createElement("button"); b.className = "go"; b.textContent = "do it";
+      b.onclick = () => send(a.command, a.arg || "");
+      li.append(b);
+    } else {
+      const t = document.createElement("span"); t.className = "go"; t.textContent = a.in_s != null ? `in ${a.in_s} s` : "by itself";
+      li.append(t);
+    }
+    const what = document.createElement("span");
+    what.innerHTML = `<span class="what"></span> <span class="arrow">\u2192</span> <span class="to"></span>`;
+    what.querySelector(".what").textContent = a.label;
+    what.querySelector(".to").textContent = a.to;
+    const why = document.createElement("span"); why.className = "why"; why.textContent = a.why || "";
+    li.append(what, why);
+    return li;
+  });
+  if (!items.length) { const li = document.createElement("li"); li.className = "auto"; li.textContent = "(nowhere: waiting)"; items.push(li); }
+  $("next").replaceChildren(...items);
+}
+function pill(text, kind) {
+  const p = document.createElement("span"); p.className = "pill " + (kind || ""); p.textContent = text; return p;
+}
+function showBase(s) {
+  const l = s.link || {}, box = $("basebox"), ret = l.returning || {};
+  box.hidden = l.backend !== "turtlebot" && !(ret.skipped || []).length;
+  if (box.hidden) return;
+  const turtle = l.backend === "turtlebot";
+  $("baseurl").textContent = turtle ? l.url || "" : "(simulated drive)";
+  const pose = l.pose || {}, nav = l.nav || {}, noise = l.noise, zone = l.zone || {}, f = (v, n = 2) => v == null ? "–" : Number(v).toFixed(n);
+  const rows = [];
+  const add = (name, ...content) => rows.push([name, content]);
+  if (turtle) {
+    add("Link", pill(l.status || "?", l.status === "connected" ? "good" : "warn"),
+        l.incompatible ? ` ${l.incompatible}` : ` ROS ${l.ros_ok === false ? "DOWN" : l.ros_ok ? "ok" : "?"}${l.battery != null ? ` · battery ${Math.round(l.battery * 100)}%` : ""}${l.clock_skew_s != null ? ` · clock ${l.clock_skew_s >= 0 ? "+" : ""}${l.clock_skew_s} s` : ""}`);
+    add("Base pose", "x " + f(pose.x) + "  y " + f(pose.y) + "  yaw " + f(pose.yaw) + " ", pill(pose.localised === false ? "NOT localised" : pose.localised ? "localised" : "no pose yet", pose.localised ? "good" : "warn"));
+    add("Drive", pill(nav.status || "idle", nav.status === "active" ? "good" : nav.status === "failed" ? "warn" : ""),
+        (nav.goal_id ? ` goal ${nav.goal_id}` : "") + (nav.distance_left != null ? ` · ${f(nav.distance_left, 1)} m left` : "") + (nav.reason ? ` · ${nav.reason}` : ""));
+  }
+  if (ret.held) {                     // the base bumped into something: nothing is resent until a person presses Resume
+    const go = document.createElement("button");
+    go.textContent = "Resume trip"; go.className = "on"; go.onclick = () => send("resume");
+    add("Trip", pill(`Stopped: ${ret.held}`, "warn"),
+        " the base hit something (bumper, cliff or wheel-drop sensor) and waits. Check the robot and what it hit, then ", go);
+  } else if (ret.blocked) add("Trip", pill("Navigation unavailable", "warn"), ` waiting: ${ret.blocked}`);
+  if (turtle) {
+    const n = zone.noise || {};
+    add("Noise", noise ? `${f(noise.overall, 1)} ${noise.unit || ""} (${noise.calibrated ? "calibrated" : "raw, not calibrated"})${noise.robot_noise ? " — the robot's own" : ""}`
+                       : "no reading",
+        n.median != null ? ` · median ${f(n.median, 1)} over ${n.samples} readings` : ` · median: not enough readings yet`);
+    add("Zone", pill(zone.zone || s.zone, "good"), ` decided by ${zone.source || "map"}${zone.area ? ` (${zone.area})` : ""}${zone.noise_zone ? ` · noise says ${zone.noise_zone}` : ""}${zone.from_pose ? "" : " · pose lookup off"}`);
+  }
+  $("base").replaceChildren(...rows.flatMap(([name, content]) => {
+    const dt = document.createElement("dt"); dt.textContent = name;
+    const dd = document.createElement("dd");
+    content.forEach(c => dd.append(c));
+    return [dt, dd];
+  }));
+  $("skipped").replaceChildren(...(ret.skipped || []).slice().reverse().map(k => {
+    const li = document.createElement("li");
+    li.textContent = `⚠ shelf ${k.shelf} skipped (${k.section || "?"}, level ${k.floor ?? "?"}): ${k.reason}; ${k.books} book(s) stay in storage`;
+    return li;
+  }));
+}
+
+// ---- the base's map: shows /map.png, the robot and the picked target; Go sends `drive x y [yaw]`, STOP sends `stop` ----
+const BM = { meta: null, img: null, target: null, drag: false, link: {}, noteId: 0, scale: 1 };
+const mapCanvas = $("basemap"), mctx = mapCanvas.getContext("2d");
+function mapToPx(x, y) { const m = BM.meta; return [(x - m.origin.x) / m.resolution * BM.scale, (m.height - (y - m.origin.y) / m.resolution) * BM.scale]; }
+function pxToMap(px, py) { const m = BM.meta; return [m.origin.x + px / BM.scale * m.resolution, m.origin.y + (m.height - py / BM.scale) * m.resolution]; }
+function arrow(x, y, yaw, len, color) {
+  const [px, py] = mapToPx(x, y), ex = px + Math.cos(yaw) * len, ey = py - Math.sin(yaw) * len, a = Math.atan2(ey - py, ex - px);
+  mctx.strokeStyle = mctx.fillStyle = color; mctx.lineWidth = 2;
+  mctx.beginPath(); mctx.moveTo(px, py); mctx.lineTo(ex, ey); mctx.stroke();
+  mctx.beginPath(); mctx.moveTo(ex, ey); mctx.lineTo(ex - 8 * Math.cos(a - .45), ey - 8 * Math.sin(a - .45));
+  mctx.lineTo(ex - 8 * Math.cos(a + .45), ey - 8 * Math.sin(a + .45)); mctx.closePath(); mctx.fill();
+}
+function drawMap() {
+  const m = BM.meta, wrap = mapCanvas.parentElement, w = Math.max(200, wrap.clientWidth - 28);
+  if (!m || !BM.img || !BM.img.complete) { mctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height); return; }
+  BM.scale = w / m.width;
+  const dpr = window.devicePixelRatio || 1, h = Math.round(m.height * BM.scale);
+  if (mapCanvas.width !== Math.round(w * dpr) || mapCanvas.height !== Math.round(h * dpr)) {
+    mapCanvas.width = Math.round(w * dpr); mapCanvas.height = Math.round(h * dpr);
+    mapCanvas.style.width = w + "px"; mapCanvas.style.height = h + "px";
+  }
+  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mctx.imageSmoothingEnabled = false;
+  mctx.drawImage(BM.img, 0, 0, w, h);
+  const pose = BM.link.pose, t = BM.target;
+  if (t && pose && pose.x != null) {
+    const [rx, ry] = mapToPx(pose.x, pose.y), [tx, ty] = mapToPx(t.x, t.y);
+    mctx.setLineDash([5, 5]); mctx.strokeStyle = "#e0a030"; mctx.lineWidth = 1.5;
+    mctx.beginPath(); mctx.moveTo(rx, ry); mctx.lineTo(tx, ty); mctx.stroke(); mctx.setLineDash([]);
+  }
+  if (t) {
+    const [tx, ty] = mapToPx(t.x, t.y);
+    mctx.strokeStyle = "#e0a030"; mctx.lineWidth = 3;
+    mctx.beginPath(); mctx.moveTo(tx - 7, ty - 7); mctx.lineTo(tx + 7, ty + 7); mctx.moveTo(tx + 7, ty - 7); mctx.lineTo(tx - 7, ty + 7); mctx.stroke();
+    if (t.yaw != null) arrow(t.x, t.y, t.yaw, 26, "#e0a030");
+  }
+  if (pose && pose.x != null) {
+    const [rx, ry] = mapToPx(pose.x, pose.y);
+    mctx.fillStyle = BM.link.localised ? "#2ecc71" : "#e74c3c"; mctx.strokeStyle = "#000"; mctx.lineWidth = 1.5;
+    mctx.beginPath(); mctx.arc(rx, ry, 7, 0, 7); mctx.fill(); mctx.stroke();
+    arrow(pose.x, pose.y, pose.yaw || 0, 20, "#fff");
+  }
+}
+function mapButtons() {
+  const l = BM.link, ok = l.status === "connected" && l.localised !== false && l.driving !== false, t = BM.target;
+  $("mapgo").disabled = !(t && ok && BM.meta);
+  $("mapgo").title = ok ? "" : "the base is not connected or not localised";
+  const pose = l.pose || {};
+  $("maptarget").textContent = !BM.meta ? "" : !t ? "Click on the map to pick a place. Drag to turn the arrow (the way the robot should face when it gets there)."
+    : `Target x ${t.x.toFixed(2)}  y ${t.y.toFixed(2)}` + (t.yaw != null ? `  facing ${t.yaw.toFixed(2)} rad` : "  (faces the way it travels)")
+      + (pose.x != null ? `  ·  ${Math.hypot(t.x - pose.x, t.y - pose.y).toFixed(1)} m from the robot` : "");
+}
+async function loadMap() {
+  try {
+    const m = await (await fetch("/map.json")).json();
+    if (!m.available) { BM.meta = null; $("mapnote").textContent = "No map from the base yet (the link must be connected and the Dell's map running)."; drawMap(); return; }
+    $("mapnote").textContent = `${m.width} x ${m.height} cells, ${m.resolution} m per cell, map version ${m.version}`;
+    if (!BM.meta || BM.meta.version !== m.version) {
+      BM.meta = m; const img = new Image();
+      img.onload = () => { BM.img = img; drawMap(); mapButtons(); };
+      img.src = "/map.png?v=" + m.version;
+    }
+  } catch (_) {}
+}
+function mapPointer(ev) { const r = mapCanvas.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+mapCanvas.addEventListener("pointerdown", ev => {
+  if (!BM.meta) return;
+  const [px, py] = mapPointer(ev), [x, y] = pxToMap(px, py);
+  BM.target = { x, y, yaw: null, px, py }; BM.drag = true; mapCanvas.setPointerCapture(ev.pointerId); drawMap(); mapButtons();
+});
+mapCanvas.addEventListener("pointermove", ev => {
+  if (!BM.drag || !BM.target) return;
+  const [px, py] = mapPointer(ev);
+  if (Math.hypot(px - BM.target.px, py - BM.target.py) > 10) BM.target.yaw = Math.atan2(-(py - BM.target.py), px - BM.target.px);
+  drawMap(); mapButtons();
+});
+mapCanvas.addEventListener("pointerup", () => { BM.drag = false; });
+$("mapgo").onclick = () => {
+  const t = BM.target; if (!t) return;
+  send("drive", `${t.x.toFixed(2)} ${t.y.toFixed(2)}` + (t.yaw != null ? ` ${t.yaw.toFixed(2)}` : ""));
+};
+$("mapstop").onclick = () => send("stop");
+$("mapclear").onclick = () => { BM.target = null; drawMap(); mapButtons(); };
+window.addEventListener("resize", drawMap);
+window.addEventListener("keydown", ev => { if (ev.key === "Escape") send("stop"); });      // Esc is a stop, too
+function showMap2(s) {
+  const l = s.link || {};
+  $("mapbox").hidden = l.backend !== "turtlebot";
+  if ($("mapbox").hidden) return;
+  BM.link = l;
+  if (s.operator_note && s.operator_note.id !== BM.noteId) { BM.noteId = s.operator_note.id; note(s.operator_note.text); $("mapnote").textContent = s.operator_note.text; }
+  drawMap(); mapButtons();
+}
+loadMap(); setInterval(loadMap, 4000);
+// ---- the floor plan panel: /plan.json (floor, sections, zones, shelves, station) over maps/<name>.json (the robot's own map).
+// "Edit" lets you draw, move, resize, rename and delete keep-out zones and sections on the map instead of driving the robot to their
+// corners; Save posts them to /plan-edit (only the robot's own computer may), which checks them and writes the files. ----
+const PL = { plan: null, base: null, pose: null, linkPose: null, live: null, view: null, full: null, fitKey: "" };
+const ED = { on: false, tool: "select", items: [], fixed: [], sel: null, drag: null, dirty: false, n: 0 };
+const SNAP = 0.05, MIN_SIDE = 0.10, THIN = 0.30;
+const snap = v => Math.round(v / SNAP) * SNAP;
+const r2 = v => Math.round(v * 100) / 100;
+const KEEP_NAME = /^[A-Za-z0-9_-]{1,40}$/, SECTION_NAME = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,39}$/;
+function sv(tag, attrs = {}, text) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  return e;
+}
+const sizeOf = it => [it.x2 - it.x1, it.y2 - it.y1];
+const isThin = it => it.kind === "keepout" && Math.min(...sizeOf(it)) < THIN - 1e-9;
+
+function itemsFromPlan(p) {
+  const items = [], fixed = [];
+  for (const s of p.sections || []) items.push({ id: ++ED.n, kind: "section", name: s.name, x1: s.x, y1: s.y, x2: s.x + s.w, y2: s.y + s.h });
+  for (const z of p.keepout || []) {
+    if (z.rect) { const [a, b, c, d] = z.rect; items.push({ id: ++ED.n, kind: "keepout", name: z.name, x1: Math.min(a, c), y1: Math.min(b, d), x2: Math.max(a, c), y2: Math.max(b, d) }); }
+    else fixed.push(z);
+  }
+  return [items, fixed];
+}
+async function loadPlan() {
+  if (ED.on) return;                                         // never overwrite what is being edited
+  try {
+    const p = await (await fetch("/plan.json", { cache: "no-store" })).json();
+    let base = null;
+    if (p.available && p.base_map) {
+      const r = await fetch(`/maps/${encodeURIComponent(p.base_map)}.json`, { cache: "no-store" });
+      if (r.ok) base = await r.json();
+    }
+    if (ED.on) return;
+    PL.noise = await fetch("/noise.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null);
+    PL.survey = await fetch("/survey.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null);
+    PL.plan = p; PL.base = base;
+    [ED.items, ED.fixed] = p.available ? itemsFromPlan(p) : [[], []];
+    ED.sel = null; ED.dirty = false;
+    drawPlan();
+  } catch (_) { $("plannote").textContent = "Could not read /plan.json."; }
+}
+function applyView() { $("plan").setAttribute("viewBox", PL.view.join(" ")); }
+function drawPlan() {
+  const p = PL.plan;
+  $("pl-base").replaceChildren(); $("pl-over").replaceChildren();
+  if (!p || !p.available) { $("plannote").textContent = (p && p.error) || "No floor plan."; drawItems(); return; }
+  $("planname").textContent = `(level ${p.level}${p.name ? ", " + p.name : ""} · map ${p.base_map || "none"})`;
+  const full = [p.x0 - 0.4, -(p.y0 + p.height) - 0.4, p.width + 0.8, p.height + 0.8], key = full.join(",");
+  PL.full = full;
+  if (!PL.view || PL.fitKey !== key) { PL.view = full.slice(); PL.fitKey = key; }   // keep the zoom the person chose unless the floor changed
+  applyView();
+  const Y = y => -y, base = PL.base, over = $("pl-over");
+  if (base) $("pl-base").append(sv("path", { d: base.floor, class: "base-floor" }), sv("path", { d: base.walls, class: "base-walls" }));
+  over.append(sv("line", { x1: full[0], y1: 0, x2: full[0] + full[2], y2: 0, class: "axis" }), sv("line", { x1: 0, y1: full[1], x2: 0, y2: full[1] + full[3], class: "axis" }));
+  const lab = sv("g", { class: "planonly" });
+  over.append(lab);
+  for (const m of p.landmarks) {
+    lab.append(sv("rect", { x: m.x - 0.18, y: Y(m.y) - 0.18, width: 0.36, height: 0.36, rx: 0.06, class: "lm" }),
+                sv("text", { x: m.x, y: Y(m.y) + 0.01, "font-size": 0.2, "text-anchor": "middle", "dominant-baseline": "middle", class: "lm-label" }, (m.name || m.kind || "").slice(0, 3)));
+  }
+  for (const h of p.shelves) {
+    lab.append(sv("circle", { cx: h.x, cy: Y(h.y), r: 0.14, class: "shelf" }),
+                sv("line", { x1: h.x, y1: Y(h.y), x2: h.x + 0.4 * Math.cos(h.yaw), y2: Y(h.y + 0.4 * Math.sin(h.yaw)), stroke: "#6b4700", "stroke-width": 0.05 }),
+                sv("text", { x: h.x, y: Y(h.y) - 0.24, "font-size": 0.25, "text-anchor": "middle", class: "shelf-label" }, h.code));
+  }
+  if (p.station) {
+    const st = p.station, yaw = st.yaw || 0;
+    over.append(sv("circle", { cx: st.x, cy: Y(st.y), r: 0.28, class: "station" }), sv("circle", { cx: st.x, cy: Y(st.y), r: 0.06, class: "station-dot" }),
+                sv("line", { x1: st.x, y1: Y(st.y), x2: st.x + 0.55 * Math.cos(yaw), y2: Y(st.y + 0.55 * Math.sin(yaw)), stroke: "#2e8b57", "stroke-width": 0.07 }),
+                sv("text", { x: st.x, y: Y(st.y) + 0.55, "font-size": 0.26, "text-anchor": "middle", fill: "#2e8b57", "font-weight": 700 }, "station"));
+  }
+  drawItems(); drawPlanRobot(); drawSoundMap(); planNote(); fillGo();
+}
+// ---- the Sound map panel: its own map next to the plan. Black = walls the robot saw, grey = unknown, dashed outlines = the sections (no labels),
+// colours = how loud it was (tools/noise_map.py), blended smoothly between the places the robot listened and fading out away from them. ----
+const SN = { view: null, full: null, key: "", drag: null, routeUser: null, heat: null };
+const clamp01 = v => Math.max(0, Math.min(1, v));
+function jet(t) {                                                // dark blue (quiet) ... cyan ... green ... yellow ... red ... dark red (loud)
+  t = clamp01(t);
+  return [clamp01(1.5 - Math.abs(4 * t - 3)), clamp01(1.5 - Math.abs(4 * t - 2)), clamp01(1.5 - Math.abs(4 * t - 1))].map(c => Math.round(c * 255));
+}
+const SIGMA = 0.7, REACH = 2.1;                                   // metres: how far one listening point's reading is spread, and where it stops
+function soundScale(n) {
+  const v = n.points.map(q => q.v);
+  let lo = Math.min(...v), hi = Math.max(...v);
+  if (hi - lo < 20) { const m = (hi + lo) / 2; lo = m - 10; hi = m + 10; }
+  return [Math.floor(lo / 5) * 5, Math.ceil(hi / 5) * 5];
+}
+function soundAt(pts, x, y) {                                     // {v: the blended level, a: how sure (1 = on a listening point, 0 = far from any)}
+  let sw = 0, sx = 0, sg = 0;
+  for (const q of pts) {
+    const d2 = (q.x - x) ** 2 + (q.y - y) ** 2;
+    if (d2 > REACH * REACH) continue;
+    const g = Math.exp(-d2 / (2 * SIGMA * SIGMA)), w = g * Math.sqrt(Math.min(q.n, 25));
+    sw += w; sx += w * q.v; sg += g;
+  }
+  return sw > 0 ? { v: sx / sw, a: Math.min(1, sg / 0.8) } : null;
+}
+function heatImage(n, bounds, lo, hi) {
+  const step = 0.05, W = Math.ceil((bounds.x1 - bounds.x0) / step), H = Math.ceil((bounds.y1 - bounds.y0) / step);
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(W, H);
+  for (let py = 0; py < H; py++) {
+    const y = bounds.y1 - (py + 0.5) * step;
+    for (let px = 0; px < W; px++) {
+      const r = soundAt(n.points, bounds.x0 + (px + 0.5) * step, y);
+      if (!r) continue;
+      const c = jet((r.v - lo) / (hi - lo)), i = 4 * (py * W + px);
+      img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = Math.round(235 * r.a);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv.toDataURL("image/png");
+}
+function snApply() { $("snd").setAttribute("viewBox", SN.view.join(" ")); }
+function drawSoundMap() {
+  const p = PL.plan, base = PL.base, n = PL.noise, have = n && n.available && n.points && n.points.length;
+  const heat = $("sn-heat"), walls = $("sn-walls"), secs = $("sn-sections"), route = $("sn-routeg");
+  if (!p || !p.available) { $("sn-note").textContent = "No floor plan."; return; }
+  $("sndname").textContent = `(level ${p.level} · map ${p.base_map || "none"})`;
+  const full = [p.x0 - 0.4, -(p.y0 + p.height) - 0.4, p.width + 0.8, p.height + 0.8], key = full.join(",");
+  SN.full = full;
+  if (!SN.view || SN.key !== key) { SN.view = full.slice(); SN.key = key; }
+  snApply();
+  walls.replaceChildren(); secs.replaceChildren(); route.replaceChildren(); $("sn-zones").replaceChildren();
+  $("sn-floor").replaceChildren();
+  if (base) {
+    $("sn-clip-path").setAttribute("d", base.floor);
+    $("sn-floor").append(sv("path", { d: base.floor, fill: "#eef0f3" }));                 // the floor the robot has seen, before any sound is drawn on it
+    walls.append(sv("path", { d: base.walls, fill: "#111", stroke: "#111", "stroke-width": 0.03 }));
+  }
+  for (const z of p.keepout || []) {                         // the keep-out zones the robot must not enter (desks, chairs, ...), drawn under the sections
+    const shape = z.rect
+      ? (([a, b, c, d]) => sv("rect", { x: Math.min(a, c), y: -Math.max(b, d), width: Math.abs(c - a), height: Math.abs(d - b), class: "zone" }))(z.rect)
+      : z.points ? sv("polygon", { points: z.points.map(q => `${q[0]},${-q[1]}`).join(" "), class: "zone" }) : null;
+    if (shape) { shape.append(sv("title", {}, z.name || "keep-out zone")); $("sn-zones").append(shape); }
+  }
+  for (const s of p.sections || []) secs.append(sv("rect", { x: s.x, y: -(s.y + s.h), width: s.w, height: s.h, class: "sec" }));
+  // the heat map is only rebuilt when the sound data or the map changed (it takes a moment)
+  const hkey = have ? `${n.made}|${n.points.length}|${p.base_map}` : "none";
+  if (SN.heatKey !== hkey) {
+    SN.heatKey = hkey; heat.replaceChildren();
+    if (have && base) {
+      const [lo, hi] = soundScale(n);
+      SN.lo = lo; SN.hi = hi;
+      heat.append(sv("image", { href: heatImage(n, base.bounds, lo, hi), x: base.bounds.x0, y: -base.bounds.y1, width: base.bounds.x1 - base.bounds.x0, height: base.bounds.y1 - base.bounds.y0,
+                                preserveAspectRatio: "none" }));
+    }
+  }
+  const pts = (PL.survey && PL.survey.points) || [];
+  const showRoute = SN.routeUser == null ? !have : SN.routeUser;
+  $("sn-route").checked = showRoute; $("sn-route").disabled = !pts.length;
+  if (showRoute && pts.length) {
+    const st = PL.survey.start || pts[0];
+    route.append(sv("polyline", { points: [[st.x, st.y], ...pts.map(q => [q.x, q.y]), [st.x, st.y]].map(q => `${q[0]},${-q[1]}`).join(" "), class: "route" }));
+    for (const q of pts) route.append(sv("circle", { cx: q.x, cy: -q.y, r: 0.13, fill: "#1f6feb", stroke: "#fff", "stroke-width": 0.03 }),
+                                       sv("text", { x: q.x, y: -q.y + 0.01, "font-size": 0.15, fill: "#fff", "font-weight": 700, "text-anchor": "middle", "dominant-baseline": "middle", "pointer-events": "none" }, q.k));
+  }
+  $("sn-key").hidden = !have;
+  if (have) {
+    $("sn-title").textContent = n.calibrated ? "Sound level (dB)" : "Level (dBFS, to compare places)";
+    const ticks = []; for (let v = SN.hi; v >= SN.lo; v -= 5) ticks.push(v);
+    $("sn-ticks").replaceChildren(...ticks.map(v => { const e = document.createElement("span"); e.textContent = v; return e; }));
+  }
+  const note = $("sn-note");
+  note.className = have && !n.calibrated ? "bad" : "";
+  note.textContent = !have
+    ? "No sound map yet. " + (pts.length ? `The blue dots are the ${pts.length} planned listening points (${PL.survey.length_m} m in all): the robot stops at each one to listen. ` : "")
+      + "After the survey, on this computer: python tools/noise_map.py run_data/noise_log.csv (see docs/sound_map.md)."
+    : `Measured at ${n.points.length} places from ${n.readings} readings (${(n.source || []).join(", ")}), made ${n.made}. Colours fade out away from where the robot listened: faded or grey = not measured there.`
+      + (n.floor != null ? `\nPlaces at or below ${n.floor} ${n.unit} are the microphone's own noise floor: the real level there is lower.` : "")
+      + (n.calibrated ? "" : "\nNot calibrated: dBFS (always negative), good only for comparing places.")
+      + (showRoute && pts.length ? "\nBlue dashed line: the planned route between the numbered listening points. The solid pale-blue line on the floor plan is where the robot has been." : "");
+  drawSndRobot();
+}
+function drawSndRobot() {
+  const g = $("sn-robot"), pose = PL.pose;
+  g.replaceChildren();
+  if (!pose || pose.x == null) return;
+  const yaw = pose.yaw || 0;
+  g.append(sv("circle", { cx: pose.x, cy: -pose.y, r: 0.17, fill: "#e0463c", stroke: "#111", "stroke-width": 0.04, opacity: pose.localised === false ? 0.5 : 1 }),
+           sv("line", { x1: pose.x, y1: -pose.y, x2: pose.x + 0.38 * Math.cos(yaw), y2: -(pose.y + 0.38 * Math.sin(yaw)), stroke: "#111", "stroke-width": 0.06 }));
+}
+{
+  const svg = $("snd"), toMap2 = ev => { const q = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(svg.getScreenCTM().inverse()); return [q.x, -q.y]; };
+  const zoom = (f, cx, cy) => {
+    const [x, y, w, h] = SN.view, nx = cx == null ? x + w / 2 : cx, ny = cy == null ? y + h / 2 : cy;
+    SN.view = [nx - (nx - x) / f, ny - (ny - y) / f, w / f, h / f]; snApply();
+  };
+  svg.addEventListener("wheel", ev => { ev.preventDefault(); const q = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(svg.getScreenCTM().inverse()); zoom(ev.deltaY < 0 ? 1.2 : 1 / 1.2, q.x, q.y); }, { passive: false });
+  svg.addEventListener("pointerdown", ev => { SN.drag = { sx: ev.clientX, sy: ev.clientY, view: SN.view.slice() }; svg.setPointerCapture(ev.pointerId); });
+  svg.addEventListener("pointerup", () => { SN.drag = null; });
+  svg.addEventListener("pointermove", ev => {
+    const [x, y] = toMap2(ev), d = SN.drag, n = PL.noise;
+    let text = `map x ${x.toFixed(2)} m   y ${y.toFixed(2)} m`;
+    if (n && n.available && n.points) {
+      const r = soundAt(n.points, x, y);
+      text += r && r.a >= 0.35 ? `   about ${r.v.toFixed(0)} ${n.unit}` + (n.floor != null && r.v <= n.floor ? " (at the microphone's floor: quieter than this)" : "") : "   not measured here";
+    }
+    $("sn-cursor").textContent = text;
+    if (!d || !svg.getScreenCTM()) return;
+    const k = svg.getScreenCTM().a;
+    SN.view = [d.view[0] - (ev.clientX - d.sx) / k, d.view[1] - (ev.clientY - d.sy) / k, d.view[2], d.view[3]]; snApply();
+  });
+  $("sn-zin").onclick = () => zoom(1.4); $("sn-zout").onclick = () => zoom(1 / 1.4);
+  $("sn-fit").onclick = () => { if (SN.full) { SN.view = SN.full.slice(); snApply(); } };
+  $("sn-big").onclick = () => { const big = $("sndbox").classList.toggle("big"); $("sn-big").textContent = big ? "Shrink" : "Enlarge"; };
+  $("sn-route").onchange = () => { SN.routeUser = $("sn-route").checked; drawSoundMap(); };
+}
+function planNote() {
+  if (ED.on) return;
+  if (PL.flash) { $("plannote").className = ""; $("plannote").textContent = PL.flash; return; }      // the result of the last Save stays until the next edit
+  const p = PL.plan; if (!p || !p.available) return;
+  const thin = ED.items.filter(isThin).length;
+  $("plannote").className = "";
+  $("plannote").textContent = `${ED.items.filter(i => i.kind === "section").length} sections · ${ED.items.filter(i => i.kind === "keepout").length} keep-out zones`
+    + (ED.fixed.length ? ` (+${ED.fixed.length} polygon, edited in the file)` : "") + ` · ${p.shelves.length} shelf poses`
+    + (thin ? ` · ${thin} thin zone${thin > 1 ? "s" : ""} (orange): a desk is usually 60 cm deep` : "") + (PL.base ? "" : " · map picture missing");
+}
+function drawItems() {
+  const g = $("pl-items"), h = $("pl-handles");
+  g.replaceChildren(); h.replaceChildren();
+  for (const z of ED.fixed) g.append(sv("polygon", { points: z.points.map(q => `${q[0]},${-q[1]}`).join(" "), class: "keep fixed" }));
+  const order = [...ED.items].sort((a, b) => (b.kind === "section") - (a.kind === "section"));     // sections underneath, zones on top
+  for (const it of order) {
+    const [w, hh] = sizeOf(it), cls = it.kind === "section" ? "sec" : "keep";
+    g.append(sv("rect", { x: it.x1, y: -it.y2, width: w, height: hh, rx: 0.04, class: cls + (isThin(it) ? " thin" : "") + (ED.sel === it ? " sel" : "") }),
+             sv("text", { x: it.x1 + w / 2, y: -(it.y1 + hh / 2), "font-size": Math.max(0.16, Math.min(0.3, w / Math.max(4, it.name.length) * 1.6)),
+                          "text-anchor": "middle", "dominant-baseline": "middle", class: cls + "-label" }, it.name));
+  }
+  if (ED.on && ED.sel) {
+    const it = ED.sel, r = PL.view[2] * 0.012;
+    [[it.x1, it.y1], [it.x2, it.y1], [it.x2, it.y2], [it.x1, it.y2]].forEach(([x, y], i) => {
+      const c = sv("circle", { cx: x, cy: -y, r, class: "handle" }); c.dataset.h = i; h.append(c);
+    });
+  }
+}
+function drawPlanRobot() {
+  const g = $("pl-robot"), pose = PL.pose;
+  g.replaceChildren();
+  const trail = (PL.live && PL.live.trail) || [];
+  if (trail.length > 1) g.append(sv("polyline", { points: trail.map(q => `${q[0]},${-q[1]}`).join(" "), class: "trail" }));
+  if (!pose || pose.x == null) return;
+  const yaw = pose.yaw || 0;
+  g.append(sv("circle", { cx: pose.x, cy: -pose.y, r: 0.2, class: "robot", opacity: pose.localised === false ? 0.45 : 1 }),
+           sv("line", { x1: pose.x, y1: -pose.y, x2: pose.x + 0.4 * Math.cos(yaw), y2: -(pose.y + 0.4 * Math.sin(yaw)), class: "robot-arrow" }));
+}
+
+// ---- pointer: read coordinates, pan, zoom, draw, move, resize ----
+const planSvg = $("plan");
+function toSvg(ev) { return new DOMPoint(ev.clientX, ev.clientY).matrixTransform(planSvg.getScreenCTM().inverse()); }
+function toMap(ev) { const p = toSvg(ev); return [p.x, -p.y]; }
+function hit(x, y) {
+  const order = [...ED.items].sort((a, b) => (a.kind === "section") - (b.kind === "section") || sizeOf(a)[0] * sizeOf(a)[1] - sizeOf(b)[0] * sizeOf(b)[1]);
+  return order.find(it => x >= it.x1 && x <= it.x2 && y >= it.y1 && y <= it.y2) || null;
+}
+function normalise(it) { if (it.x1 > it.x2) [it.x1, it.x2] = [it.x2, it.x1]; if (it.y1 > it.y2) [it.y1, it.y2] = [it.y2, it.y1]; }
+function select(it) { ED.sel = it; drawItems(); syncForm(); }
+function markDirty() { ED.dirty = true; $("pl-dirty").textContent = "unsaved changes"; }
+function planCursorClass() { planSvg.className.baseVal = "tool-" + (!ED.on || ED.tool === "pan" ? "pan" : ED.tool === "select" ? "select" : "draw"); }
+
+planSvg.addEventListener("pointerdown", ev => {
+  if (ev.button > 1) return;
+  try { planSvg.setPointerCapture(ev.pointerId); } catch (_) {}
+  const [x, y] = toMap(ev), hnd = ev.target.dataset ? ev.target.dataset.h : undefined;
+  if (PL.pick && !ED.on) {                                              // pick a point for the robot to go to; a drag also sets the way it faces
+    PL.pickDown = { x, y };
+    setTarget({ kind: "point", short: "point", label: `the point (${x.toFixed(2)}, ${y.toFixed(2)})`, x: r2(x), y: r2(y), yaw: null }, null);
+    return;
+  }
+  if (ED.on && ED.tool === "select" && hnd !== undefined && ED.sel) {
+    const it = ED.sel, i = +hnd, ax = [it.x2, it.x1, it.x1, it.x2][i], ay = [it.y2, it.y2, it.y1, it.y1][i];   // the opposite corner stays put
+    ED.drag = { mode: "resize", it, ax, ay };
+  } else if (ED.on && ED.tool === "select") {
+    const it = hit(x, y);
+    select(it);
+    ED.drag = it ? { mode: "move", it, dx: x - it.x1, dy: y - it.y1, w: it.x2 - it.x1, h: it.y2 - it.y1 }
+                 : { mode: "pan", sx: ev.clientX, sy: ev.clientY, view: PL.view.slice() };
+  } else if (ED.on && (ED.tool === "keepout" || ED.tool === "section")) {
+    ED.drag = { mode: "draw", kind: ED.tool, x0: snap(x), y0: snap(y), x1: snap(x), y1: snap(y) };
+  } else {
+    ED.drag = { mode: "pan", sx: ev.clientX, sy: ev.clientY, view: PL.view.slice() };
+  }
+});
+planSvg.addEventListener("pointerup", () => { if (PL.pickDown) { PL.pickDown = null; setPick(false); goRefresh(); } });
+planSvg.addEventListener("pointermove", ev => {
+  const [x, y] = toMap(ev), d = ED.drag;
+  $("plancursor").textContent = `map x ${x.toFixed(2)} m   y ${y.toFixed(2)} m` + (ED.on ? "   (edges snap to 5 cm)" : "");
+  if (PL.pickDown && PL.target) {
+    if (Math.hypot(x - PL.pickDown.x, y - PL.pickDown.y) > 0.15) { PL.target.yaw = Math.atan2(y - PL.pickDown.y, x - PL.pickDown.x); drawTarget(); goRefresh(); }
+    return;
+  }
+  if (!d) return;
+  if (d.mode === "pan") {
+    const k = planSvg.getScreenCTM().a;
+    PL.view = [d.view[0] - (ev.clientX - d.sx) / k, d.view[1] - (ev.clientY - d.sy) / k, d.view[2], d.view[3]];
+    applyView();
+  } else if (d.mode === "move") {
+    d.it.x1 = snap(x - d.dx); d.it.y1 = snap(y - d.dy); d.it.x2 = d.it.x1 + d.w; d.it.y2 = d.it.y1 + d.h;
+    markDirty(); drawItems(); syncForm();
+  } else if (d.mode === "resize") {
+    d.it.x1 = d.ax; d.it.y1 = d.ay; d.it.x2 = snap(x); d.it.y2 = snap(y); normalise(d.it);
+    markDirty(); drawItems(); syncForm();
+  } else if (d.mode === "draw") {
+    d.x1 = snap(x); d.y1 = snap(y);
+    const x0 = Math.min(d.x0, d.x1), y0 = Math.min(d.y0, d.y1);
+    $("pl-handles").replaceChildren(sv("rect", { x: x0, y: -(y0 + Math.abs(d.y1 - d.y0)), width: Math.abs(d.x1 - d.x0), height: Math.abs(d.y1 - d.y0), class: "draft" }));
+  }
+});
+function endDrag() {
+  const d = ED.drag; ED.drag = null;
+  if (!d || d.mode !== "draw") { if (d && d.mode !== "pan") drawItems(); return; }
+  $("pl-handles").replaceChildren();
+  const w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+  if (w < MIN_SIDE - 1e-9 || h < MIN_SIDE - 1e-9) { $("plannote").className = "bad"; $("plannote").textContent = `Too small: drag a rectangle at least ${MIN_SIDE.toFixed(2)} m each way.`; return; }
+  const names = new Set(ED.items.map(i => i.name.toLowerCase()));
+  let n = 1, name;
+  const base = d.kind === "section" ? "Section " : "zone";
+  while (names.has((name = base + n).toLowerCase())) n++;
+  const it = { id: ++ED.n, kind: d.kind, name, x1: Math.min(d.x0, d.x1), y1: Math.min(d.y0, d.y1), x2: Math.max(d.x0, d.x1), y2: Math.max(d.y0, d.y1) };
+  ED.items.push(it); markDirty();
+  setTool("select"); select(it);
+  $("pl-name").focus(); $("pl-name").select();                    // type the real name straight away
+}
+planSvg.addEventListener("pointerup", endDrag);
+planSvg.addEventListener("pointercancel", endDrag);
+planSvg.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const p = toSvg(ev); zoomAt(ev.deltaY < 0 ? 1 / 1.2 : 1.2, p.x, p.y);
+}, { passive: false });
+function zoomAt(f, cx, cy) {
+  const v = PL.view, full = PL.full;
+  const nw = Math.min(full[2] * 1.2, Math.max(1.5, v[2] * f)), nh = nw * v[3] / v[2];
+  PL.view = [cx - (cx - v[0]) * nw / v[2], cy - (cy - v[1]) * nh / v[3], nw, nh];
+  applyView(); drawItems();
+}
+$("pl-zin").onclick = () => zoomAt(1 / 1.4, PL.view[0] + PL.view[2] / 2, PL.view[1] + PL.view[3] / 2);
+$("pl-zout").onclick = () => zoomAt(1.4, PL.view[0] + PL.view[2] / 2, PL.view[1] + PL.view[3] / 2);
+$("pl-fit").onclick = () => { if (PL.full) { PL.view = PL.full.slice(); applyView(); drawItems(); } };
+$("pl-big").onclick = () => {
+  const big = $("planbox").classList.toggle("big");
+  $("pl-big").textContent = big ? "Shrink" : "Enlarge";
+};
+
+// ---- the toolbar and the form for the selected item ----
+function setTool(tool) {
+  ED.tool = tool;
+  document.querySelectorAll("#pl-tools [data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === tool));
+  planCursorClass();
+}
+document.querySelectorAll("#pl-tools [data-tool]").forEach(b => b.onclick = () => setTool(b.dataset.tool));
+function startEdit() {
+  if (!PL.plan || !PL.plan.available) return;
+  ED.on = true; ED.dirty = false; PL.flash = "";
+  $("pl-tools").hidden = false; $("pl-saverow").hidden = false; $("pl-edit").hidden = true; $("pl-dirty").textContent = "";
+  $("plannote").className = "";
+  $("plannote").textContent = "Editing. Select a zone to move it (drag), resize it (drag a corner) or type exact numbers; draw new ones with + Keep-out zone / + Section.\nNothing is written until you press Save.";
+  setTool("select"); drawItems(); setPick(false); goRefresh();
+}
+function stopEdit() {
+  ED.on = false; ED.sel = null; ED.drag = null;
+  $("pl-tools").hidden = true; $("pl-saverow").hidden = true; $("pl-edit").hidden = false; $("pl-sel").hidden = true;
+  planCursorClass(); loadPlan(); goRefresh();
+}
+$("pl-edit").onclick = startEdit;
+$("pl-cancel").onclick = () => { if (!ED.dirty || confirm("Throw away your changes?")) stopEdit(); };
+function syncForm() {
+  const it = ED.sel, box = $("pl-sel");
+  box.hidden = !(ED.on && it);
+  if (box.hidden) return;
+  const set = (id, v) => { const e = $(id); if (document.activeElement !== e) e.value = v; };
+  set("pl-name", it.name); set("pl-x1", r2(it.x1)); set("pl-x2", r2(it.x2)); set("pl-y1", r2(it.y1)); set("pl-y2", r2(it.y2));
+  $("pl-kind").textContent = it.kind === "section" ? "section (what the visitor screen shows)" : "keep-out zone (the robot never drives in)";
+  const [w, h] = sizeOf(it);
+  $("pl-size").textContent = `${w.toFixed(2)} × ${h.toFixed(2)} m` + (isThin(it) ? "  thin: a desk is usually 60 cm deep" : "");
+  $("pl-size").className = isThin(it) ? "warn" : "";
+}
+function nameOk(it, name) {
+  if (!(it.kind === "section" ? SECTION_NAME : KEEP_NAME).test(name) || name !== name.trim()) return false;
+  return !ED.items.some(o => o !== it && o.name.toLowerCase() === name.toLowerCase());
+}
+$("pl-name").addEventListener("input", () => {
+  const it = ED.sel; if (!it) return;
+  const name = $("pl-name").value, ok = nameOk(it, name);
+  $("pl-name").classList.toggle("bad", !ok);
+  if (ok) { it.name = name; markDirty(); drawItems(); }
+});
+for (const k of ["x1", "x2", "y1", "y2"]) {
+  $("pl-" + k).addEventListener("change", () => {
+    const it = ED.sel, v = parseFloat($("pl-" + k).value);
+    if (!it || !Number.isFinite(v)) { syncForm(); return; }
+    it[k] = r2(v); normalise(it); markDirty(); drawItems(); syncForm();
+  });
+}
+function deleteSelected() {
+  if (!ED.on || !ED.sel) return;
+  ED.items = ED.items.filter(i => i !== ED.sel); ED.sel = null; markDirty(); drawItems(); syncForm();
+}
+$("pl-del").onclick = deleteSelected;
+document.addEventListener("keydown", ev => {
+  if (!ED.on || !ED.sel || /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "")) return;
+  if (ev.key === "Delete" || ev.key === "Backspace") { ev.preventDefault(); deleteSelected(); }
+});
+$("pl-save").onclick = async () => {
+  const bad = ED.items.filter(i => !nameOk(i, i.name));
+  if (bad.length) { $("plannote").className = "bad"; $("plannote").textContent = `Fix the name of ${bad[0].name || "an item"} first (letters, digits, _ and -; sections may have spaces; no duplicates).`; return; }
+  const body = {
+    keepout: ED.items.filter(i => i.kind === "keepout").map(i => ({ name: i.name, rect: [r2(i.x1), r2(i.y1), r2(i.x2), r2(i.y2)] })),
+    sections: ED.items.filter(i => i.kind === "section").map(i => ({ name: i.name, x: r2(i.x1), y: r2(i.y1), w: r2(i.x2 - i.x1), h: r2(i.y2 - i.y1) })),
+  };
+  $("pl-save").disabled = true;
+  try {
+    const r = await fetch("/plan-edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) {
+      ED.dirty = false; stopEdit();
+      note(`floor plan edited: ${d.zones} keep-out zones, ${d.sections} sections (${d.changed.join(", ") || "no change"})`);
+      PL.flash = d.changed.length ? `Saved on this computer: ${d.zones} keep-out zones, ${d.sections} sections (old files in data/backups).\nThe robot only reads them at start: copy them to the Dell, then restart its stack.`
+                                  : "Nothing changed.";
+      planNote();
+    } else {
+      $("plannote").className = "bad";
+      $("plannote").textContent = r.status === 403 ? "Saving only works on the robot's own computer: open http://localhost:8765/operator there."
+                                                   : "Not saved:\n- " + (d.problems || [d.error || "HTTP " + r.status]).join("\n- ");
+    }
+  } catch (e) { $("plannote").className = "bad"; $("plannote").textContent = "Not saved: " + e; }
+  $("pl-save").disabled = false;
+};
+planCursorClass();
+loadPlan(); setInterval(loadPlan, 5000);
+// ---- drive to a section from the page: the robot program sends the goal (operator command `drive x y yaw`), which only a real base
+// (python -m robot sim --base turtlebot ...) can carry out. The row is hidden otherwise. ----
+function goTargets() {
+  const p = PL.plan, out = [];
+  if (!p || !p.available) return out;
+  for (const s of p.sections || []) {
+    const shelf = (p.shelves || []).find(h => (h.section || "").toLowerCase() === s.name.toLowerCase());
+    out.push(shelf ? { label: `${s.name} section (shelf ${shelf.code})`, x: shelf.x, y: shelf.y, yaw: shelf.yaw }
+                   : { label: `${s.name} section (its middle)`, x: s.x + s.w / 2, y: s.y + s.h / 2, yaw: 0 });
+  }
+  if (p.station) out.push({ label: "Station (home)", x: p.station.x, y: p.station.y, yaw: p.station.yaw || 0 });
+  return out;
+}
+// the target: one of the section buttons or a point picked on the map; the robot program sends the goal when Go is pressed and confirmed
+const zoneAt = (x, y) => (ED.items.find(i => i.kind === "keepout" && x >= i.x1 && x <= i.x2 && y >= i.y1 && y <= i.y2) || {}).name;
+function drawTarget() {
+  const g = $("pl-target"), t = PL.target;
+  g.replaceChildren();
+  if (!t) return;
+  g.append(sv("circle", { cx: t.x, cy: -t.y, r: 0.22, class: "target" }), sv("circle", { cx: t.x, cy: -t.y, r: 0.04, fill: "#ff8a00" }));
+  if (t.yaw != null) g.append(sv("line", { x1: t.x, y1: -t.y, x2: t.x + 0.55 * Math.cos(t.yaw), y2: -(t.y + 0.55 * Math.sin(t.yaw)), class: "target-arrow" }));
+}
+function setTarget(t, button) {
+  PL.target = t;
+  for (const b of $("pl-gobtns").children) b.classList.toggle("sel", b === button);
+  drawTarget(); goRefresh();
+}
+function setPick(on) {
+  PL.pick = on;
+  $("pl-pick").classList.toggle("picking", on); planSvg.classList.toggle("picking", on);
+  $("pl-pick").textContent = on ? "Click the map ... (Esc cancels)" : "Pick a point on the map";
+}
+function fillGo() {
+  const box = $("pl-gobtns"), targets = goTargets(), keep = PL.target && PL.target.kind === "section" ? PL.target.label : null;
+  if (keep) PL.target = null;                                                  // found again below if the plan still has it
+  box.replaceChildren(...targets.map(t => {
+    const b = document.createElement("button");
+    b.textContent = t.short; b.title = t.label;
+    b.onclick = () => { setPick(false); setTarget({ ...t }, b); };
+    if (keep === t.label) { b.classList.add("sel"); PL.target = { ...t }; }     // the plan is reloaded every few seconds: the chosen section stays chosen
+    return b;
+  }));
+  drawTarget(); goRefresh();
+}
+function goRefresh() {
+  const l = PL.link || {}, connected = l.backend === "turtlebot", localised = connected && l.localised !== false && l.status !== "lost";
+  $("pl-go").hidden = ED.on; $("pl-gostate").hidden = ED.on;
+  $("pl-gobtn").disabled = !PL.target || !localised;
+  const el = $("pl-gostate"), t = PL.target;
+  el.className = "gostate" + (connected && !localised ? " bad" : "");
+  if (PL.noteAt && Date.now() - PL.noteAt < 8000) { el.textContent = PL.noteText; return; }      // show a refusal for a few seconds
+  const nav = l.nav || {};
+  const where = nav.status === "active" ? `driving${nav.distance_left != null ? `, ${Number(nav.distance_left).toFixed(1)} m left` : ""}`
+    : nav.status === "succeeded" ? "arrived" : nav.status === "failed" ? `failed: ${nav.reason || "?"}` : nav.status === "cancelled" ? `stopped (${nav.reason || "cancelled"})` : "";
+  const target = t ? `Target: ${t.label}${t.yaw != null ? ` facing ${Math.round(((t.yaw * 180 / Math.PI) % 360 + 360) % 360)}°` : ""}.` : "Choose a section, or pick a point on the map.";
+  el.textContent = !connected ? `${target}\nNot connected to the robot's base, so Go is off: start  python -m robot sim --base turtlebot --base-url http://127.0.0.1:8010  (ROBOT_LINK_TOKEN set, tunnel up).`
+    : !localised ? `${target}\nNOT LOCALISED: it will not drive.` : `${target}${where ? "  " + where : ""}`;
+}
+function goTargets() {
+  const p = PL.plan, out = [];
+  if (!p || !p.available) return out;
+  for (const s of p.sections || []) {
+    const shelf = (p.shelves || []).find(h => (h.section || "").toLowerCase() === s.name.toLowerCase());
+    out.push(shelf ? { kind: "section", short: s.name, label: `${s.name} section (shelf ${shelf.code})`, x: shelf.x, y: shelf.y, yaw: shelf.yaw }
+                   : { kind: "section", short: s.name, label: `${s.name} section (its middle)`, x: s.x + s.w / 2, y: s.y + s.h / 2, yaw: 0 });
+  }
+  if (p.station) out.push({ kind: "section", short: "Station", label: "Station (home)", x: p.station.x, y: p.station.y, yaw: p.station.yaw || 0 });
+  return out;
+}
+function showGo(s) {
+  PL.link = s.link || {};
+  if (s.operator_note && s.operator_note.id !== PL.noteId) { PL.noteId = s.operator_note.id; PL.noteAt = Date.now(); PL.noteText = s.operator_note.text; }
+  goRefresh();
+}
+$("pl-pick").onclick = () => { if (ED.on) return; setPick(!PL.pick); goRefresh(); };
+window.addEventListener("keydown", ev => { if (ev.key === "Escape" && PL.pick) { setPick(false); goRefresh(); } });
+$("pl-gobtn").onclick = () => {
+  const t = PL.target;
+  if (!t) return;
+  const bad = t.kind === "point" ? zoneAt(t.x, t.y) : null;
+  if (bad) { PL.noteAt = Date.now(); PL.noteText = `That point is inside the keep-out zone ${bad}: the robot will not go there. Pick another.`; goRefresh(); return; }
+  if (!confirm(`The robot will DRIVE to ${t.label}.\n\nIs the area clear, and is someone at the power switch?`)) return;
+  send("drive", `${t.x.toFixed(2)} ${t.y.toFixed(2)}` + (t.yaw != null ? ` ${t.yaw.toFixed(2)}` : ""));
+  PL.noteAt = Date.now(); PL.noteText = "sent: " + t.label;
+  goRefresh();
+};
+$("pl-gostop").onclick = () => send("stop");
+// the robot's position: the read-only live feed (/pose.json, twice a second, works without the robot program) or, failing that, the robot program's
+function usePose() {
+  const live = PL.live && PL.live.available ? PL.live.pose : null, p = live || PL.linkPose;
+  if (JSON.stringify(p || null) !== JSON.stringify(PL.pose)) { PL.pose = p || null; drawPlanRobot(); drawSndRobot(); }
+  const el = $("pl-live");
+  if (live) {
+    const nav = PL.live.nav || {}, deg = Math.round(((live.yaw * 180 / Math.PI) % 360 + 360) % 360);
+    el.className = "";
+    el.textContent = `Robot at x ${live.x.toFixed(2)}, y ${live.y.toFixed(2)} m, facing ${deg}° · ${live.localised ? "LOCALISED" : "NOT LOCALISED (the position may be wrong)"}`
+      + (nav.status && nav.status !== "idle" ? ` · ${nav.status}${nav.distance_left != null ? `, ${Number(nav.distance_left).toFixed(1)} m to go` : ""}` : " · standing still");
+  } else {
+    el.className = "off";
+    el.textContent = PL.linkPose ? `Robot at x ${PL.linkPose.x.toFixed(2)}, y ${PL.linkPose.y.toFixed(2)} m (from the robot program)`
+      : "Robot position: " + ((PL.live && PL.live.reason) || "waiting for the base ...");
+  }
+}
+async function pollPose() {
+  if (document.hidden) return;
+  PL.live = await fetch("/pose.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null);
+  usePose();
+}
+pollPose(); setInterval(pollPose, 500);
+function showState(s) {
+  showGo(s);
+  const lp = (s.link || {}).pose;
+  PL.linkPose = lp && lp.x != null ? lp : null;
+  usePose();
+  $("path").textContent = s.state || "–";
+  $("meta").textContent = `zone ${s.zone} (${s.social})${s.fixed ? ", fixed mode" : ""} · ${s.style || ""}`;
+  for (const z of ["quiet", "common"]) $("zone-" + z).classList.toggle("on", s.zone === z);
+  if (s.states && $("states").options.length !== s.states.length) {
+    $("states").replaceChildren(...s.states.map(n => new Option(n, n)));
+  }
+  showBooks(s);
+  showMap(s);
+  showBase(s);
+  showMap2(s);
+  showMic(s);
+  showSystem(s);
+  const g = s.guide;                                    // a guided scenario test (python -m robot scenarios live)
+  $("guide").hidden = !g;
+  if (g) { $("guideno").textContent = `${g.n} of ${g.total} (${g.scenario})`; $("guidetext").textContent = g.text; }
+  if (s.state && s.state !== lastPath) { note(`${lastPath || "(start)"} → ${s.state}`); lastPath = s.state; }
+}
+$("sysbtn").onclick = () => send("system", $("sysbtn").classList.contains("running") ? "stop" : "start");
+function showSystem(s) {            // running or stopped (Start / Stop): stopped, the camera shows but nobody is greeted
+  const on = s.active !== false;
+  $("sysbtn").classList.toggle("running", on);
+  $("sysbtn").textContent = on ? "■ Stop" : "▶ Start";
+  const f = s.faces;                  // what detects the faces, and whether it works
+  const faces = !f ? "faces: off (typed)" : f.error ? `faces: NOT WORKING (${f.error})` : `faces: ${f.by}` + (on ? ` · ${f.count} in view` : "");
+  $("sysnote").textContent = (on ? "running" : "stopped: nobody is greeted until Start") + " · " + faces;
+  $("sysnote").className = "sysnote" + (on && !(f && f.error) ? "" : " stopped");
+}
+function showChoices(u) {          // the buttons the robot's own screen shows: tapping one is the visitor tapping it
+  const p = u.payload || {};
+  const opts = (u.view === "options" && p.options && p.options.length ? p.options : u.options) || [];
+  const buttons = opts.filter(o => o && o.id).map(o => {
+    const b = document.createElement("button"); b.textContent = o.label || o.id;
+    b.title = "pick " + o.id; b.onclick = () => send("pick", o.id);
+    return b;
+  });
+  if (!buttons.length) { const h = document.createElement("span"); h.className = "hint"; h.textContent = "(no buttons on the screen right now)"; buttons.push(h); }
+  $("choices").replaceChildren(...buttons);
+}
+function showScreen(u) {
+  showChoices(u);
+  const buttons = (u.options || []).map(o => `[${o.label}]`).join(" ");
+  $("curview").textContent = `(now: ${u.view || "face"})`;
+  $("screen").textContent = `${u.view || "face"} · ${u.layout} · ${u.title || "(no title)"} — ${u.text || "(no text)"} ${buttons}`;
+}
+document.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => send("zone", b.dataset.zone));
+for (const setting of ["look", "theme"]) {             // how the screen looks: the display server keeps it and tells every open screen
+  document.querySelectorAll(`[data-${setting}]`).forEach(b => b.onclick = () => send(setting, b.dataset[setting]));
+}
+function showSetting(setting, value) {
+  document.querySelectorAll(`[data-${setting}]`).forEach(b => b.classList.toggle("on", b.dataset[setting] === value));
+}
+$("goto").onclick = () => send("goto", $("states").value);
+$("guidenext").onclick = () => send("next");
+$("guideabort").onclick = () => send("abort");
+$("reset").onclick = () => send("reset");
+$("resetall").onclick = () => send("reset", "all");
+$("viewform").onsubmit = e => { e.preventDefault(); send("screen", `${$("views").value} ${$("viewarg").value.trim()}`.trim()); };
+$("talk").onclick = () => send("listen");
+const MIC = { listening: "Listening… talk now (press Talk again to finish)", hearing: "Hearing you…", transcribing: "Transcribing…" };
+function showMic(s) {
+  const mic = s.mic || "none", box = $("mic"), btn = $("talk");
+  btn.disabled = mic === "none";
+  btn.title = mic === "none" ? "No microphone: run the robot with --live or --speak" : btn.title;
+  btn.classList.toggle("on", mic === "listening" || mic === "hearing");
+  btn.textContent = mic === "listening" || mic === "hearing" ? "⏹ Done" : "🎤 Talk";
+  box.hidden = mic === "none" || (mic === "idle" && !s.heard);
+  box.textContent = MIC[mic] || (s.heard ? "Heard: " + s.heard : "");
+  box.className = "micline" + (MIC[mic] ? " live" : "");
+}
+$("sayform").onsubmit = e => { e.preventDefault(); const t = $("say").value.trim(); if (t) { send("say", t); $("say").value = ""; } };
+
+// the robot's camera: a multipart stream; if it is not there yet, look again every few seconds
+function camera() {
+  const img = $("camera");
+  img.onload = () => { $("camnote").textContent = "Live."; };
+  img.onerror = () => { $("camnote").textContent = "No camera picture yet (run the simulator with --camera)."; setTimeout(camera, 3000); };
+  img.src = "/camera.mjpg?" + Date.now();
+}
+camera();
+
+function connect() {
+  const es = new EventSource("/events");
+  es.onopen = () => { $("conn").textContent = "live"; $("conn").className = "ok"; };
+  es.onmessage = ev => {
+    try {
+      const d = JSON.parse(ev.data);
+      if (d.state) showState(d.state);
+      if (d.screen) showScreen(d.screen);
+      if (d.theme) showSetting("theme", d.theme);
+      if (d.look) showSetting("look", d.look);
+    } catch (_) {}
+  };
+  es.onerror = () => { $("conn").textContent = "disconnected, retrying…"; $("conn").className = ""; };
+}
+connect();
+</script>
+</body>
+</html>

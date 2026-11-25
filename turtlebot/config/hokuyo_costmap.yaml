@@ -1,0 +1,46 @@
+# Extra move_base settings for the Hokuyo LiDAR.
+# Lets the obstacle layers use the Hokuyo scan at any mounting height
+# (the default TurtleBot settings only accept a scan at 0.25 - 0.35 m),
+# and slows the robot down a little for safer driving.
+
+# Smaller safety margin around obstacles, so narrow gaps in a noisy
+# (camera-made) map don't get completely blocked. Robot radius is ~0.18 m.
+local_costmap:
+  inflation_layer:
+    inflation_radius: 0.30
+    cost_scaling_factor: 5.0
+  obstacle_layer:
+    scan:
+      data_type: LaserScan
+      topic: scan
+      marking: true
+      clearing: true
+      min_obstacle_height: 0.0
+      max_obstacle_height: 2.0
+
+global_costmap:
+  # plan on the cleaned camera map (small noisy specks removed by map_cleaner.py)
+  static_layer:
+    map_topic: /map_clean
+  inflation_layer:
+    inflation_radius: 0.30
+    cost_scaling_factor: 5.0
+  obstacle_layer:
+    scan:
+      data_type: LaserScan
+      topic: scan
+      marking: true
+      clearing: true
+      min_obstacle_height: 0.0
+      max_obstacle_height: 2.0
+
+DWAPlannerROS:
+  max_vel_x: 0.25
+  max_vel_trans: 0.25
+
+# Global planner: allow paths through grey (unknown) areas of the camera map,
+# otherwise it takes long detours around them. If the clicked spot itself is
+# blocked, accept a spot within 0.3 m.
+NavfnROS:
+  allow_unknown: true
+  default_tolerance: 0.3

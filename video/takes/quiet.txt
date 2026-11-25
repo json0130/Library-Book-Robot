@@ -1,0 +1,11 @@
+# Simulated quiet-zone visit: the patron asks questions and does not return a book (tools/video/sim_take.py).
+# Stuart waits, answers on the screen and makes no sound. The waits give the screen time to be read.
+wait 2
+engage
+wait 4
+hi Stuart, can you tell me about Dune?
+wait 8
+where is the science section?
+wait 7
+thanks, that's all
+wait 3

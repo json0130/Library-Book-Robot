@@ -8,3 +8,24 @@ models/
 data/graph.html
 data/catalog_draft.csv
 data/graph.png
+data/state/
+data/covers/
+data/screens/
+data/eval_runs/
+data/tts_cache/
+data/backups/
+
+# the sound map and the survey plan are made by tools/noise_map.py and tools/sound_survey.py (readings and plans of the room)
+data/noise/
+
+# film mode and the competition video (tools/video/, docs/video_shot_list.md): takes, footage and renders stay out of git
+recordings/
+video/footage/
+video/build/
+video/out/
+video/voiceover.wav
+video/voiceover/
+video/voiceover_tts/
+
+# runtime data from the robot (noise log, mic config): kept locally, not in git
+run_data/

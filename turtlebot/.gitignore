@@ -1,0 +1,20 @@
+# maps, recordings and logs made on the robot
+*.db
+*.pgm
+run_logs/
+noise_log*.csv
+noise_nav_log*.csv
+noise_nav_map*.png
+mic_config.json
+*.wav
+__pycache__/
+*.pyc
+
+# the Dell side of the link (this folder)
+.robot_link_env
+run_data/
+*.db.part
+
+# LiDAR maps made by run_lidar_mapping.sh (map_saver output: <name>.pgm, <name>.yaml, a .png and .bak-* copies)
+maps/*
+!maps/README.md

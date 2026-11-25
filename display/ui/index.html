@@ -4,13 +4,194 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Robot face</title>
+<script>
+// The colours of the second look (?ui=2): ?theme=light|dark, else what this page showed last, else dark. The operator page
+// changes it while the display runs (a {"theme"} event, below), so it is set before the first paint.
+(function () {
+  let t = new URLSearchParams(location.search).get("theme");
+  try { if (t !== "light" && t !== "dark") t = localStorage.getItem("theme"); } catch (_) { /* no storage: dark */ }
+  document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+})();
+</script>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  /* Sizes are in units of a 1024x600 7-inch screen (--u = 1 px there): body text 28 px, buttons at least 64 px. */
+  :root { --u: min(calc(100vw / 1024), calc(100vh / 600)); --cyan: #2debeb; --ink: #dffcfc; --muted: #8fc9c9;
+          --panel: #071a1c; --line: #164a4d; --scale: 1; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; color: var(--ink);
+               font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; }
+  body.zone-quiet { --scale: 1.12; }                 /* a quiet zone reads instead of listening: larger text */
+  body.touch { cursor: auto; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: #000; }
+  /* split: small animated eyes stay in the top-left corner while content is shown */
+  body.split canvas { inset: auto; top: calc(10 * var(--u)); left: calc(10 * var(--u)); width: calc(170 * var(--u));
+                      height: calc(108 * var(--u)); border-radius: calc(16 * var(--u)); }
+  body.full.captioned canvas { height: 76%; }
+  #view { position: fixed; inset: 0; box-sizing: border-box; display: none; }
+  body.split #view { display: block; padding: calc(16 * var(--u)) calc(20 * var(--u)) calc(16 * var(--u)) calc(196 * var(--u)); }
+  body.full #view { display: block; pointer-events: none; }
+  #view * { box-sizing: border-box; }
+  #view h1 { margin: 0; font-weight: 700; color: #fff; font-size: calc(38 * var(--u) * var(--scale)); line-height: 1.2; }
+  .clamp1, .clamp2 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+  .clamp1 { -webkit-line-clamp: 1; } .clamp2 { -webkit-line-clamp: 2; }
+  .btn { font: inherit; font-size: calc(28 * var(--u) * var(--scale)); min-height: calc(64 * var(--u)); padding: 0 calc(26 * var(--u));
+         color: var(--cyan); background: transparent; border: calc(3 * var(--u)) solid var(--cyan); border-radius: calc(32 * var(--u));
+         cursor: pointer; }
+  .btn.primary { color: #001314; background: var(--cyan); }
+  .btn:active { background: #fff; color: #000; }
+  .buttons { display: flex; flex-wrap: wrap; gap: calc(14 * var(--u)); }
+  .badges { display: flex; flex-wrap: wrap; gap: calc(10 * var(--u)); }
+  .badge { font-size: calc(26 * var(--u) * var(--scale)); padding: calc(4 * var(--u)) calc(14 * var(--u)); border-radius: calc(10 * var(--u));
+           background: var(--panel); border: calc(2 * var(--u)) solid var(--line); color: var(--cyan); }
+  .cover { display: block; object-fit: cover; background: #0b2426; border-radius: calc(10 * var(--u)); }
+
+  /* face: a caption under the face (quiet zone) */
+  .view-face .caption { position: absolute; left: calc(60 * var(--u)); right: calc(60 * var(--u)); bottom: calc(28 * var(--u));
+                        padding: calc(14 * var(--u)) calc(26 * var(--u)); border-radius: calc(20 * var(--u));
+                        background: rgba(7, 26, 28, .78); border: calc(2 * var(--u)) solid var(--line);
+                        text-align: center; font-size: calc(30 * var(--u) * var(--scale)); line-height: 1.3; color: var(--ink);
+                        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  /* a long caption is shrunk and given more lines, and the face makes room: in a quiet zone it is READ, so it is never cut off */
+  .view-face .caption.long { font-size: calc(25 * var(--u) * var(--scale)); -webkit-line-clamp: 6; padding: calc(12 * var(--u)) calc(22 * var(--u)); }
+  body.full.captioned-long canvas { height: 52%; }
+
+  /* what the robot would have said, to read (quiet zones): under the content, never cut off */
+  .message { margin: 0; font-size: calc(28 * var(--u) * var(--scale)); line-height: 1.32; color: var(--ink); }
+  .message.long { font-size: calc(24 * var(--u) * var(--scale)); }
+
+  /* quiet zone: the screen is the robot's only voice, so no word of it is cut off with "...": nothing is clamped and the text is
+     shrunk until it fits (views.js fit()) */
+  body.zone-quiet .clamp1, body.zone-quiet .clamp2, body.zone-quiet .item-reason, body.zone-quiet .view-face .caption,
+  body.zone-quiet .view-face .caption.long { display: block !important; -webkit-line-clamp: unset !important; overflow: visible !important; }
+  body.zone-quiet .view-face .caption { max-height: 52%; overflow: hidden !important; }
+  body.zone-quiet.full.captioned canvas { height: 52%; }
+  body.zone-quiet .view-options .opt-head { flex: none; }      /* it grows with what is said (and the text is shrunk to fit), it is not squeezed */
+
+  /* book_card */
+  .view-card { height: 100%; display: grid; grid-template-columns: calc(240 * var(--u)) 1fr; gap: calc(26 * var(--u)); align-items: center; }
+  .view-card .cover { width: calc(240 * var(--u)); height: calc(360 * var(--u)); }
+  .card-info { display: flex; flex-direction: column; gap: calc(12 * var(--u)); min-width: 0; }
+  .card-info .author { font-size: calc(28 * var(--u) * var(--scale)); color: var(--muted); }
+  .card-info .summary { margin: 0; font-size: calc(28 * var(--u) * var(--scale)); line-height: 1.3; }
+  .card-info .buttons { margin-top: calc(6 * var(--u)); }
+  /* with a message: a small cover and the title beside it, the message across the whole width, the buttons last */
+  .view-card.has-message { grid-template-columns: calc(150 * var(--u)) 1fr; grid-template-rows: auto 1fr auto; align-items: start;
+                           gap: calc(14 * var(--u)) calc(26 * var(--u)); }
+  .view-card.has-message .cover { width: calc(150 * var(--u)); height: calc(225 * var(--u)); }
+  .view-card.has-message .card-info { justify-content: center; min-height: calc(225 * var(--u)); }
+  .view-card.has-message .message { grid-column: 1 / -1; align-self: start; }
+  .view-card.has-message > .buttons { grid-column: 1 / -1; align-self: end; }
+
+  /* book_list */
+  .view-list { height: 100%; display: flex; flex-direction: column; gap: calc(14 * var(--u)); }
+  .view-list .list-with-message { display: grid; grid-template-columns: calc(257 * var(--u)) 1fr; gap: calc(26 * var(--u)); align-items: start; }
+  .view-list .list-with-message .list-row { grid-template-columns: 1fr; }
+  .view-list.has-message .list-row.many .list-item { min-height: calc(330 * var(--u)); }
+  .view-list .heading { font-size: calc(32 * var(--u) * var(--scale)); color: var(--cyan); }
+  .list-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: calc(16 * var(--u)); align-items: start; }
+  .list-item { font: inherit; color: inherit; background: var(--panel); border: calc(2 * var(--u)) solid var(--line);
+               border-radius: calc(14 * var(--u)); padding: calc(12 * var(--u)); display: flex; flex-direction: column;
+               align-items: center; justify-content: flex-start; gap: calc(8 * var(--u)); cursor: pointer; text-align: center;
+               min-width: 0; min-height: calc(470 * var(--u)); }
+  .list-item:active { border-color: var(--cyan); }
+  .list-item .cover { width: calc(150 * var(--u)); height: calc(225 * var(--u)); flex: none; }
+  .item-title { font-size: calc(28 * var(--u)); font-weight: 700; color: #fff; line-height: 1.2; }
+  .item-reason { font-size: calc(24 * var(--u) * var(--scale)); color: var(--muted); line-height: 1.25;
+                 -webkit-line-clamp: 4 !important; }
+
+  /* directions */
+  .view-directions { height: 100%; display: grid; grid-template-columns: 1.35fr 1fr; gap: calc(18 * var(--u)); }
+  .map { min-width: 0; min-height: 0; display: flex; align-items: center; }
+  .plan { width: 100%; height: 100%; }
+  .plan .floor { fill: #031012; stroke: var(--line); stroke-width: 0.08; }
+  .plan .base-floor { fill: #0a2327; stroke: #0a2327; stroke-width: 0.06; stroke-linejoin: round; }
+  .plan .base-walls { fill: #2f5a5e; }
+  .plan .section { fill: #0b2b2e; stroke: #1d6468; stroke-width: 0.06; }
+  .plan .section.hi { fill: rgba(45, 235, 235, .28); stroke: var(--cyan); stroke-width: 0.12; }
+  .plan .section-label { fill: var(--muted); font-weight: 700; }
+  .plan .section-label.hi { fill: #fff; }
+  .plan .landmark { fill: #1b1b1b; stroke: #ffb469; stroke-width: 0.06; }
+  .plan .landmark.lift { fill: #3a2a10; }
+  .plan .landmark-icon { fill: #ffb469; font-weight: 700; }
+  .plan .path { fill: none; stroke: var(--cyan); stroke-width: 0.14; stroke-dasharray: 0.35 0.25; stroke-linecap: round;
+                stroke-linejoin: round; }
+  .plan .target { fill: #fff; } .plan .target-ring { fill: none; stroke: #fff; stroke-width: 0.08; }
+  .plan .robot { fill: var(--cyan); stroke: #fff; stroke-width: 0.06; }
+  .plan .robot-label { fill: #fff; font-weight: 700; }
+  .view-directions .side { display: flex; flex-direction: column; justify-content: center; gap: calc(12 * var(--u)); min-width: 0; }
+  .view-directions .badge { font-size: calc(24 * var(--u) * var(--scale)); }
+  .view-directions.has-message { grid-template-rows: minmax(0, 1fr) auto; }
+  .view-directions .message { grid-column: 1 / -1; font-size: calc(24 * var(--u) * var(--scale)); }
+  .steps { margin: 0; padding-left: calc(36 * var(--u)); font-size: calc(28 * var(--u) * var(--scale)); line-height: 1.3; }
+  .steps li + li { margin-top: calc(6 * var(--u)); }
+  .distance { font-size: calc(28 * var(--u) * var(--scale)); color: var(--cyan); font-weight: 700; }
+
+  /* options */
+  .view-options { height: 100%; display: flex; flex-direction: column; justify-content: center; gap: calc(20 * var(--u)); }
+  .option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: calc(16 * var(--u)); }
+  .option-grid .btn { min-height: calc(92 * var(--u)); font-size: calc(30 * var(--u) * var(--scale)); border-radius: calc(20 * var(--u));
+                      padding: calc(8 * var(--u)) calc(16 * var(--u)); }
+  .option-grid.many .btn { min-height: calc(72 * var(--u)); }
+
+  /* options as cards: a header beside the face, then the main choices under it across the whole width */
+  .view-options .opt-head { min-height: calc(96 * var(--u)); display: flex; flex-direction: column; justify-content: center; gap: calc(4 * var(--u)); }
+  .view-options .eyebrow { font-size: calc(20 * var(--u)); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .view-options .opt-head .heading { font-size: calc(46 * var(--u) * var(--scale)); }
+  #view .view-options .opt-head .heading.long { font-size: calc(32 * var(--u) * var(--scale)); line-height: 1.25; -webkit-line-clamp: 5; }   /* read, not cut off */
+  .opt-cards { display: grid; gap: calc(18 * var(--u)); margin-left: calc(-176 * var(--u)); margin-top: calc(10 * var(--u)); grid-template-columns: repeat(3, 1fr); }
+  .opt-cards.n1 { grid-template-columns: 1fr; } .opt-cards.n2 { grid-template-columns: 1fr 1fr; }
+  .opt-card { font: inherit; color: var(--ink); text-align: left; display: flex; flex-direction: column; gap: calc(10 * var(--u));
+              padding: calc(22 * var(--u)); min-height: calc(230 * var(--u)); cursor: pointer;
+              background: linear-gradient(160deg, #0a2a2d, var(--panel)); border: calc(2 * var(--u)) solid var(--line);
+              border-radius: calc(22 * var(--u)); box-shadow: 0 calc(6 * var(--u)) calc(18 * var(--u)) rgba(0, 0, 0, .5); }
+  .opt-card:active { border-color: var(--cyan); background: #0d3a3d; }
+  .card-icon { width: calc(64 * var(--u)); height: calc(64 * var(--u)); padding: calc(14 * var(--u)); border-radius: 50%; color: var(--cyan);
+               background: rgba(45, 235, 235, .1); border: calc(2 * var(--u)) solid rgba(45, 235, 235, .35); }
+  .card-name { font-size: calc(32 * var(--u) * var(--scale)); font-weight: 700; color: #fff; line-height: 1.15; margin-top: auto; }
+  .card-hint { font-size: calc(22 * var(--u) * var(--scale)); color: var(--muted); line-height: 1.25; }
+  .opt-extra { display: flex; gap: calc(14 * var(--u)); margin: calc(18 * var(--u)) 0 0 calc(-176 * var(--u)); }
+  .opt-extra .btn { min-height: calc(56 * var(--u)); font-size: calc(24 * var(--u) * var(--scale)); color: var(--muted); border-color: var(--line); }
+
+  /* status */
+  .view-status { height: 100%; display: flex; flex-direction: column; justify-content: center; gap: calc(16 * var(--u)); }
+  .view-status .heading { color: var(--cyan); }
+  .view-status .destination { font-size: calc(40 * var(--u) * var(--scale)); color: #fff; font-weight: 700; }
+  .books-left { font-size: calc(32 * var(--u) * var(--scale)); color: var(--muted); }
+  .books-left .count { font-size: calc(72 * var(--u)); color: var(--cyan); font-weight: 700; }
+  .view-status .detail { font-size: calc(28 * var(--u) * var(--scale)); color: var(--muted); }
+
+  /* thinking: a slim bar sweeping along the bottom edge, in both layouts */
+  #progress { position: fixed; left: 0; right: 0; bottom: 0; height: calc(6 * var(--u)); overflow: hidden; display: none;
+              pointer-events: none; }
+  body.thinking #progress { display: block; }
+  #progress::before { content: ""; position: absolute; top: 0; bottom: 0; width: 28%; border-radius: calc(3 * var(--u));
+                      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+                      animation: sweep 1.4s ease-in-out infinite; }
+  @keyframes sweep { from { left: -30%; } to { left: 102%; } }
+  #state { position: fixed; bottom: calc(4 * var(--u)); left: calc(8 * var(--u)); font: calc(14 * var(--u)) monospace; color: #155; }
+  /* film mode (?film=1): a small badge naming the zone, for the competition video; never shown otherwise */
+  #filmzone { position: fixed; top: calc(14 * var(--u)); right: calc(14 * var(--u)); z-index: 5; display: none;
+              padding: calc(6 * var(--u)) calc(14 * var(--u)); border-radius: calc(18 * var(--u)); color: #fff;
+              font: 600 calc(18 * var(--u)) system-ui, "DejaVu Sans", sans-serif; letter-spacing: .02em; pointer-events: none; }
+  #filmzone.common { display: block; background: #b9591f; }
+  #filmzone.quiet { display: block; background: #2f6f9f; }
 </style>
 </head>
 <body>
 <canvas id="face"></canvas>
+<div id="view"></div>
+<div id="progress" aria-hidden="true"></div>
+<div id="state"></div>
+<div id="filmzone" aria-hidden="true"></div>
+<script src="views.js"></script>
+<script>
+// ?ui=2 is the second look of the screen (ui2.css, views2.js): same face, same events, same buttons, other layout and colours.
+// ?still switches animations off (for screenshots).
+if (new URLSearchParams(location.search).has("still")) document.body.classList.add("still");
+if (new URLSearchParams(location.search).get("ui") === "2") {
+  document.body.classList.add("ui2");
+  document.write('<link rel="stylesheet" href="ui2.css"><script src="views2.js"><\/script>');
+}
+</script>
 <script>
 "use strict";
 // Robot face: glowing cyan eyes and a thin mouth on pure black.
@@ -19,6 +200,9 @@
 //   {"emotion": "happy", "hold_s": 3.0}      ("idle" returns to the resting face)
 //   {"talk": {"levels": [0..1, ...], "fps": 30, "delay_s": 0}}   mouth follows a speech loudness envelope
 //   {"talk": {"seconds": 3}}                                       generic talking (0 stops)
+//   {"screen": {"state_path", "zone", "layout": "full_face"|"split", "view", "payload", "ttl_s", ...}}
+//         what the screen composer (robot/core/screen.py) wants shown; views.js draws it; a button POSTs /input {"choice": id}
+// Screenshots and checks without the robot: ?update=<ScreenUpdate as JSON> draws that screen straight away.
 // Debug: open the page with ?emotion=happy to freeze that face without a server (&talk=0.7 opens the mouth).
 
 // ---------- expressions ----------
@@ -45,6 +229,8 @@ const FACES = {
   fear:     face({ w: 17, h: 26, tilt: -8, y: -6 }, { mw: 6, bend: -1.6, my: 27, thick: 1.4, wob: 1 }, { tremble: 0.35 }),
   disgust:  face({ w: 17, h: 15, r: 0.5, top: 0.38, y: -2 }, { mw: 9, bend: -1, my: 27, thick: 1.6, wave: 3, skew: 3 },
                  { r: { h: 12, y: 0, top: 0.32 } }),
+  // thinking: slightly narrowed eyes looking up and to one side, a small flat mouth (the LLM is working)
+  thinking: face({ w: 15, h: 17, top: 0.1, y: -4 }, { mw: 5, bend: 0.4, my: 26, thick: 1.5 }),
 };
 const ALIASES = {
   idle: "idle", neutral: "neutral", calm: "neutral", normal: "neutral",
@@ -54,6 +240,7 @@ const ALIASES = {
   surprise: "surprise", surprised: "surprise", shock: "surprise",
   fear: "fear", scared: "fear", afraid: "fear", fearful: "fear",
   disgust: "disgust", disgusted: "disgust",
+  thinking: "thinking",
 };
 
 // ---------- helpers ----------
@@ -91,6 +278,8 @@ let emotion = "idle", holdUntil = 0;
 let W = 0, H = 0, scale = 1, dpr = 1;
 const params = new URLSearchParams(location.search);
 const frozenTalk = clamp(Number(params.get("talk")) || 0, 0, 1);
+const preview = params.has("preview");          // embedded in the operator page: look, don't touch
+if (preview) document.documentElement.style.pointerEvents = "none";
 const frozen = (ALIASES[(params.get("emotion") || "").toLowerCase()] || "").replace("idle", "neutral") || null;
 
 function setEmotion(name, holdS, now) {
@@ -134,16 +323,18 @@ let blinkStart = -1, nextBlink = 0, doubleBlink = false;
 const BLINK_CLOSE = 60, BLINK_OPEN = 95;
 function blinkAmount(now) {
   if (blinkStart < 0) return 0;
-  const t = now - blinkStart;
-  if (t < BLINK_CLOSE) return t / BLINK_CLOSE;
-  if (t < BLINK_CLOSE + BLINK_OPEN) return 1 - (t - BLINK_CLOSE) / BLINK_OPEN;
+  const slow = emotion === "thinking" ? 2.6 : 1;                           // a thinking blink is slow
+  const t = now - blinkStart, close = BLINK_CLOSE * slow, open = BLINK_OPEN * slow;
+  if (t < close) return t / close;
+  if (t < close + open) return 1 - (t - close) / open;
   blinkStart = -1;
   return 0;
 }
 function updateBlink(now) {
   if (blinkStart < 0 && now >= nextBlink && emotion !== "surprise") {
     blinkStart = now;
-    if (doubleBlink) { doubleBlink = false; nextBlink = now + 190; }
+    if (emotion === "thinking") { nextBlink = now + rand(1400, 2200); }       // a slow blink now and then
+    else if (doubleBlink) { doubleBlink = false; nextBlink = now + 190; }
     else {
       doubleBlink = Math.random() < 0.15;
       nextBlink = doubleBlink ? now + BLINK_CLOSE + BLINK_OPEN + 90 : now + rand(2500, 6000);
@@ -158,6 +349,13 @@ function saccadeTo(x, y, now) {
   gaze.fx = gaze.x; gaze.fy = gaze.y; gaze.tx = x; gaze.ty = y; gaze.t0 = now;
 }
 function updateGaze(now) {
+  if (emotion === "thinking") {                         // look up and to the side while the LLM works
+    if (gaze.tx !== -5 || gaze.ty !== -4) saccadeTo(-5, -4, now);
+    const k = clamp((now - gaze.t0) / 140, 0, 1);
+    gaze.x = gaze.fx + (gaze.tx - gaze.fx) * k;
+    gaze.y = gaze.fy + (gaze.ty - gaze.fy) * k;
+    return;
+  }
   const idle = emotion === "idle" && !isTalking(now);   // look at the listener while talking
   if (now >= nextGlance) {
     nextGlance = now + rand(10000, 15000);
@@ -280,8 +478,8 @@ function drawScene(c, now, blink, fat, sharp) {
 function resize() {
   // Render at device pixels (capped at 2x) so edges stay sharp on high-density screens.
   dpr = Math.min(window.devicePixelRatio || 1, 2);
-  W = canvas.width = Math.round(window.innerWidth * dpr);
-  H = canvas.height = Math.round(window.innerHeight * dpr);
+  W = canvas.width = Math.round(canvas.clientWidth * dpr);
+  H = canvas.height = Math.round(canvas.clientHeight * dpr);
   scale = Math.min(W / 110, H / 70);
   for (const g of [glowSrc, ...GLOWS]) {
     g.cv.width = Math.max(8, Math.ceil(W / GLOW_DIV));
@@ -341,6 +539,48 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+// ---------- the screen: the face, or a content view with small eyes in the corner ----------
+const el = id => document.getElementById(id);
+function send(choice) {
+  if (preview) return;
+  fetch("/input", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ choice }) }).catch(() => {});
+}
+function showScreen(u) {
+  const split = u.layout === "split" && u.view && u.view !== "face";
+  document.body.classList.toggle("split", !!split);
+  document.body.classList.toggle("full", !split);
+  document.body.classList.toggle("zone-quiet", u.zone === "quiet");
+  document.body.dataset.zone = u.zone || "common";
+  document.body.classList.toggle("thinking", !!u.thinking);          // a progress indicator while the LLM works
+  Views.render(u, el("view"), send, showScreen);
+  document.body.classList.toggle("touch", !!el("view").querySelector("button"));
+  el("state").textContent = params.has("debug") ? `${u.state_path || ""} · ${u.zone || ""} · ${u.view || "face"}` : "";
+  if (params.get("film") === "1") {               // film mode: the zone badge
+    const zone = u.zone === "quiet" ? "quiet" : "common";
+    el("filmzone").className = zone;
+    el("filmzone").textContent = zone === "quiet" ? "Quiet zone" : "Common area";
+  }
+  resize();
+}
+if (params.has("update")) {
+  try { showScreen(JSON.parse(params.get("update"))); } catch (_) { /* a bad debug parameter: just the face */ }
+}
+
+// ---------- how the screen looks: set from the operator page ----------
+function setTheme(name) {
+  if (name !== "light" && name !== "dark") return;
+  document.documentElement.dataset.theme = name;
+  try { localStorage.setItem("theme", name); } catch (_) { /* a per-page convenience only */ }
+}
+function setLook(name) {                         // 1 the original screen, 2 the second look: the page loads again with the other one
+  const now = params.get("ui") === "2" ? "2" : "1";
+  if ((name !== "1" && name !== "2") || name === now) return;
+  const next = new URLSearchParams(location.search);
+  next.set("ui", name);
+  location.search = next.toString();
+}
+
 // ---------- events ----------
 function connect() {
   let es;
@@ -348,7 +588,10 @@ function connect() {
   es.onmessage = ev => {
     try {
       const d = JSON.parse(ev.data);
+      if (d.theme) { setTheme(d.theme); return; }
+      if (d.look) { setLook(d.look); return; }
       if (d.talk) { startTalk(d.talk, performance.now()); return; }
+      if (d.screen) { showScreen(d.screen); return; }
       const name = ALIASES[String(d.emotion || "").toLowerCase()];
       if (!name) return;
       const hold = Number(d.hold_s);
@@ -359,6 +602,15 @@ function connect() {
     if (es.readyState === EventSource.CLOSED) setTimeout(connect, 1000);
   };
 }
+
+// An open page picks up a new version of itself (a kiosk is never reloaded by hand): when the files change, reload.
+(function watchVersion() {
+  let seen = null;
+  const check = () => fetch("/ui-version", { cache: "no-store" }).then(r => r.json()).then(d => {
+    if (seen === null) seen = d.version; else if (d.version !== seen) location.reload();
+  }).catch(() => {});
+  check(); setInterval(check, 3000);
+})();
 
 window.addEventListener("resize", resize);
 resize();

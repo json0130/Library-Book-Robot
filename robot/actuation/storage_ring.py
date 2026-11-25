@@ -15,3 +15,9 @@ class StorageRing:
         if not 0 <= slot < self.slots:
             raise ValueError(f"slot must be 0..{self.slots - 1}")
         self.esp32.send("ring", slot=slot)
+
+    def light_slot(self, slot: int, on: bool = True) -> None:
+        """Light the slot a book is going into (and switch it off again)."""
+        if not 0 <= slot < self.slots:
+            raise ValueError(f"slot must be 0..{self.slots - 1}")
+        self.esp32.send("slot_light", slot=slot, on=bool(on))

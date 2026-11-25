@@ -113,6 +113,11 @@ def _post(path: str, event: dict, host: str, port: int, timeout: float) -> bool:
         return False
 
 
+def post_json(path: str, event: dict, host: str = "127.0.0.1", port: int = DEFAULT_PORT, timeout: float = 2.0) -> bool:
+    """POST a JSON object to the display server; False if it is not running."""
+    return _post(path, event, host, port, timeout)
+
+
 def talk(levels=None, seconds=None, fps: float = TALK_FPS, delay_s: float = 0.0,
          host: str = "127.0.0.1", port: int = DEFAULT_PORT, timeout: float = 2.0) -> bool:
     """Animate the mouth: with levels (see mouth_levels) or for `seconds` of generic talking.
@@ -139,16 +144,37 @@ class FaceDisplay:
 
     RETRY_S = 20.0
 
-    def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT, enabled: bool = True):
+    def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT, enabled: bool = True,
+                 background: bool = False):
+        """background: send in a worker thread (in order) instead of waiting for the display server, so a slow or
+        absent display can never hold up the robot's event loop. Calls then return True when queued."""
         import logging
-        self.host, self.port, self.enabled = host, port, enabled
+        self.host, self.port, self.enabled, self.background = host, port, enabled, background
         self.log = logging.getLogger("robot.face")
         self.available: bool | None = None       # None until the first attempt
         self._retry_at = 0.0
+        self._pool = None
+        if background:
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="display")
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Wait until everything queued so far has been sent (background mode)."""
+        if self._pool is not None:
+            self._pool.submit(lambda: None).result(timeout)
 
     def _post(self, fn, *args, **kwargs) -> bool:
         import time
         if not self.enabled or time.monotonic() < self._retry_at:
+            return False
+        if self._pool is not None:
+            self._pool.submit(self._send, fn, args, kwargs)
+            return True
+        return self._send(fn, args, kwargs)
+
+    def _send(self, fn, args, kwargs) -> bool:
+        import time
+        if time.monotonic() < self._retry_at:
             return False
         ok = fn(*args, host=self.host, port=self.port, timeout=0.3, **kwargs)
         if not ok:
@@ -181,5 +207,13 @@ class FaceDisplay:
         self.log.info("[face] layout %s", layout)
 
     def show_text(self, text: str) -> None:
-        """Text on the screen. The page cannot show text yet, so this only logs."""
+        """Text on the screen. The page shows what a ScreenUpdate says (show_screen); this only logs."""
         self.log.info("[screen] %s", text)
+
+    def show_screen(self, update: dict) -> bool:
+        """Send a ScreenUpdate (state path, zone, layout, title, text, options) to the page and the operator page."""
+        return self._post(post_json, "/screen", update)
+
+    def show_state(self, info: dict) -> bool:
+        """Tell the operator page where the state machine is ({"state": path, "zone": zone, ...})."""
+        return self._post(post_json, "/state", info)

@@ -1,0 +1,26 @@
+# The robot's outline for move_base (both costmaps and DWA), loaded by amcl_nav.launch after hokuyo_costmap.yaml.
+#
+# Measured 2026-11-05: 0.18 m from the middle of the base to the furthest part of the robot, forwards, backwards, left and
+# right alike (nothing sticks out beyond the Kobuki's own 0.177 m). robot_radius is that plus 2 cm for measuring error. Too
+# big is safe (narrow gaps look closed), too small is not (the planner would steer an overhang into a desk leg).
+#
+# To measure again (the robot on the floor, looking down from above): from the middle of the base (halfway between the two
+# wheels) to the furthest part of the robot at ANY height up to its top, forwards, backwards, left and right.
+#   - all four within a few cm of each other: set robot_radius to the largest
+#   - otherwise use a polygon instead, corners in metres (x forwards, y to the left), e.g. for 0.40 m x 0.36 m:
+#       footprint: [[0.20, 0.18], [0.20, -0.18], [-0.20, -0.18], [-0.20, 0.18]]
+#     (a footprint, when given, wins over robot_radius)
+# inflation_radius: how far from an obstacle the planner still pays a cost to pass. Keep it at least robot_radius + 0.15:
+# the planner then keeps the robot's widest part about 15 cm off things where it can.
+
+local_costmap:
+  robot_radius: 0.20
+  inflation_layer:
+    inflation_radius: 0.40
+    cost_scaling_factor: 5.0
+
+global_costmap:
+  robot_radius: 0.20
+  inflation_layer:
+    inflation_radius: 0.40
+    cost_scaling_factor: 5.0

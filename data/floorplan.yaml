@@ -1,0 +1,57 @@
+# SAMPLE floor plan for development and testing (docs/catalog.md explains the format).
+# Coordinates are metres in the same map frame as data/shelves.csv (map_x, map_y), one frame per floor; x grows
+# to the right of the plan and y downwards (a floor with a `base_map` is the exception: it is drawn as the robot's map,
+# so y grows UP there, and its x0 / y0 give the floor's lowest x and y, which can be negative). Every rectangle and landmark below is a PLACEHOLDER laid out around the
+# sample shelves until the real building is surveyed. The sample shelves are on levels 1, 2 and 3, so the plan has
+# three floors (every shelf's section must be a rectangle on its floor; tools/catalog_check.py checks that).
+
+floors:
+  - level: 1
+    name: Ground floor
+    # The robot's own map of the lab (display/ui/maps/lab_lidar.json, made with tools/map_to_plan.py from the LiDAR map
+    # turtlebot/run_lidar_mapping.sh saved as maps/remap2 on 2026-11-17, started on the station facing the right-hand wall, so the
+    # station is (0, 0) facing +x; it agrees with the first map of 2026-11-05 to 5 degrees and 0.2 m) is drawn under this floor,
+    # in the map frame: x to the right, y UP, so x0/y0 are the lowest x and y. The sections and landmarks below are placeholders
+    # until the real shelves are surveyed (tools/teach_poses.py). lab.json is the older RTAB-Map picture, in that map's own frame.
+    x0: -8.0
+    y0: -3.8
+    width: 12.1
+    height: 13.2
+    base_map: lab_lidar
+    sections:
+      - {name: Fiction, x: -0.35, y: 4.00, w: 1.80, h: 1.90}
+      - {name: Section 1, x: -5.00, y: 4.70, w: 1.55, h: 1.40}
+    landmarks:
+      - {kind: lift, name: Lift, x: -5.0, y: 1.5}
+      - {kind: help_desk, name: Help desk, x: 1.0, y: 2.3}
+      - {kind: entrance, name: Entrance, x: 1.0, y: 0.0}
+      - {kind: exit, name: Exit, x: 0.0, y: 0.5}
+      - {kind: toilets, name: Toilets, x: -5.5, y: 1.0}
+
+  - level: 2
+    name: Level 2
+    width: 12
+    height: 8
+    sections:
+      - {name: Science Fiction, x: 0.3, y: 1.0, w: 2.7, h: 6.0}
+    landmarks:
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+      - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
+
+  - level: 3
+    name: Level 3
+    width: 12
+    height: 8
+    sections:
+      - {name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7}
+      - {name: History, x: 5.1, y: 0.3, w: 1.9, h: 2.7}
+      - {name: Computing, x: 7.1, y: 0.3, w: 1.9, h: 2.7}
+    landmarks:
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+      - {kind: toilets, name: Toilets, x: 10.8, y: 5.0}
+
+station:                  # where the robot waits for visitors (its "you are here" when it is not driving)
+  level: 1                # (0, 0) facing +x: where the LiDAR mapping started; AMCL starts here (set_initial_pose.py)
+  x: 0.0
+  y: 0.0
+  yaw: 0.0

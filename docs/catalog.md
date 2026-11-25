@@ -1,6 +1,7 @@
 # The book data
 
-The robot's knowledge of the library's books lives in four plain files in `data/`. Edit them in a spreadsheet or a text editor; no code changes are needed. All four ship with **sample data** (12 books, 7 shelves) that you replace with the real library.
+The robot's knowledge of the library's books lives in four plain files in `data/`, plus the floor plan and the covers
+described at the end. Edit them in a spreadsheet or a text editor; no code changes are needed. All four ship with **sample data** (12 books, 7 shelves) that you replace with the real library.
 
 | File | What it holds | Edit it when |
 |---|---|---|
@@ -8,6 +9,8 @@ The robot's knowledge of the library's books lives in four plain files in `data/
 | `topics.yaml` | the vocabulary of topics: synonyms and "broader" topics | a subject isn't recognised, or you want books under one heading to relate |
 | `shelves.csv` | one row per shelf: section, floor, quiet or common zone, and the robot's map position | you add a shelf, or survey the real map positions |
 | `curated_links.csv` | hand-made links between books | a librarian knows two books belong together |
+| `floorplan.yaml` | floors, sections as rectangles, landmarks, the robot's station (for the directions on the screen) | the building's layout changes, or you survey the real map |
+| `covers/<isbn>.jpg` | book covers for the screen (downloaded, gitignored) | you add books: `python tools/import_books.py --covers-only` |
 
 The robot reads them once at startup and builds a small graph from them (`robot/services/book_graph.py`). Paths are set under `books:` in `config/robot.yaml`. After editing, restart the robot, or type `reload` in the simulator, to pick up the changes.
 
@@ -31,7 +34,7 @@ Lines starting with `#` and blank lines are ignored. The first other line is the
 | `subjects` | | What the book is about, separated by semicolons: `space;cosmos;popular science`. They are folded into topics through `topics.yaml` (see below). An older file with a `tags` column instead still loads. Give each book at least two topics (genre counts) or it is hard to match. |
 | `summary` | | One or two sentences of what the book is about, in your own words. The robot reads it aloud when someone asks "what is it about?" and compares summaries when ranking recommendations. Keep it on one line. |
 | `shelf` | | The shelf's id from `shelves.csv`, e.g. `3-SCI-A`. This is how the robot knows the section, floor, zone and map position. Leave it empty if you don't know yet. |
-| `slot` | | The storage-ring slot, `0` to `7`, that a returned copy goes into. Empty if unknown. Several books may share a slot. |
+| `slot` | | The storage-ring slot, `0` to `7`, that a returned copy prefers. Empty if unknown. Several books may share a preferred slot: the state machine gives the book this slot if it is free and otherwise the lowest free one (`robot/core/storage.py`), and says which slot it used. |
 | `call_number` | optional | The call number, Dewey (`520.1 SAG`) or Library of Congress (`QB981 .S24`). Shelf codes such as `F HER` or `FIC-FIT` work too. See below. |
 | `section` | optional | The section name, e.g. `Science`. Only needed if the book has no shelf; otherwise the shelf's section is used (and a mismatch is a warning). |
 | `floor` | optional | The floor number, e.g. `3`. Same rule as `section`. |
@@ -155,3 +158,89 @@ A disagreement in the report usually means a missing or wrong topic: fix the boo
 The scanner puts the book's section, floor, zone and map pose on the `BookScanned` event. Returning a book says the storage slot and where it belongs ("on shelf 3-SCI-A, in the Science section on level 3"). After a return or a recommendation the robot offers to guide the visitor to that shelf, and "guide me" publishes a `NavigationRequested` event with the shelf's pose. Visitors can also ask "where is Dune?". In the simulator, `where <title or isbn>` and `guide` do the same, and the fake base just logs the `navigate` command.
 
 The graph holds books and the library's layout only. It never holds visitors, face identities or anything about people.
+
+## floorplan.yaml
+
+The screen draws directions on this plan: the target section highlighted, the robot ("You are here"), an approximate
+path and the distance. Coordinates are **metres in the same map frame as `shelves.csv` (`map_x`, `map_y`)**, one frame
+per floor, x to the right and y down the plan. The sample has three floors because the sample shelves are on levels 1,
+2 and 3; every rectangle in it is a placeholder until the real building is surveyed.
+
+```yaml
+floors:
+  - level: 3                 # the floor number used in shelves.csv
+    name: Level 3            # shown on the screen
+    width: 12                # the floor's size in metres ...
+    height: 8
+    x0: 0                    # ... and its lowest x and y in the map frame (optional, 0): a survey's origin is where the robot
+    y0: 0                    #     started, so a real floor is often at negative coordinates and spans x0..x0+width
+    base_map: lab            # optional: the robot's own map drawn under the plan (see "The robot's own map" below)
+    sections:                # one rectangle per section: x, y = top-left corner, w, h = size (metres)
+      - {name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7}
+      - {name: History, x: 5.1, y: 0.3, w: 1.9, h: 2.7}
+    landmarks:               # kind: lift, help_desk, entrance, exit, stairs, toilets or other
+      - {kind: lift, name: Lift, x: 10.8, y: 6.8}
+station:                     # where the robot waits for visitors: its "you are here" (and where it drives home to)
+  level: 1
+  x: 9.0
+  y: 5.5
+  yaw: 3.14
+```
+
+- A section's `name` must match `section` in `shelves.csv` exactly (case aside) and be unique across floors.
+- A section may name its own zone: `{name: Science, x: 3.1, y: 0.3, w: 1.9, h: 2.7, zone: quiet}`. Without it the robot uses the
+  zone most of that section's shelves have in `shelves.csv`. Only used when the robot drives with a real base and
+  `zone_from_pose: true` in `config/zones.yaml` (the zone follows the section the base stands in).
+- **With the real base, these numbers are the base's.** Poses are in the RTAB-Map `map` frame, which is the frame of these two
+  files, so a floor's `x0..x0+width` x `y0..y0+height` (from 0 unless the floor says otherwise) must contain the area the base maps. `python tools/teach_poses.py` records
+  shelves, section corners, landmarks and the station from the live pose (it backs the files up and keeps their comments);
+  see [robot_link.md](robot_link.md).
+- Give every floor a `lift` landmark: directions to another floor start with "Take the lift to Level N" and draw the
+  path from the lift.
+- **Facilities.** Landmarks of kind `toilets`, `help_desk`, `exit` and `entrance` are what the robot tells visitors when they
+  ask "where is the toilet / help desk / exit / entrance": put one on every floor that has one (the robot names the nearest to
+  its station first and the other floors after it). The sample plan's positions are placeholders like the rest of it. A kind
+  with no landmark makes the robot say it has no such place on its map and send the visitor to the help desk.
+- The path is **approximate**. On a floor with a `base_map` it is a route round the walls of the robot's own map (below); on any other
+  floor it is straight or L-shaped, first along x then y, and does not avoid shelves or walls.
+- `tools/catalog_check.py` loads the plan and reports, as errors, a rectangle outside its floor, a section name used
+  twice, a landmark of an unknown kind, a shelf whose section is not on its floor, and a shelf whose `map_x`/`map_y`
+  lies outside its section's rectangle.
+
+### The robot's own map
+
+A floor can name a picture of the map the robot drew (`base_map: lab`), which the visitor screen draws under the sections and
+the route, so the plan matches what the TurtleBot saw. Make it from the `.pgm` and `.yaml` that `map_saver` wrote (the
+Dell's `~/vslam_map.yaml` is the lab):
+
+```bash
+python tools/map_to_plan.py ~/vslam_map.yaml lab        # writes display/ui/maps/lab.json (numpy and scipy, no ROS)
+```
+
+The picture is in the map frame (metres, **y up**, like every pose), so a floor with a `base_map` is drawn as the map is, not
+mirrored: sections are rectangles `x, y` (the lowest corner) `w, h` in that frame, `x0` / `y0` give the floor's own lowest
+corner, and the floor must cover the picture (`bounds` in the JSON). The converter closes speckle in the occupancy grid,
+drops specks of noise and writes the floor and the walls as two SVG paths, plus a coarse grid of where a person can walk (0.2 m
+from any wall). `directions` routes over that grid (`robot/services/routing.py`, A* with the corners pulled tight) so the
+line follows the corridor; the endpoints are always the true start and target, joined to the nearest ground when one stands in a
+shelf. Other floors keep drawing the plain plan. Re-run the converter when the robot maps again, and move the sections and
+landmarks with `tools/teach_poses.py`: **the sample level 1 is placed on the lab map with placeholder positions** (the shelf,
+section, landmarks and station are still invented, only the map under them is real). A shelf's pose must be on ground the
+robot can stand on, and `tests/test_routing.py` checks the station and shelf 1-FIC-A are.
+
+## Covers
+
+The book card and the list show each book's cover from `data/covers/<isbn>.jpg` (gitignored). Download them from Open
+Library's covers service:
+
+```bash
+python tools/import_books.py --covers-only             # every book in catalog.csv
+python tools/import_books.py isbns.txt --covers        # while drafting new books
+```
+
+It asks `https://covers.openlibrary.org/b/isbn/<isbn>-L.jpg?default=false` (with `default=false` Open Library answers
+404 when it has no cover instead of a blank image), skips covers already downloaded, and waits at least 3 s between
+requests (Open Library allows 100 cover look-ups by ISBN per 5 minutes per address). A book without a cover gets a
+generated placeholder: its title on a colour derived from its ISBN. `catalog_check.py` lists books without a cover as
+a warning.
+

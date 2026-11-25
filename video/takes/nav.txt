@@ -1,0 +1,9 @@
+# Navigation map take: the simulated base REPLAYS the two drives recorded on the real robot on 18 Nov (video/takes/trips_18nov.json,
+# made by tools/video/trajectory.py from the robot's session log), so the map matches the footage of those drives.
+# Record with: sim_take.py nav --zone quiet --sources map --no-speak --no-llm --replay video/takes/trips_18nov.json
+# The first drive lasts 51 s, the second 57 s; the waits cover them.
+wait 3
+drive -0.14 4.46
+wait 54
+drive 0 0
+wait 60
