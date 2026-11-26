@@ -29,3 +29,6 @@ video/voiceover_tts/
 
 # runtime data from the robot (noise log, mic config): kept locally, not in git
 run_data/
+
+# the CARES client kit's virtualenv (robot_client/setup.sh)
+robot_client/.venv/
